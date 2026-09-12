@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "module": "CommonJS",
+    "target": "ES2022",
+    "outDir": "out",
+    "lib": ["ES2022", "DOM"],
+    "sourceMap": true,
+    "rootDir": "src",
+    "strict": true,
+    "esModuleInterop": true
+  },
+  // src/webview/app is the browser-side app: type-checked by
+  // tsconfig.webview.json and bundled by esbuild, never imported by the host.
+  "exclude": ["node_modules", ".vscode-test", "src/webview/app"]
+}
