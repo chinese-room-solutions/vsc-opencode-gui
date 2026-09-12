@@ -1,0 +1,15 @@
+node_modules/
+out/
+.vscode-test/
+.playwright-mcp/
+*.vsix
+*.png
+!assets/
+!assets/**
+AGENTS.md
+.rig-q*/
+.rig-q*.log
+.oc-data/
+
+# Disposable UI-rig workspaces (ui-rig.js test scaffolding)
+*-rig/
