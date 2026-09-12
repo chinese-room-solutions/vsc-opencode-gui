@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src {{CSP_SOURCE}} data:; media-src data:; style-src {{CSP_SOURCE}} 'nonce-{{NONCE}}'; script-src 'nonce-{{NONCE}}';"
+    />
+    <!-- Boot state, read by the app before any host message can arrive.
+         The origin is a ready flag: the app never connects to it (AppHost
+         relays), so the CSP has no connect-src. -->
+    <meta name="opencode-origin" content="{{ORIGIN}}" />
+    <meta name="opencode-error" content="{{ERROR_MESSAGE}}" />
+    <meta name="opencode-install-hint" content="{{INSTALL_HINT}}" />
+    <meta name="opencode-route" content="{{ROUTE}}" />
+    <meta name="opencode-tabs" content="{{TABS}}" />
+    <meta name="opencode-tombstones" content="{{TOMBSTONES}}" />
+    <meta name="opencode-hidden-models" content="{{HIDDEN_MODELS}}" />
+    <meta name="opencode-copy-modifier" content="{{COPY_MODIFIER}}" />
+    <meta name="opencode-ready-sound" content="{{READY_SOUND}}" />
+    <meta name="opencode-permission-sound" content="{{PERMISSION_SOUND}}" />
+    <meta name="opencode-question-sound" content="{{QUESTION_SOUND}}" />
+    <meta name="opencode-stuck-tool" content="{{STUCK_TOOL}}" />
+    <meta name="opencode-stuck-auto-abort" content="{{STUCK_AUTO_ABORT}}" />
+    <meta name="opencode-workspace" content="{{WORKSPACE}}" />
+    {{THEME_STYLE}}
+    <title>opencode</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <link rel="stylesheet" nonce="{{NONCE}}" href="{{APP_CSS}}" />
+    <script nonce="{{NONCE}}" src="{{APP_JS}}"></script>
+  </body>
+</html>

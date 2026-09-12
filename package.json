@@ -1,0 +1,262 @@
+{
+  "name": "vsc-opencode-gui",
+  "displayName": "OpenCode GUI",
+  "description": "opencode GUI for local and remote VS Code workspaces",
+  "publisher": "chinese-room-solutions",
+  "author": "Chinese Room Solutions",
+  "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chinese-room-solutions/vsc-opencode-gui.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "icon": "icon.png",
+  "activationEvents": [
+    "onWebviewPanel:opencodeGui.chatPanel",
+    "onStartupFinished"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Spawns the opencode agent with full tool access to the workspace; requires workspace trust."
+    }
+  },
+  "main": "./out/main.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "opencodeGui.openChat",
+        "title": "Open Code: Open in Primary Editor"
+      },
+      {
+        "command": "opencodeGui.toggleChat",
+        "title": "Open Code: Toggle Chat"
+      },
+      {
+        "command": "opencodeGui.toggleChatView",
+        "title": "Open Code: Toggle Side Panel"
+      },
+      {
+        "command": "opencodeGui.newSession",
+        "title": "Open Code: New Session",
+        "icon": "$(add)"
+      },
+      {
+        "command": "opencodeGui.showHistory",
+        "title": "Open Code: Show History",
+        "icon": "$(history)"
+      },
+      {
+        "command": "opencodeGui.addSelectionToChat",
+        "title": "Open Code: Add Selection to Chat",
+        "icon": "$(add)"
+      },
+      {
+        "command": "opencodeGui.addToChat",
+        "title": "Open Code: Add to Chat",
+        "icon": "$(add)"
+      },
+      {
+        "command": "opencodeGui.manageModels",
+        "title": "Open Code: Manage Models"
+      },
+      {
+        "command": "opencodeGui.restart",
+        "title": "Open Code: Restart"
+      },
+      {
+        "command": "opencodeGui.openTerminal",
+        "title": "Open Code: Open in Terminal"
+      },
+      {
+        "command": "opencodeGui.openDiff",
+        "title": "Open Code: Show Session Diff"
+      },
+      {
+        "command": "opencodeGui.openContextSummary",
+        "title": "Open Code: Toggle Context Breakdown"
+      }
+    ],
+    "commandPalette": [
+      {
+        "command": "opencodeGui.addToChat",
+        "when": "false"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "opencodeGui.toggleChat",
+        "key": "ctrl+escape",
+        "mac": "cmd+escape"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "opencodeGui.newSession",
+          "when": "view == opencodeGui.chatView",
+          "group": "navigation"
+        },
+        {
+          "command": "opencodeGui.showHistory",
+          "when": "view == opencodeGui.chatView",
+          "group": "navigation"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "opencodeGui.addToChat",
+          "group": "navigation"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "opencodeGui.addToChat",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "opencodeGui.addSelectionToChat",
+          "when": "editorHasSelection",
+          "group": "navigation"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "opencodegui-sidebar",
+          "title": "opencode GUI",
+          "icon": "icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "opencodegui-sidebar": [
+        {
+          "type": "webview",
+          "id": "opencodeGui.chatView",
+          "name": "Chat"
+        }
+      ]
+    },
+    "configuration": [
+      {
+        "title": "Server",
+        "properties": {
+          "opencodeGui.port": {
+            "type": "number",
+            "default": 0,
+            "minimum": 0,
+            "maximum": 65535,
+            "description": "Fixed port for the opencode server. Set to 0 (default) to use a random port. Note: changing the port resets preferences stored in the webview (e.g. theme) since they are tied to the origin."
+          },
+          "opencodeGui.path": {
+            "type": "string",
+            "default": "",
+            "description": "Full path to the opencode CLI executable. Leave empty to run opencode from PATH."
+          },
+          "opencodeGui.exposeToNetwork": {
+            "type": "boolean",
+            "default": false,
+            "description": "Expose the opencode server to the local network via mDNS. When enabled, you can access the same instance from another device at http://opencode.local:<port>."
+          }
+        }
+      },
+      {
+        "title": "Chat",
+        "properties": {
+          "opencodeGui.codeGlow": {
+            "type": "boolean",
+            "default": false,
+            "description": "Render code-block tokens with a neon glow in their own color, like themes that inject a glow into the editor (e.g. SynthWave '84). Theme files carry no glow, so this synthesizes the effect."
+          },
+          "opencodeGui.codeCopyModifier": {
+            "type": "string",
+            "enum": ["alt", "ctrl", "meta", "shift"],
+            "enumDescriptions": [
+              "Alt (Option on macOS)",
+              "Ctrl",
+              "Cmd / Windows key",
+              "Shift"
+            ],
+            "default": "alt",
+            "description": "Modifier key held to copy small code blocks with a click (either mouse button)."
+          }
+        }
+      },
+      {
+        "title": "Sounds",
+        "properties": {
+          "opencodeGui.readySound": {
+            "type": "boolean",
+            "default": true,
+            "description": "Play a sound when a session finishes its turn (the opencode TUI's ready bell)."
+          },
+          "opencodeGui.permissionSound": {
+            "type": "boolean",
+            "default": true,
+            "description": "Play a sound when a session asks for a permission decision."
+          },
+          "opencodeGui.questionSound": {
+            "type": "boolean",
+            "default": true,
+            "description": "Play a sound when a session asks a question."
+          }
+        }
+      },
+      {
+        "title": "Stuck detection",
+        "properties": {
+          "opencodeGui.stuckToolSeconds": {
+            "type": "number",
+            "default": 300,
+            "minimum": 0,
+            "description": "Seconds without output before a running tool is marked stuck (turn keeps running). 0 disables stuck detection."
+          },
+          "opencodeGui.stuckAutoAbortSeconds": {
+            "type": "number",
+            "default": 0,
+            "minimum": 0,
+            "description": "Seconds after the stuck mark before the turn is interrupted automatically and the agent is nudged. 0 (default) only offers the manual Interrupt chip."
+          }
+        }
+      }
+    ]
+  },
+  "scripts": {
+    "copy-templates": "node -e \"const fs=require('fs');fs.mkdirSync('out/webview/templates',{recursive:true});for(const f of fs.readdirSync('src/webview/templates').filter(f=>f.endsWith('.html')))fs.copyFileSync('src/webview/templates/'+f,'out/webview/templates/'+f)\"",
+    "compile": "tsc -p ./ && node scripts/build-extension.js && tsc -p tsconfig.webview.json && node scripts/build-webview.js && npm run copy-templates",
+    "compile:webview": "tsc -p tsconfig.webview.json && node scripts/build-webview.js && npm run copy-templates",
+    "test:unit": "node scripts/build-unit-tests.js && mocha out/test-unit/tests.js",
+    "test": "npm run compile && npm run test:unit && node test/runTest.js",
+    "publish": "npm run compile && vsce publish && ovsx publish",
+    "watch": "node scripts/build-extension.js --watch"
+  },
+  "devDependencies": {
+    "@preact/signals": "^2.11.1",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/test-electron": "^3.1.0",
+    "esbuild": "^0.28.2",
+    "mocha": "^11.8.0",
+    "preact": "^10.29.8",
+    "typescript": "^5.0.0",
+    "vscode-textmate": "^9.3.2",
+    "vscode-oniguruma": "^2.0.1",
+    "dompurify": "^3.4.14",
+    "marked": "^18.0.11",
+    "highlight.js": "^11.12.0"
+  },
+  "license": "MIT"
+}

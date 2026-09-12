@@ -1,0 +1,3371 @@
+/* App styling. Colors go through the --oc-* tokens below, each mapped to a
+   VS Code theme variable so the UI follows the user's theme. The
+   :where(:root) block supplies light
+   --vscode-* values for a non-VS Code host (the standalone UI rig), zero
+   specificity so injected theme values always win. */
+
+/* Tokens:
+   --oc-bg         page backdrop behind the floating panel
+   --oc-panel      the floating content panel
+   --oc-border     hairlines (panel edge, dividers)
+   --oc-text       primary text
+   --oc-text-2     secondary text (inactive tabs, project names)
+   --oc-surface-2  recessed fill (user box, docks) — the theme's input fill
+   --oc-input-border composer border — the input fill lifted with 20% ink
+   --oc-field      input fill (search box, inline rename, composer card)
+   --oc-chip       code fill: inline code, fenced blocks, tool output, diffs
+                   (VS Code's textCodeBlock.background)
+   --oc-btn-bg     filled icon buttons (home)
+   --oc-track      context-ring track
+   --oc-send       composer send button
+
+   Corner radii sit on Claude Code's scale: 4 for chips and minor buttons,
+   6 for controls and inputs, 8 for cards, menus, the panel.
+
+   Buttons have four voices:
+   - Primary, one per surface: fills --oc-send (button-background), ink
+     button-foreground, hover button-hoverBackground or the darken mix.
+     comp-send, dock-submit, crash-reload.
+   - Destructive primary: fills errorForeground, ink button-foreground
+     (confirm dialog). Inline next to content, outline it instead
+     (subagent-stop) — a fill there is too loud.
+   - Neutral fill: --oc-btn-bg (button-secondaryBackground). tb-home,
+     tb-plus, the dialog's Cancel.
+   - Ghost, the default: transparent, --oc-text ink (--oc-text-2 when
+     de-emphasized), hover list-hoverBackground. Toolbars, menus, row
+     actions, dock options, link-buttons (load-older).
+   Circles are glyph holders (search-clear, ctx-btn); pills (relay) are
+   toggle chips. */
+:root {
+  /* Code follows the editor's font size, capped at the UI base — an editor
+     size above 13px made code blocks loom over the prose around them. */
+  --oc-code-size: min(var(--vscode-editor-font-size, 13px), 13px);
+  --oc-bg: var(--vscode-sideBar-background, #fafafa);
+  --oc-panel: var(--vscode-editor-background, #ffffff);
+  --oc-border: var(--vscode-panel-border, #dbdbdb);
+  --oc-text: var(--vscode-foreground, #161616);
+  --oc-text-2: var(--vscode-descriptionForeground, #8f8f8f);
+  /* Pill and dock fill is the theme's own input background — its natural,
+     quiet step from the panel; an ink lift on top reads as a loud gray box
+     on saturated themes. Only the composer border lifts the fill with text
+     ink: the variable chain Claude Code uses resolves to the theme
+     registry's neutral defaults on themes (SynthWave) that leave their
+     input colors unset. */
+  --oc-surface-2: var(--vscode-input-background, #f2f2f2);
+  --oc-input-border: color-mix(
+    in srgb,
+    var(--oc-text) 20%,
+    var(--vscode-input-background, #f2f2f2)
+  );
+  --oc-field: var(--vscode-input-background, #f2f2f2);
+  --oc-chip: var(--vscode-textCodeBlock-background, #e8e8e8);
+  --oc-btn-bg: var(--vscode-button-secondaryBackground, #e9e9e9);
+  --oc-track: var(--vscode-editorWidget-border, #c8c8c8);
+  --oc-send: var(--vscode-button-background, #9c9c9c);
+}
+
+:where(:root) {
+  --vscode-editor-background: #ffffff;
+  --vscode-editor-foreground: #161616;
+  --vscode-foreground: #3b3b3b;
+  --vscode-editor-font-family: Menlo, Monaco, "Courier New", monospace;
+  --vscode-editor-font-size: 12px;
+  --vscode-font-family: -apple-system, "Segoe UI", sans-serif;
+  --vscode-font-size: 13px;
+  --vscode-sideBar-background: #fafafa;
+  --vscode-panel-border: #dbdbdb;
+  --vscode-input-background: #f2f2f2;
+  --vscode-input-foreground: #161616;
+  --vscode-input-border: #dbdbdb;
+  --vscode-descriptionForeground: #8f8f8f;
+  --vscode-textLink-foreground: #005fb8;
+  --vscode-textCodeBlock-background: #e8e8e8;
+  --vscode-textPreformat-foreground: #3b3b3b;
+  --vscode-symbolIcon-functionForeground: #652d90;
+  --vscode-symbolIcon-variableForeground: #007acc;
+  --vscode-symbolIcon-classForeground: #d67e00;
+  --vscode-errorForeground: #cd3131;
+  --vscode-focusBorder: #0078d4;
+  --vscode-list-hoverBackground: #ececec;
+  --vscode-list-inactiveSelectionBackground: #dfdfdf;
+  --vscode-button-secondaryBackground: #e9e9e9;
+  --vscode-charts-green: #2ea043;
+  --vscode-charts-red: #cd3131;
+  --vscode-charts-blue: #005fb8;
+  --vscode-charts-orange: #bb6009;
+  --vscode-charts-purple: #8250df;
+}
+
+body {
+  margin: 0;
+  color: var(--oc-text);
+  background: var(--oc-bg);
+  font-family: var(--vscode-font-family, -apple-system, "Segoe UI", sans-serif);
+  font-size: var(--vscode-font-size, 13px);
+}
+
+.status {
+  padding: 16px;
+  opacity: 0.7;
+}
+
+.error {
+  padding: 16px;
+  color: var(--vscode-errorForeground);
+}
+
+.error p {
+  margin: 8px 0 0;
+}
+
+.error code {
+  font-family: var(--vscode-editor-font-family);
+}
+
+/* --- Shell: backdrop, toolbar, floating panel --- */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  height: 100vh;
+  box-sizing: border-box;
+  padding: 4px;
+  background: var(--oc-bg);
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  border: 1px solid color-mix(in srgb, var(--oc-border) 55%, transparent);
+  border-radius: 8px;
+  background: var(--oc-panel);
+  overflow: hidden;
+}
+
+/* Toolbar row above the panel (all routes): home button, open tabs
+   (divider only while tabs exist), "+". 28px row / 24px buttons — the
+   chrome hugs the panel. */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  height: 28px;
+  padding: 0 8px;
+}
+
+.tb-home {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  background: var(--oc-btn-bg);
+  border: none;
+  border-radius: 6px;
+  color: var(--oc-text);
+  cursor: pointer;
+}
+
+.tb-home:hover {
+  background: color-mix(in srgb, var(--oc-btn-bg) 88%, var(--oc-text));
+}
+
+/* Home's "New session" (in the first day header). */
+.tb-new {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  height: 28px;
+  padding: 0 8px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--oc-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.tb-new:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.tb-sep {
+  flex: none;
+  width: 1px;
+  height: 22px;
+  margin: 0 4px;
+  background: var(--oc-border);
+}
+
+.tb-plus {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: var(--oc-btn-bg);
+  border: none;
+  border-radius: 6px;
+  color: var(--oc-text);
+  cursor: pointer;
+}
+
+.tb-plus:hover {
+  background: color-mix(in srgb, var(--oc-btn-bg) 88%, var(--oc-text));
+}
+
+/* Letter tiles (tabs, projects, session rows) */
+.tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 19px;
+  height: 19px;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  user-select: none;
+}
+
+/* --- Tabs --- */
+
+.tb-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  max-width: 280px;
+  height: 28px;
+  padding: 0 8px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--oc-text-2);
+  font: inherit;
+  cursor: pointer;
+}
+
+.tab:hover {
+  background: var(--vscode-list-hoverBackground);
+  color: var(--oc-text);
+}
+
+.tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A restored tab before its session row lands (the boot fetch, ~1s): a
+   neutral chip skeleton instead of the raw ses_* id and a hash-colored
+   tile. Dead tabs prune themselves right after (validateRestored). */
+.tab.pending .tile {
+  background: var(--oc-chip);
+}
+
+.tab.pending .tab-title {
+  width: 88px;
+  height: 9px;
+  border-radius: 4px;
+  background: var(--oc-chip);
+}
+
+/* Active tab: the same filled surface as the Home and + buttons beside it.
+   No bold — a wider title resizes the tab when switching. */
+.tab.active {
+  background: var(--oc-btn-bg);
+  color: var(--oc-text);
+}
+
+/* Dragged tab dims in place — the list re-orders live under it, so no
+   drop-gap indicator is needed. */
+.tab.dragging {
+  opacity: 0.45;
+}
+
+.tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  /* 20px box (12px glyph + 4px pad): the 4px margin is the smallest that
+     stays an integer in device px at 1 / 1.25 / 1.5 / 2 zoom — a 6px
+     margin is 7.5 device px at 1.25 and the × visibly rides high. */
+  padding: 4px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--oc-text-2);
+  cursor: pointer;
+}
+
+.tab-close:hover {
+  background: color-mix(in srgb, var(--oc-text) 12%, transparent);
+  color: var(--oc-text);
+}
+
+/* In-tab rename: the input takes the title's place (tile + close stay) and
+   stays transparent, sized to its text — the tab keeps its normal shape and
+   color while editing. Two-class selector beats the shared .rename-input
+   field look below regardless of order. */
+.rename-input.tab-rename {
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 6ch;
+  max-width: 40ch;
+  padding: 0;
+  background: none;
+  border: none;
+  field-sizing: content;
+}
+
+/* --- Home: projects column + sessions column --- */
+
+.home {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.home-grid {
+  display: flex;
+  align-items: flex-start;
+  gap: 44px;
+  box-sizing: border-box;
+  max-width: 1276px;
+  min-height: 100%;
+  margin: 0 auto;
+  padding: 30px 36px;
+}
+
+.home-left {
+  flex: none;
+  width: 300px;
+}
+
+.home-right {
+  flex: 1;
+  min-width: 0;
+}
+
+.home-h {
+  margin: 2px 0 6px;
+  color: var(--oc-text);
+  font-weight: 600;
+}
+
+/* Project rows: flat, 39px pitch, no carets or counts. */
+
+.proj-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 39px;
+  padding: 0 6px;
+  position: relative;
+}
+
+.proj-open {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--oc-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.proj-open .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Twin disambiguator (two projects, one display name): the parent folder,
+   quiet ink. */
+.proj-open .name-dim {
+  color: var(--oc-text-2);
+}
+
+/* Selected by the session filter (click the row again to clear): a slim
+   outline around the row's content, full column width, no fill. The ink is
+   the selection-foreground token — SynthWave's focusBorder (#1f212b) is
+   invisible on its own background. */
+.proj-row.selected::before {
+  content: "";
+  position: absolute;
+  inset: 4px 0;
+  border: 1px solid
+    var(--vscode-list-activeSelectionForeground, var(--oc-text));
+  border-radius: 6px;
+  pointer-events: none;
+}
+
+/* A click must not ring the button: the UA focus outline rides focusBorder
+   and tracks the button's width, which breathes with the hover actions —
+   the selection band above is the state. Keyboard focus still rings. */
+.proj-open:focus,
+.row-act:focus {
+  outline: none;
+}
+
+.proj-open:focus-visible,
+.row-act:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, currentColor);
+  outline-offset: -1px;
+  border-radius: 6px;
+}
+
+.proj-here {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+  cursor: help;
+}
+
+.purge-note {
+  flex: none;
+  color: var(--oc-text-2);
+  font-size: smaller;
+}
+
+/* Session rows on the right, grouped by day. */
+
+.day-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 40px;
+}
+
+.day-label {
+  color: var(--oc-text-2);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.sess-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 50px;
+  padding: 0 6px; /* same inset as .proj-row so the columns' tiles align */
+}
+
+.sess-open {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* One-line row: semibold title, project basename inline after it. */
+.sess-open .texts {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sess-title {
+  overflow: hidden;
+  flex: 0 1 auto;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--oc-text);
+  font-weight: 600;
+}
+
+.sess-proj {
+  overflow: hidden;
+  flex: 0 1 auto;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--oc-text-2);
+  font-size: 12px;
+}
+
+/* Optically center row labels: the flex box centers the line, but Segoe
+   UI's asymmetric metrics leave more blank space under the cap line than
+   above it, so the ink reads ~1px low. */
+.proj-open .name,
+.sess-open .texts {
+  translate: 0 -1px;
+}
+
+/* Hover actions (rename/delete, project delete): quiet, never push the row. */
+
+.row-acts {
+  display: none;
+  flex: none;
+  gap: 2px;
+}
+
+.proj-row:hover .row-acts,
+.sess-row:hover .row-acts {
+  display: flex;
+}
+
+.row-act {
+  padding: 2px 6px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--oc-text-2);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.row-act:hover {
+  background: var(--vscode-list-hoverBackground);
+  color: var(--oc-text);
+}
+
+.row-act.iconic {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 5px;
+}
+
+.row-act.armed,
+.menu-item.armed {
+  color: var(--vscode-charts-red, var(--vscode-errorForeground));
+  font-weight: 600;
+}
+
+/* Search field */
+
+.search {
+  position: relative;
+  margin-bottom: 6px;
+}
+
+.search > svg {
+  position: absolute;
+  top: 50%;
+  left: 13px;
+  translate: 0 -50%;
+  color: var(--oc-text-2);
+  pointer-events: none;
+}
+
+.search input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 42px;
+  padding: 0 14px 0 40px;
+  background: var(--oc-field);
+  border: 1px solid var(--oc-input-border);
+  border-radius: 6px;
+  color: var(--oc-text);
+  font: inherit;
+  outline: none;
+}
+
+.search input::placeholder {
+  color: var(--oc-text-2);
+}
+
+/* The clear (×) that appears in the search field's right end while it holds
+   text: a small circle around the cross, outlined so it reads as a button;
+   hover fills it and inks the cross, like the other buttons. */
+.search .search-clear {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  translate: 0 -50%;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: none;
+  border: 1px solid var(--oc-border);
+  border-radius: 50%;
+  color: var(--oc-text-2);
+  cursor: pointer;
+}
+
+.search .search-clear > svg {
+  display: block;
+}
+
+.search .search-clear:hover {
+  color: var(--oc-text);
+  background: var(--oc-surface-2);
+  border-color: var(--oc-text-2);
+}
+
+/* Keep typed text clear of the button; full-width text when it is absent. */
+.search:has(.search-clear) input {
+  padding-right: 34px;
+}
+
+.rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  background: var(--oc-field);
+  border: 1px solid var(--vscode-focusBorder);
+  border-radius: 6px;
+  color: var(--oc-text);
+  font: inherit;
+  outline: none;
+}
+
+.load-older {
+  margin: 10px 0 4px;
+  padding: 4px 2px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--oc-text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.load-older:hover {
+  color: var(--oc-text);
+  text-decoration: underline;
+}
+
+/* In-app confirm dialog for a project delete */
+
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 19;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 40%);
+}
+
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 320px;
+  padding: 12px;
+  background: var(--oc-panel);
+  border: 1px solid var(--oc-border);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 20%);
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* Dialog buttons in the app's vocabulary: the destructive primary fills
+   with the theme's error ink, Cancel is the neutral secondary fill
+   (tb-plus's). Same 6px radius, comp-send's darken-on-hover. */
+.confirm-actions button {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 12px;
+  background: var(--oc-btn-bg);
+  border: none;
+  border-radius: 6px;
+  color: var(--oc-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.confirm-actions button:hover {
+  background: color-mix(in srgb, var(--oc-btn-bg) 88%, var(--oc-text));
+}
+
+.confirm-actions .confirm-danger {
+  background: var(--vscode-errorForeground, #f14c4c);
+  color: var(--vscode-button-foreground, #fff);
+}
+
+.confirm-actions .confirm-danger:hover {
+  background: color-mix(in srgb, var(--vscode-errorForeground, #f14c4c) 88%, #000);
+}
+
+/* Tab context menu (right-click on a session tab) */
+
+.tabmenu {
+  position: fixed;
+  z-index: 20;
+  min-width: 160px;
+  background: var(--oc-panel);
+  border: 1px solid var(--oc-border);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 20%);
+}
+
+.tabmenu .menu-item {
+  width: 100%;
+  border-radius: 0;
+}
+
+.empty {
+  padding: 8px 0;
+  color: var(--oc-text-2);
+}
+
+/* --- Session view --- */
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* No title here — it already shows in the tab; the head carries the ring
+   and the "…" menu at the right. */
+.chat-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 4px 16px 2px;
+}
+
+/* Sub-session breadcrumb, the official app's "parent / child" path: the
+   parent leads back up, the sub-session's own label sits bright at the end. */
+.crumb {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  margin-right: auto;
+  font-size: 12.5px;
+}
+.crumb-parent {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--oc-text-2);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.crumb-parent:hover {
+  color: var(--oc-text);
+}
+.crumb-sep {
+  color: var(--oc-text-2);
+}
+.crumb-here {
+  color: var(--oc-text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.head-rename {
+  flex: 1;
+}
+
+/* "…" overflow (rename / delete) at the head's right, past the ring. */
+
+.headmenu {
+  position: relative;
+  display: flex;
+  flex: none;
+}
+
+.headmenu-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--oc-text-2);
+  cursor: pointer;
+}
+
+.headmenu-btn:hover {
+  background: var(--vscode-list-hoverBackground);
+  color: var(--oc-text);
+}
+
+.headmenu-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  bottom: auto;
+  min-width: 180px;
+}
+
+/* Context/cost ring + expanded breakdown */
+
+.ctx {
+  position: relative;
+  display: flex;
+  flex: none;
+}
+
+.ctx-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.ctx-btn:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+/* Hover card under the ring: Cost / Usage / Tokens, like the opencode web
+   UI. Sits inside .ctx so it dies with the head; pointer-events:none keeps
+   hovering the card itself from dismissing it. */
+.ctx-tip {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: auto auto;
+  column-gap: 32px;
+  row-gap: 3px;
+  padding: 8px 12px;
+  background: var(--vscode-editorHoverWidget-background, var(--oc-panel));
+  border: 1px solid var(--vscode-editorHoverWidget-border, var(--oc-border));
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.35);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.ctx-tip-k {
+  color: var(--oc-text-2);
+}
+
+/* Values are data — full ink; only the labels sit at secondary. */
+.ctx-tip-v {
+  color: var(--oc-text);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.ring-track {
+  fill: none;
+  stroke: var(--oc-track);
+  stroke-width: 2;
+}
+
+.ring-fill {
+  fill: none;
+  stroke: var(--oc-text);
+  stroke-width: 2;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: center;
+  transition: stroke-dasharray 0.3s;
+}
+
+/* Transcript: gutters hug the panel (32px), assistant text indented to its
+   own column past the status dots. The wrap carries the bottom fade so it
+   can sit over the scroller's viewport edge instead of scrolling with the
+   content. */
+
+.msgs-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.msgs {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* Position here is managed explicitly (bottom-follow, prepend anchor,
+     per-session restore); native scroll anchoring adjusts scrollTop under
+     those feet when the clearance padding lands, so it stays off. */
+  overflow-anchor: none;
+  /* Bottom clearance for the floating composer stack (Session.tsx measures
+     it): at rest the last line sits just above the composer, and anything
+     streaming under it dissolves — no reserve would put it behind the card. */
+  padding: 0 32px var(--oc-clearance, 110px);
+  /* The top gap is a scrolling spacer, not padding: a sticky prompt pins to
+     the padding-box edge, so padding would hold it 4px down with a strip
+     the slide-under content shows through. */
+}
+
+.msgs::before {
+  content: "";
+  display: block;
+  height: 4px;
+}
+
+/* Claude Code's .messageGradient: the bottom of the viewport dissolves the
+   outgoing content into the panel instead of clipping it. 150px like theirs
+   — the solid end lands behind the floating composer, so the resting last
+   line (a composer's height up) stays readable while content slides under
+   the card and fades out. */
+.msgs-fade {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  height: 150px;
+  background: linear-gradient(to bottom, transparent 0%, var(--oc-panel) 100%);
+  pointer-events: none;
+}
+
+/* The floating bottom chrome (composer, docks, send error) over the
+   transcript's last stretch — Claude Code's absolute inputContainer. The
+   container and its full-width wrappers stay click-through — they cover the
+   scrollbar's lower stretch, and an auto there would make it ungrabbable;
+   only the cards themselves take clicks (popovers mount inside them). */
+.chat-bottom {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.chat-bottom > *,
+.chat-bottom > * > * {
+  pointer-events: none;
+}
+
+.chat-bottom .composer-card,
+.chat-bottom .dock {
+  pointer-events: auto;
+}
+
+/* The empty session's launch screen (opencode's new-session page): the
+   wordmark and the composer hang off the panel's vertical midline — it
+   runs through the middle of the 40px gap between them (20px below the
+   glyph's faded bottom, 12px plus the composer's 8px top padding above
+   the card). The 0-height anchor lets a growing composer stay put and
+   stretch downward only. */
+.chat.empty .chat-bottom {
+  bottom: auto;
+  top: 50%;
+  height: 0;
+}
+
+.wordmark {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 20px;
+  display: block;
+  width: 680px;
+  height: auto;
+  max-width: calc(100% - 64px);
+  margin: 0 auto;
+  color: var(--oc-text);
+}
+
+.chat.empty .composer {
+  margin-top: 12px;
+}
+
+/* opencode's pixel spinner (tabs and sub-agent chips while busy): the grid
+   cells pulse on per-cell delays through the two keyframes its ui package
+   pairs with the Spinner — full pulse inside, a dim one on the outer ring. */
+.pixel-spin {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+/* The settled twin of the spinner: same grid, no animation. A failed
+   sub-agent recolors it through the error foreground. */
+.pixel-mark {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+.pixel-mark.failed {
+  color: var(--vscode-errorForeground);
+}
+
+/* Tab signal colors: literal, not theme vars — some themes map
+   editorWarning.foreground to green (same reason as
+   .subagent-chip.asking). The mark pulses — a tab the user isn't
+   looking at asks for attention, unlike the busy spinner beside it. */
+.pixel-spin.attention,
+.pixel-mark.attention {
+  color: #ffcc00;
+}
+
+.pixel-spin.ready,
+.pixel-mark.ready {
+  color: #89d185;
+}
+
+.tab .pixel-mark.attention,
+.tab .pixel-mark.ready {
+  animation: pulse-opacity 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse-opacity {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes pulse-opacity-dim {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.msg {
+  margin: 10px 0;
+}
+
+.msg-text {
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
+.msg.assistant {
+  position: relative;
+  padding-left: 36px;
+}
+
+.dot {
+  position: absolute;
+  left: 12px;
+  /* 7px = centered on the caps' ink (10.6px from the msg top at 13px/1.5),
+     not the line box (9.75px) — vs the glyphs the box center reads high. */
+  top: 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--oc-text-2);
+}
+
+.msg.dot-error .dot {
+  background: var(--vscode-errorForeground);
+}
+
+.dot-running .dot {
+  animation: dot-blink 1s linear infinite;
+}
+
+/* The pre-token wait line's dot: blinks while it waits — a class of its
+   own so the row's dot-running thread can't keep it pulsing after the
+   wait ended and the line vanished. */
+.phase-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--oc-text-2);
+}
+
+.status-line.dot-running .phase-dot {
+  animation: dot-blink 1s linear infinite;
+}
+
+.thinking-block.dot-running .phase-dot {
+  animation: dot-blink 1s linear infinite;
+}
+
+@keyframes dot-blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* Streaming placeholder where reasoning would be. Static text — the dot
+   beside it carries the pulse. */
+.thinking-line {
+  color: var(--oc-text-2);
+  font-size: 12px;
+}
+
+/* The dot+label placeholder rows ("Waiting for the model...", "Working..."): the
+   dot sits in flow, flex-centered against the label exactly like a tool
+   row's dot — the absolute .dot's top is tuned for 13px/1.5 paragraph ink
+   and rides ~2px low beside the 12px thinking-line. Same outdent and gap
+   as .tool-row, so the label lands on the tool grid. */
+.status-line {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-left: -24px;
+}
+
+.status-line .dot {
+  position: static;
+  flex: none;
+}
+
+/* The stop marker on a user-stopped turn: the stop glyph on the assistant
+   dot column (12px — .msg.assistant's own outdent doesn't apply, this is a
+   direct .turn child), a muted label where the reply would have continued. */
+.interrupted {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-left: 12px;
+  margin-top: 4px;
+  color: var(--oc-text-2);
+  font-size: 12px;
+}
+
+.interrupted svg {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  opacity: 0.8;
+}
+
+/* The reasoning row (Claude Code's "Thought for Ns"): a quiet button that
+   unfolds the muted thinking text under a left rule. The chevron points
+   right while folded, down when open. */
+.thinking-block {
+  margin: 10px 0;
+}
+
+.thinking-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  /* Same dot column as .status-line/.tool-row (49): -24 puts the box on
+     the outdent and the head's own 6px padding puts the dot on it — the
+     processed-input line's dot sits directly above. The chevron's +6
+     keeps it halfway to the label column. */
+  margin-left: -30px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--oc-text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.thinking-head .thinking-chevron {
+  margin-left: 6px;
+}
+
+.thinking-head:hover {
+  background: var(--vscode-list-hoverBackground);
+  color: var(--oc-text);
+}
+
+.thinking-chevron {
+  display: flex;
+  rotate: -90deg;
+}
+
+.thinking-block.open .thinking-chevron {
+  rotate: none;
+}
+
+.thinking-body {
+  margin-top: 2px;
+  padding-left: 11px;
+  border-left: 2px solid var(--oc-border);
+  color: var(--oc-text-2);
+  font-size: 12px;
+}
+
+/* The body's inner markdown keeps its spacing tight against the rule. */
+.thinking-body > :first-child {
+  margin-top: 0;
+}
+
+.thinking-body > :last-child {
+  margin-bottom: 0;
+}
+
+.msg-error {
+  margin-top: 4px;
+  color: var(--vscode-errorForeground);
+  font-size: 12px;
+}
+
+/* A failed command or turn, in the flow after the last turn — indented to
+   the assistant column so it reads as a transcript entry, not a banner. */
+.send-error {
+  padding-left: 36px;
+  color: var(--vscode-errorForeground);
+  font-size: 12px;
+}
+
+/* Home's banner for session-less errors (the project purge): inset to the
+   grid, not the composer's left padding. */
+.home-error {
+  padding: 0 8px 10px;
+}
+
+/* The compaction fold (Claude Code): collapsed "Compacted chat · manual ·
+   Nk tokens freed" header, expanding to the summary. Collapsed by default;
+   forced open while the summary streams. */
+.compacted {
+  margin: 10px 0 2px;
+}
+
+.compacted-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--oc-text-2);
+  font-size: 12px;
+  font-style: italic;
+  list-style: none;
+  user-select: none;
+}
+
+.compacted-summary::-webkit-details-marker {
+  display: none;
+}
+
+/* The head matches the thinking row's geometry: the dot hangs in the
+   gutter (absolute .dot base, 12px inside the box), the chevron+label
+   indent 30px onto the text grid where thinking-head's margin lands. */
+.compacted-summary {
+  position: relative;
+  padding-left: 30px;
+}
+
+.compacted-summary .dot {
+  top: 4px;
+}
+
+.compacted-chevron {
+  display: flex;
+  rotate: -90deg;
+}
+
+.compacted.open .compacted-chevron {
+  rotate: none;
+}
+
+.compacted-body {
+  /* The fold is no .msg.assistant, so the 36px text-grid indent it would
+     inherit never applies — without this the summary hangs at the box edge,
+     left of every other reply's text. */
+  margin: 8px 0 0 36px;
+}
+
+/* Quiet footer under each finished turn: copy + agent · model · duration. */
+
+.turn-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 22px;
+  /* 8px below: the turn's trailing chrome rides between the pinned prompt
+     and the incoming one during the push — every px here is push distance. */
+  margin: 6px 0 8px;
+  color: var(--oc-text-2);
+  font-size: 12px;
+}
+
+/* The meta text joins the dot-row label column (copy button 17 + 6 + gap 10
+   = 33) — the Interrupted marker under it labels from the same column. */
+.turn-meta {
+  margin-left: 6px;
+}
+
+.turn-copy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--oc-text-2);
+  cursor: pointer;
+}
+
+.turn-copy:hover {
+  background: var(--vscode-list-hoverBackground);
+  color: var(--oc-text);
+}
+
+.turn-copy.done {
+  color: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+}
+
+/* --- Composer: one bordered card with the chips and send inside --- */
+
+.composer {
+  flex: none;
+  padding: 8px 32px 14px;
+}
+
+.composer-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  box-sizing: border-box;
+  padding: 8px 14px 6px;
+  background: var(--oc-field);
+  border: 1px solid var(--oc-input-border);
+  border-radius: 8px;
+  /* Claude Code caps the composer at 680px, centered in the panel. */
+  max-width: 680px;
+  margin: 0 auto;
+}
+
+/* Focused reads at a glance — the hairline climbs to well over half ink
+   (Claude Code's focused card is unmistakable next to its idle one). */
+.composer-card:focus-within {
+  border-color: color-mix(in srgb, var(--oc-text) 60%, var(--oc-input-border));
+}
+
+/* With attachments the chip's × badge overhangs 6px above its chip; the
+   card's 8px top padding plus the strip's 2px keep it clear of the border. */
+
+/* While a file drag hovers anywhere over the chat (window-level capture);
+   pointer-events:none so the drop still lands underneath. */
+
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--vscode-focusBorder) 12%, transparent);
+  color: var(--oc-text-2);
+  font-size: 13px;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.composer textarea {
+  min-height: 26px;
+  max-height: 40vh;
+  resize: none;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--oc-text);
+  font: inherit;
+  line-height: 1.45;
+  outline: none;
+}
+
+.composer textarea::placeholder {
+  color: var(--oc-text-2);
+}
+
+/* Attached-file chips between the textarea and the composer bar. */
+
+/* Claude Code's card anatomy: three bands split by barely-visible hairlines
+   — attachments over the prompt over the toolbar. The strips bleed through
+   the card's 14px side padding so the lines run edge to edge; the chips'
+   divider exists only while the strip is rendered. */
+.composer-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 -14px 8px;
+  padding: 2px 14px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--oc-border) 45%, transparent);
+}
+
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 260px;
+  padding: 2px 4px 2px 10px;
+  font-size: 12px;
+  color: var(--oc-text-2);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--oc-border);
+  border-radius: 6px;
+}
+
+.chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip-x {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 50%;
+  color: var(--oc-text-2);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.chip-x:hover {
+  color: var(--oc-text);
+  background: var(--vscode-list-hoverBackground);
+}
+
+/* Image attachments preview as a thumbnail; the × shows on hover. */
+
+.file-chip.chip-img {
+  position: relative;
+  padding: 0;
+  border: none;
+  background: none;
+}
+
+.chip-img img {
+  display: block;
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border: 1px solid var(--oc-border);
+  border-radius: 6px;
+  cursor: zoom-in;
+}
+
+/* Full-viewport preview of an attached image (Claude Code's lightbox): dark
+   backdrop, the image centered over its name; click the backdrop or Esc to
+   dismiss, left-click the picture to zoom in (toward the cursor), right-
+   click to zoom out. Above every menu layer. */
+.img-preview {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgb(0 0 0 / 0.75);
+  cursor: zoom-out;
+  z-index: 40;
+  /* Zoom crops at the viewport — no spill past the overlay's bounds. */
+  overflow: hidden;
+}
+
+.img-preview img {
+  max-width: 90vw;
+  max-height: 85vh;
+  border-radius: 8px;
+  /* Cursor rides inline (grabbing/zoom-in/zoom-out by state) — this rule
+     only keeps the overlay's zoom-out from inheriting pre-paint. */
+  cursor: zoom-in;
+  user-select: none;
+}
+
+/* The zoomed picture is clipped to its fit box: the frame never grows, so
+   zooming never covers the backdrop, the label or the × button. */
+.img-frame {
+  position: relative;
+  overflow: hidden;
+  border-radius: 8px;
+  line-height: 0;
+}
+
+/* Hugs the frame so the close × can straddle the picture's corner (the
+   frame's own overflow clips a child badge, so the button sits beside it). */
+.img-box {
+  position: relative;
+}
+
+.img-preview-name {
+  /* Above the picture: its scale() makes a stacking context that would
+     otherwise cover the label (the zoom % readout) when zoomed in. */
+  position: relative;
+  z-index: 1;
+  color: var(--oc-text-2);
+  font-size: 12px;
+}
+
+.img-preview-x {
+  position: absolute;
+  /* On the picture's top-right corner, overhanging like the chip's ×. */
+  top: -7px;
+  right: -7px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--oc-panel);
+  border: 1px solid var(--oc-border);
+  color: var(--oc-text);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.img-preview-x:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.chip-img .chip-x {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  opacity: 0;
+  background: var(--oc-panel);
+  border: 1px solid var(--oc-border);
+}
+
+.file-chip:hover .chip-x {
+  opacity: 1;
+}
+
+.composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px -14px 0;
+  padding: 4px 14px 0;
+  border-top: 1px solid color-mix(in srgb, var(--oc-border) 45%, transparent);
+}
+
+.composer-bar .spacer {
+  flex: 1;
+}
+
+.comp-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--oc-text-2);
+  cursor: pointer;
+}
+
+.comp-add:hover {
+  background: var(--vscode-list-hoverBackground);
+  color: var(--oc-text);
+}
+
+.comp-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  padding: 3px 8px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--oc-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.comp-chip:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.comp-chip .comp-tile {
+  width: 18px;
+  height: 18px;
+  font-size: 10px;
+  border-radius: 4px;
+}
+
+.comp-chevron {
+  display: flex;
+  color: var(--oc-text-2);
+}
+
+.comp-send {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background: var(--oc-send);
+  border: none;
+  border-radius: 6px;
+  /* The theme picks its own ink for its button fill — a hardcoded #fff is
+     unreadable on the pale/neon fills some themes choose. */
+  color: var(--vscode-button-foreground, #fff);
+  cursor: pointer;
+}
+
+.comp-send:hover {
+  background: var(
+    --vscode-button-hoverBackground,
+    color-mix(in srgb, var(--oc-send) 88%, #000)
+  );
+}
+
+.comp-send:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* --- Popovers: model/agent pickers, slash menu, head menu, docks --- */
+
+/* Click-away backdrop for open menus/dropdowns. */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+}
+
+.menu {
+  z-index: 10;
+  background: var(--oc-panel);
+  border: 1px solid var(--oc-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+  overflow: hidden;
+}
+
+/* The slash menu spans the composer card; the picker menus anchor to their
+   chip instead (see the parity-fix block at the end). The mention menu
+   shares it — ten finder rows plus agents scroll. */
+.slash-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.menu-list {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 12px;
+  background: none;
+  border: none;
+  color: var(--oc-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu-item:hover,
+.menu-item.active {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.menu-texts {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.menu-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--oc-text-2);
+  font-size: 12px;
+}
+
+.menu-check {
+  display: flex;
+  flex: none;
+  color: var(--oc-text);
+}
+
+/* Divider inside a menu (the head menu's Rename / Delete split). */
+.menu-sep {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--oc-border);
+}
+
+/* Permission + question docks */
+
+.docks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 32px 6px;
+  /* The composer caps at 680px, centered; the docks above it match
+     (680 content + 2×32 side padding). */
+  max-width: 744px;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 auto;
+}
+
+.dock {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+  border: 1px solid var(--oc-border);
+  border-radius: 8px;
+  background: var(--oc-surface-2);
+}
+
+.dock-text {
+  overflow-wrap: anywhere;
+}
+
+.dock-buttons {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+/* Question options (Claude Code): a tab per question up top, then
+   full-width choice rows — a radio/checkbox mark, then label over a muted
+   description. The pick lives in the mark; the row fill is only cursor and
+   hover highlight. */
+.dock.question {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.dock.question .dock-buttons {
+  justify-content: flex-end;
+}
+
+.dock-tabs {
+  display: flex;
+  gap: 12px;
+  min-width: 0;
+}
+
+.dock-tab {
+  padding: 2px 0;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--oc-text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dock-tab:hover {
+  opacity: 0.8;
+}
+
+.dock-tab.answered {
+  color: var(--oc-text-2);
+  font-weight: 400;
+}
+
+.dock-tab.active {
+  border-bottom-color: var(--vscode-button-background, var(--oc-send));
+}
+
+.dock.question .dock-text {
+  font-weight: 600;
+}
+
+.dock-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dock-opt-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 5px 8px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--oc-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dock-opt-row:hover,
+.dock-opt-row.active {
+  background: var(--vscode-list-hoverBackground);
+}
+
+@keyframes dock-confirm {
+  from {
+    background: var(--vscode-list-hoverBackground);
+  }
+  to {
+    background: transparent;
+  }
+}
+
+.dock-opt-row.confirming {
+  animation: dock-confirm 0.3s ease-out;
+}
+
+.dock-mark {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  border: 1px solid var(--oc-text-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dock-mark.radio {
+  border-radius: 50%;
+}
+
+.dock-mark.check {
+  border-radius: 3px;
+}
+
+.dock-mark.on {
+  border-color: var(--vscode-button-background, var(--oc-send));
+}
+
+.dock-mark.radio.on::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--vscode-button-background, var(--oc-send));
+}
+
+.dock-mark.check.on {
+  background: var(--vscode-button-background, var(--oc-send));
+}
+
+.dock-mark.check.on::after {
+  content: "";
+  width: 4px;
+  height: 8px;
+  margin-top: -3px;
+  border-right: 2px solid var(--vscode-button-foreground, #fff);
+  border-bottom: 2px solid var(--vscode-button-foreground, #fff);
+  transform: rotate(45deg);
+}
+
+.dock-opt-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.dock-opt-label {
+  font-weight: 600;
+}
+
+.dock-opt-desc {
+  color: var(--oc-text-2);
+  font-size: 12px;
+}
+
+/* Wizard footer: Back quiet-left, the primary Next/Submit and the quiet
+   Dismiss right. */
+.dock-spacer {
+  flex: 1;
+}
+
+.dock-back {
+  padding: 2px 8px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--oc-text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.dock-back:hover {
+  background: var(--vscode-list-hoverBackground);
+  color: var(--oc-text);
+}
+
+.dock-submit {
+  padding: 3px 14px;
+  background: var(--vscode-button-background, var(--oc-send));
+  color: var(--vscode-button-foreground, #fff);
+  border: none;
+  border-radius: 6px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.dock-submit:hover:not(:disabled) {
+  background: var(
+    --vscode-button-hoverBackground,
+    color-mix(in srgb, var(--vscode-button-background, var(--oc-send)) 88%, #000)
+  );
+}
+
+.dock-submit:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.dock-input {
+  min-width: 120px;
+  padding: 2px 6px;
+  border: 1px solid var(--oc-border);
+  border-radius: 4px;
+  background: var(--oc-field);
+  color: inherit;
+  font: inherit;
+}
+
+.dock-dismiss {
+  margin-left: auto;
+  padding: 2px 8px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--oc-text-2);
+  cursor: pointer;
+  font-size: smaller;
+}
+
+.dock-dismiss:hover {
+  color: var(--oc-text);
+}
+
+/* Permission card (Claude Code): "Allow this <action>?" over the resource
+   itself (for bash the command line), then numbered answer rows — Yes
+   filled, the rest quiet — with the redirect line the reject rides on. */
+.dock.permission {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.dock.permission .dock-text {
+  font-weight: 600;
+}
+
+.dock-cmd {
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--oc-border);
+  border-radius: 4px;
+  background: var(--oc-field);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 120px;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.dock-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dock-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--oc-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* One selection: an accent fill that moves with the arrows or the mouse
+   (the dock moves it on hover); Enter or a click commits the filled row. */
+.dock-choice.active {
+  background: var(--vscode-button-background, var(--oc-send));
+  color: var(--vscode-button-foreground, #fff);
+}
+
+.dock-num {
+  opacity: 0.6;
+  font-size: 12px;
+}
+
+.dock.permission .dock-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.dock-hint {
+  color: var(--oc-text-2);
+  font-size: 12px;
+}
+
+/* --- Chat rendering (markdown) --- */
+
+/* Markdown content */
+
+.markdown p {
+  margin: 0 0 16px;
+}
+
+.markdown p:last-child {
+  margin-bottom: 0;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  margin: 14px 0 6px;
+  font-size: inherit;
+  font-weight: 600;
+}
+
+.markdown ul,
+.markdown ol {
+  margin: 6px 0;
+  padding-left: 24px;
+}
+
+.markdown li {
+  margin: 4px 0;
+}
+
+.markdown blockquote {
+  margin: 4px 0;
+  padding: 0 10px;
+  border-left: 3px solid var(--oc-border);
+  opacity: 0.8;
+  position: relative;
+}
+
+/* Blockquote copy control: hover-revealed at the top right — the quote has
+   no top padding, so an always-on button would sit on the first line. */
+.markdown blockquote .code-copy {
+  top: 2px;
+  right: 0;
+  opacity: 0;
+}
+
+.markdown blockquote:hover .code-copy {
+  opacity: 1;
+}
+
+.markdown a {
+  color: var(--vscode-textLink-foreground);
+}
+
+.markdown hr {
+  border: none;
+  border-top: 1px solid var(--oc-border);
+}
+
+.markdown table {
+  border-collapse: collapse;
+  margin: 6px 0;
+}
+
+.markdown th,
+.markdown td {
+  border: 1px solid var(--oc-border);
+  padding: 2px 8px;
+}
+
+/* Inline code uses VS Code's code colors: textCodeBlock background,
+   textPreformat text. Fenced blocks override to the editor's own text and
+   font — their plain tokens are editor text, not preformatted prose. */
+
+.markdown code {
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--oc-code-size);
+  color: var(--vscode-textPreformat-foreground, inherit);
+  background: var(--oc-chip);
+  border-radius: 4px;
+  padding: 2px 5px;
+}
+
+/* The block wrapper owns the margin and anchors the copy button: the pre
+   itself scrolls horizontally, and a button inside it would ride the scroll
+   off-screen on wide code. */
+.code-block {
+  position: relative;
+  margin: 8px 0;
+}
+
+.markdown pre {
+  background: var(--oc-chip);
+  /* Themes whose textCodeBlock.background sits at the panel color (Dark
+     Modern: #1f1f1f on #1f1f1f) lose the recessed step — a hairline keeps
+     the block's edge findable everywhere. */
+  border: 1px solid color-mix(in srgb, var(--oc-border) 60%, transparent);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 0;
+  overflow-x: auto;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.markdown pre code {
+  background: none;
+  padding: 0;
+  color: var(--vscode-editor-foreground, inherit);
+  font-size: var(--oc-code-size);
+  /* 19px = the copy button's height, so its top offset centers it on the
+     first line (the button hangs at the pre's 10px padding-top). */
+  line-height: 19px;
+  white-space: pre;
+  text-shadow: var(--oc-glow-plain, none);
+}
+
+/* Copy control on the first line's right; flips to a check briefly.
+   top: 12px — the glyphs hang ~2px low in their 19px line box (baseline
+   metrics), so the icon centers on the visible text, not the line box. */
+.code-copy {
+  position: absolute;
+  top: 12px;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--oc-text-2);
+  cursor: pointer;
+}
+
+.code-copy:hover {
+  background: var(--vscode-list-hoverBackground);
+  color: var(--oc-text);
+}
+
+.code-copy.done {
+  color: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+}
+
+/* Copyable-with-modifier surfaces show the pointing finger only while the
+   modifier is down — the element tracks it via mousemove, which works even
+   before the webview has focus (keydown tracking would miss that first
+   hover). opencodeGui.codeCopyModifier picks the key. */
+.code-small.mod-hover,
+.code-inline.mod-hover {
+  cursor: pointer;
+}
+
+/* Inline spans pulse green as the copy confirmation. */
+.code-inline.copied-flash {
+  animation: inline-copied 1200ms ease-out;
+}
+
+@keyframes inline-copied {
+  0%,
+  70% {
+    background: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+    color: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  }
+}
+
+/* Clickable file references */
+
+.file-ref {
+  cursor: pointer;
+  color: inherit;
+}
+
+.file-ref:hover {
+  text-decoration: underline;
+}
+
+/* The transcript keeps a draggable scrollbar (Claude Code's does); its
+   slider uses VS Code's scrollbar tokens. Other scroll surfaces stay
+   hidden-at-rest below. */
+.msgs {
+  scrollbar-color: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.4))
+    transparent;
+}
+
+.msgs::-webkit-scrollbar {
+  width: 10px;
+}
+
+.msgs::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.msgs::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.4));
+  border-radius: 5px;
+}
+
+.msgs::-webkit-scrollbar-thumb:hover {
+  background: var(--vscode-scrollbarSlider-hoverBackground, rgba(100, 100, 100, 0.7));
+}
+
+.msgs::-webkit-scrollbar-thumb:active {
+  background: var(--vscode-scrollbarSlider-activeBackground, rgba(191, 191, 191, 0.4));
+}
+
+/* Claude Code pins the prompt: the user message sticks to the panel's top
+   edge while its turn is on screen — the reply slides under it, and the
+   next turn's scroll pushes the whole exchange off. The wrapper (not the
+   pill) is sticky, padded so the fill covers the box. Its height is also the push distance's floor: a released sticky
+   moves at scroll speed, so the hand-off can never be shorter than this
+   box plus the gap after the turn — and the turn footer must stay inside
+   the opaque fill while it rides out. Claude Code fades its fill over the
+   last 12px of the sticky box; here that fade hangs ::after the box
+   instead, so the 12px dissolve costs no box height and the tuned push
+   distance stays as it is. */
+
+.msg.user {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0;
+  padding: 6px 0 2px;
+  background: var(--oc-panel);
+  /* The pill is a click-to-jump anchor for its turn. */
+  cursor: pointer;
+}
+
+.msg.user::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 12px;
+  background: linear-gradient(to bottom, var(--oc-panel), transparent);
+  pointer-events: none;
+}
+
+/* An expanded pill can out-tall the viewport, and a pin holds its top at
+   the panel's top edge — the reply would slide under it and stay there for
+   the whole turn. Reading mode un-pins; relative keeps the box as the
+   anchor for the fade and the action chip. */
+.msg.user:has(.user-text.expanded) {
+  position: relative;
+}
+
+/* Under the pill, at its right end (where the reader aims): copy + revert
+   (OpenCode's own glyphs), appearing on hover. Absolutely positioned — no
+   extra line of height between messages — riding the sticky pill's box on
+   its own panel-backed chip so it stays legible over the reply. Used only
+   when there is no clamp-toggle line to host them. */
+.msg-actions {
+  position: absolute;
+  top: calc(100% + 1px);
+  right: 2px;
+  z-index: 3;
+  display: flex;
+  gap: 1px;
+  padding: 1px;
+  border-radius: 6px;
+  background: var(--oc-panel);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+/* When the pill overflows, that toggle line hosts the pair instead: toggle
+   centered, actions at the right, all in flow — expanding the text moves
+   the line down with it, so the actions can never be buried under the next
+   message. */
+.msg-foot {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  margin-top: 5px;
+}
+
+.msg-foot .clamp-toggle {
+  grid-column: 2;
+}
+
+.msg-foot .msg-actions {
+  grid-column: 3;
+  justify-self: end;
+  position: static;
+  background: none;
+  padding: 0;
+}
+
+.msg.user:hover .msg-actions,
+.msg-actions:focus-within {
+  opacity: 1;
+}
+
+.msg-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 18px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--oc-text-2);
+  cursor: pointer;
+}
+
+.msg-action:hover {
+  background: var(--vscode-list-hoverBackground);
+  color: var(--oc-text);
+}
+
+.msg-action.done {
+  color: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+}
+
+/* User pill: recessed fill, hairline border, dark text. */
+
+/* Attachment chips riding a pill (Claude Code's): square thumbnails for
+   images (the composer's .chip-img look; name and size live on the hover
+   title), name alone for other files. The row sits above the text, outside
+   the clamp, so the pill's words never fold under a thumbnail. */
+.msg-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 6px;
+}
+
+/* The pill: chrome here, content in the .user-text child. The split gives
+   the clamp's dissolve an element to mask that carries no chrome of its own
+   (see the mask rule below). */
+.user-pill {
+  min-height: 32px;
+  box-sizing: border-box;
+  padding: 5px 12px;
+  background: var(--oc-surface-2);
+  border: 1px solid var(--oc-border);
+  border-radius: 8px;
+}
+
+.user-text {
+  line-height: 1.5;
+}
+
+/* Inbound peer message (opencode-plugin-peers): another session's words,
+   injected as a synthetic part — the same pill, a header naming the sender
+   (when the plugin carried it) instead of an empty box. */
+.peer-head {
+  padding: 0 2px 3px;
+  color: var(--oc-text-2);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.peer .user-pill {
+  min-height: 0;
+}
+
+/* Folded pills preview at a 7-line budget. Short messages stay whole and
+   bare; replies never fold — the reader comes for them in full. */
+.user-text.clamped {
+  max-height: calc(7 * 1.5em);
+  overflow: hidden;
+}
+
+/* An overflowing pill dissolves over its last line instead of ending in a
+   hard clip. Painted only when the clamp actually cuts (`cut`, set beside
+   `clamped`). An alpha MASK, not an overlay wash: a wash paints pill color
+   over whatever the content sits on (a dark code block) and reads as a
+   band. The gradient is fully out 0.3em into the clipped line — before its
+   glyphs begin, and at full transparency — so full lines stay solid and no
+   ghost text bakes into the bottom; "Show more" carries the there-is-more
+   hint. */
+.user-text.clamped.cut {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    #000 calc(100% - 1.5em),
+    transparent calc(100% - 1.2em)
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    #000 calc(100% - 1.5em),
+    transparent calc(100% - 1.2em)
+  );
+}
+
+.clamp-toggle {
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+  font-size: smaller;
+}
+
+.clamp-toggle:hover {
+  text-decoration: underline;
+}
+
+/* Tool rows: status dot + display name + the command/argument as a gray
+   code pill on one clipped line; rows with output expand below. */
+
+.tool {
+  /* One rhythm everywhere: a tool row sits 10px from adjacent lines whether
+     it shares its message with a paragraph (one step often emits text+tool)
+     or starts its own — the outer 10px collapses into this one. */
+  margin: 10px 0;
+}
+
+.tool-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  padding: 2px 0;
+  /* Outdent to the status-dot column, so the tool name lands on the same
+     grid as the paragraph text next to it. */
+  margin-left: -24px;
+}
+
+.tool-row.expander {
+  cursor: pointer;
+  /* Click only where the row has content — left-aligned flex otherwise spans
+     the message width and the empty right side takes the click. */
+  width: fit-content;
+  max-width: 100%;
+}
+
+.tool-row.expander:hover .tool-name {
+  color: var(--oc-text);
+  text-decoration: underline;
+  text-decoration-color: var(--oc-border);
+}
+
+/* The +/- stat on file-changing rows (the original app's "+2 -0"): read
+   straight off the patch, visible without expanding. */
+.diff-stat {
+  display: inline-flex;
+  flex: none;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.diff-stat .diff-add {
+  color: var(
+    --vscode-gitDecoration-addedResourceForeground,
+    var(--vscode-charts-green, #2ea043)
+  );
+}
+
+.diff-stat .diff-del {
+  color: var(
+    --vscode-gitDecoration-deletedResourceForeground,
+    var(--vscode-charts-red, #cd3131)
+  );
+}
+
+/* The "Explored" fold: consecutive settled read-only tools collapse into
+   one counted row; the body indents the revealed cards one level. */
+.explore {
+  margin: 10px 0;
+}
+
+.explore .tool {
+  margin: 0;
+}
+
+.explore-count {
+  color: var(--oc-text-2);
+  font-size: 12px;
+}
+
+.explore-chevron {
+  display: flex;
+  rotate: -90deg;
+}
+
+.explore-chevron.open {
+  rotate: none;
+}
+
+.explore-body {
+  padding-left: 14px;
+}
+
+.explore-body .tool {
+  margin: 6px 0;
+}
+
+.tool-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--oc-text-2);
+}
+
+.tool-dot.completed {
+  background: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+}
+
+.tool-dot.failed {
+  background: var(--vscode-errorForeground);
+}
+
+/* Stuck (opencodeGui.stuckToolSeconds of silence): the running dot turns
+   warning-amber and an interrupt chip offers the escape hatch. Literal
+   amber: some themes map editorWarning.foreground to green. */
+.tool-dot.stuck {
+  background: #ffcc00;
+}
+
+.stuck-chip {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 4px;
+  padding: 1px 9px;
+  font-size: 11px;
+  color: #ffcc00;
+  background: none;
+  border: 1px solid #ffcc00;
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.stuck-chip:hover {
+  background: color-mix(in srgb, #ffcc00 12%, transparent);
+}
+
+/* In-place tooltip for ticking tips ([data-tip]): a native title re-runs
+   its show delay on every attribute change, so a per-second silence label
+   blinks the bubble; pseudo-element content swaps stay put. Placed above —
+   the live transcript's scrollport clips below the chip. */
+[data-tip] {
+  position: relative;
+}
+
+[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  padding: 3px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--vscode-editorHoverWidget-foreground, var(--oc-text, #ccc));
+  background: var(--vscode-editorHoverWidget-background, #252526);
+  border: 1px solid var(--oc-border, #454545);
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+/* Only the live turn's row blinks — a durable row frozen in pending/running
+   (the process died mid-tool) must sit still after a reload. */
+.tool.live .tool-dot.running,
+.tool.live .tool-dot.pending {
+  animation: dot-blink 1s linear infinite;
+}
+
+.tool-name {
+  flex: none;
+  color: var(--oc-text);
+}
+
+/* Plain gray mono text, no pill fill, clipped to the one row. */
+.tool-pill {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--oc-text-2);
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--oc-code-size);
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+a.tool-pill {
+  text-decoration: none;
+}
+
+/* Sub-agent chip (the task tool): the spawned session is the detail view,
+   so the tool renders as a link-shaped pill — status dot, agent name, task
+   description — and falls through to that session on click. Surface stays
+   plain input.background; the link reads through the hover. */
+.subagent-chip {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 10px 0;
+  padding: 7px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--oc-border);
+  background: var(--vscode-input-background);
+}
+
+/* Stop a running sub-agent from its chip: kills the child session only —
+   the parent's turn continues with the aborted task result. */
+.subagent-stop {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  margin-left: 2px;
+  border: 1px solid var(--oc-border);
+  border-radius: 4px;
+  background: none;
+  color: var(--vscode-errorForeground);
+  cursor: pointer;
+}
+
+.subagent-stop:hover {
+  border-color: var(--vscode-errorForeground);
+}
+
+.subagent-chip.link {
+  cursor: pointer;
+}
+
+.subagent-chip.link:hover {
+  border-color: var(--oc-text-2);
+}
+
+.subagent-chip .tool-dot.running,
+.subagent-chip .tool-dot.pending {
+  animation: none;
+}
+
+.subagent-chip.live .tool-dot.running,
+.subagent-chip.live .tool-dot.pending {
+  animation: dot-blink 1s linear infinite;
+}
+
+/* A pending permission ask or question in the child session: the chip
+   pulses yellow. The ask docks only in the child's view, so this is the
+   parent's cue to open the chip and answer it. The working spinner
+   recolors too — the yellow is the only signal. Literal yellow: some
+   themes map editorWarning.foreground to green. */
+.subagent-chip.asking {
+  animation: chip-asking 1.2s ease-in-out infinite;
+}
+
+.subagent-chip.asking .pixel-spin {
+  color: #ffcc00;
+}
+
+@keyframes chip-asking {
+  0%,
+  100% {
+    border-color: var(--oc-border);
+    background: var(--vscode-input-background);
+  }
+  50% {
+    border-color: #ffcc00;
+    background: color-mix(in srgb, #ffcc00 12%, var(--vscode-input-background));
+  }
+}
+
+.subagent-agent {
+  flex: none;
+  color: var(--oc-text);
+  font-weight: 600;
+}
+
+.subagent-desc {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--oc-text-2);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+a.tool-pill:hover {
+  text-decoration: underline;
+}
+
+/* Tool body (Claude Code's): a bordered card under the row with gutter-
+   labeled IN/OUT rows. Transparent fill — the card sits on the theme's own
+   surface like their --app-tool-background does, no painted chip. The label
+   track is a FIXED width, not max-content+subgrid like theirs: subgrid did
+   not apply in the webview's engine and each row then sized its own label
+   column, throwing the IN/OUT text off by a glyph. */
+.tool-body {
+  margin: 2px 0 6px;
+  border: 1px solid var(--oc-border);
+  border-radius: 5px;
+  background: none;
+  overflow: hidden;
+}
+
+.tool-body-row {
+  display: grid;
+  /* 36px fits "OUT" at the capped code size with its side paddings. */
+  grid-template-columns: 36px 1fr auto;
+  align-items: start;
+  border-top: 1px solid var(--oc-border);
+  padding: 4px;
+}
+
+.tool-body-row:first-child {
+  border-top: none;
+}
+
+.tool-body-label {
+  padding: 0 8px 0 4px;
+  color: var(--oc-text-2);
+  opacity: 0.5;
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--oc-code-size);
+  line-height: 16px;
+}
+
+.tool-body-text {
+  padding: 0 4px;
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--oc-code-size);
+  line-height: 16px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tool-copy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 8px;
+  padding: 2px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--oc-text-2);
+  cursor: pointer;
+}
+
+.tool-copy:hover {
+  color: var(--oc-text);
+  background: var(--oc-btn-bg);
+}
+
+.tool-copy.done {
+  color: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+}
+
+.tool-error .tool-name {
+  color: var(--vscode-errorForeground);
+}
+
+/* todowrite checklist (the one tool body that starts open): plain checkbox
+   column, completed rows dimmed — the official app's shape, kept quiet. */
+.tool-todos {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 2px 0 6px;
+  padding: 6px 0;
+}
+
+.tool-todo {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  line-height: 16px;
+}
+
+.tool-todo-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+  border: 1px solid var(--oc-border);
+  border-radius: 3px;
+  color: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+}
+
+.tool-todo-box svg {
+  width: 10px;
+  height: 10px;
+}
+
+.tool-todo.done .tool-todo-text {
+  color: var(--oc-text-2);
+}
+
+/* edit/write diff (expanded) */
+
+.diff {
+  margin: 4px 0 6px;
+  padding: 6px 10px;
+  background: var(--oc-chip);
+  border-radius: 6px;
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--oc-code-size);
+  white-space: pre;
+  overflow-x: auto;
+  max-height: 18em;
+  overflow-y: auto;
+}
+
+/* highlight.js tokens. --oc-tok-* are the active theme's own editor token
+   colors, baked into the page as a style tag by the host (src/theme.ts —
+   webviews get no syntax colors through --vscode-*). The fallbacks keep a
+   registered-color look when no host injected them (the standalone rig);
+   everything not listed inherits the block's editor-foreground text.
+   --oc-glow-* appear only with opencodeGui.codeGlow: a neon halo in each
+   token's own color, since theme files carry no glow of their own. */
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-doctag {
+  color: var(--oc-tok-keyword, inherit);
+  text-shadow: var(--oc-glow-keyword, none);
+}
+
+.hljs-string,
+.hljs-regexp {
+  color: var(--oc-tok-string, inherit);
+  text-shadow: var(--oc-glow-string, none);
+}
+
+.hljs-attr {
+  color: var(--oc-tok-attr, inherit);
+  text-shadow: var(--oc-glow-attr, none);
+}
+
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet {
+  color: var(--oc-tok-number, inherit);
+  text-shadow: var(--oc-glow-number, none);
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: var(--oc-tok-comment, var(--oc-text-2));
+  font-style: italic;
+  text-shadow: var(--oc-glow-comment, none);
+}
+
+.hljs-title,
+.hljs-name,
+.hljs-built_in {
+  color: var(--oc-tok-function, var(--vscode-symbolIcon-functionForeground, var(--vscode-charts-purple)));
+  text-shadow: var(--oc-glow-function, none);
+}
+
+.hljs-title.class_,
+.hljs-type,
+.hljs-tag {
+  color: var(--oc-tok-type, var(--vscode-symbolIcon-classForeground, var(--vscode-charts-orange)));
+  text-shadow: var(--oc-glow-type, none);
+}
+
+.hljs-variable,
+.hljs-property {
+  color: var(--oc-tok-variable, var(--vscode-symbolIcon-variableForeground, var(--vscode-charts-blue)));
+  text-shadow: var(--oc-glow-variable, none);
+}
+
+.hljs-operator {
+  color: var(--oc-tok-operator, inherit);
+  text-shadow: var(--oc-glow-operator, none);
+}
+
+.hljs-deletion {
+  background: var(--vscode-diffEditor-removedTextBackground);
+}
+
+.hljs-addition {
+  background: var(--vscode-diffEditor-insertedTextBackground);
+}
+
+/* running spinner */
+
+.spin {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border: 1.5px solid var(--oc-text-2);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin-rotate 0.8s linear infinite;
+}
+
+@keyframes spin-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* --- parity fix: popovers+session (pass 3) --- */
+
+/* Picker popovers anchor to their chip: left-aligned with it, content-wide
+   but capped per menu, opening upward from the chip row. */
+.picker {
+  position: relative;
+  display: flex;
+  flex: none;
+}
+
+.menu.pop {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: auto;
+  width: max-content;
+  min-width: 200px;
+}
+
+.menu.pop.pop-model {
+  max-width: 360px;
+}
+
+.menu.pop.pop-variant {
+  max-width: 200px;
+}
+
+.menu.pop.pop-agent {
+  max-width: 300px;
+}
+
+/* Model menu anatomy: search field on top, muted provider group headers. */
+.menu-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--oc-border);
+  color: var(--oc-text-2);
+}
+
+.menu-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--oc-text);
+  font: inherit;
+  outline: none;
+}
+
+.menu-search input::placeholder {
+  color: var(--oc-text-2);
+}
+
+.menu-group {
+  padding: 8px 12px 3px;
+  color: var(--oc-text-2);
+  font-size: 12px;
+}
+
+/* "Free" badge after the model name. */
+.menu-badge {
+  display: inline-block;
+  margin-left: 7px;
+  padding: 0 5px;
+  border: 1px solid var(--oc-border);
+  border-radius: 4px;
+  color: var(--oc-text-2);
+  font-size: 11px;
+  line-height: 15px;
+  vertical-align: 1px;
+}
+
+/* Chosen row: blue text on a tinted row, check at the right. */
+.menu-item.selected {
+  color: var(--vscode-textLink-foreground, var(--vscode-charts-blue));
+  background: color-mix(
+    in srgb,
+    var(--vscode-focusBorder, #0078d4) 10%,
+    transparent
+  );
+}
+
+.menu-item.selected .menu-sub {
+  color: inherit;
+  opacity: 0.75;
+}
+
+.menu-empty {
+  padding: 10px 12px;
+  color: var(--oc-text-2);
+  font-size: 12px;
+}
+
+/* Model menu footer: the Manage models hand-off to the native command. */
+.menu-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--oc-border);
+  color: var(--oc-text-2);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu-footer:hover,
+.menu-footer.active {
+  background: var(--vscode-list-hoverBackground);
+  color: var(--oc-text);
+}
+
+/* --- parity fix: ring panel + home (pass 4) --- */
+
+/* The context panel is anchored to the session view, which fills the
+   floating panel edge to edge. */
+.chat {
+  position: relative;
+}
+
+/* Ring expansion: docked inside the panel's right edge, full height,
+   non-modal (nothing dims), its own scroll. */
+.ctx-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  width: 360px;
+  box-sizing: border-box;
+  background: var(--oc-panel);
+  border-left: 1px solid var(--oc-border);
+}
+
+.ctx-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+  gap: 8px;
+  padding: 12px 14px 8px;
+  font-weight: 600;
+}
+
+.ctx-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--oc-text-2);
+  cursor: pointer;
+}
+
+.ctx-close:hover {
+  background: var(--vscode-list-hoverBackground);
+  color: var(--oc-text);
+}
+
+.ctx-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 14px 10px;
+}
+
+/* Key/value grid: muted label above the value, two columns. */
+.ctx-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 18px;
+}
+
+.ctx-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ctx-k {
+  color: var(--oc-text-2);
+  font-size: 12px;
+}
+
+.ctx-v {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--oc-text);
+}
+
+.ctx-sec {
+  margin: 18px 0 8px;
+  color: var(--oc-text-2);
+  font-size: 12px;
+}
+
+/* Stacked token split: one thin bar, 2px panel gaps between segments,
+   rounded ends; identity + percent live in the legend, in text ink. */
+.ctx-bar {
+  display: flex;
+  gap: 2px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--oc-track);
+  overflow: hidden;
+}
+
+.ctx-seg {
+  height: 100%;
+  min-width: 2px;
+}
+
+.ctx-seg:first-child {
+  border-radius: 4px 0 0 4px;
+}
+
+.ctx-seg:last-child {
+  border-radius: 0 4px 4px 0;
+}
+
+.ctx-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 8px;
+  color: var(--oc-text-2);
+  font-size: 11px;
+}
+
+.ctx-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ctx-swatch {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+/* Raw messages */
+.ctx-raw {
+  max-height: 240px;
+  overflow-y: auto;
+  border-top: 1px solid var(--oc-border);
+}
+
+.ctx-msg {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--oc-border) 55%, transparent);
+  font-size: 12px;
+}
+
+.ctx-role {
+  flex: none;
+  color: var(--oc-text-2);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ctx-snippet {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--oc-text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctx-export {
+  flex: none;
+  margin: 8px 14px 12px;
+  padding: 6px 10px;
+  background: none;
+  border: 1px solid var(--oc-border);
+  border-radius: 6px;
+  color: var(--oc-text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ctx-export:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+/* Scrollbars hidden at rest; wheel and keys still scroll. The transcript
+   opts back in above. */
+.home,
+.menu-list,
+.ctx-body,
+.ctx-raw {
+  scrollbar-width: none;
+}
+
+.home::-webkit-scrollbar,
+.menu-list::-webkit-scrollbar,
+.ctx-body::-webkit-scrollbar,
+.ctx-raw::-webkit-scrollbar {
+  display: none;
+}
+
+/* --- Crash card: the app's last-resort recovery surface --- */
+
+.crash-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 480px;
+  margin: 48px auto;
+  padding: 16px;
+  border: 1px solid var(--oc-border);
+  border-radius: 8px;
+  background: var(--oc-panel);
+}
+
+.crash-title {
+  color: var(--vscode-errorForeground);
+  font-weight: 600;
+}
+
+.crash-message {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  text-align: center;
+  color: var(--oc-text-2);
+}
+
+.crash-reload {
+  padding: 4px 14px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.crash-reload:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+/* Huge streamed part: markdown pipeline skipped while streaming. */
+
+.stream-note {
+  color: var(--oc-text-2);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.stream-raw {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
