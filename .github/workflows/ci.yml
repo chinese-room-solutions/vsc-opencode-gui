@@ -1,0 +1,54 @@
+name: ci
+
+# Linux only: the host suite boots a real VS Code under xvfb; the opencode
+# server it spawns is local and needs no credentials (no model turns are
+# sent from CI — AGENTS.md).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Electron deps not on the runner image (24.04 package names —
+      # libasound2 is libasound2t64 there). VS Code itself comes from
+      # @vscode/test-electron's own download, cached below.
+      - name: Install VS Code (Electron) runtime deps
+        run: sudo apt-get install -y --no-install-recommends libgtk-3-0 libgbm1 libnss3 libasound2t64
+      # Pinned to the version the suite is verified against; bump
+      # deliberately when the local dev version moves.
+      - name: Install opencode CLI
+        run: npm install -g opencode-ai@1.18.30
+      - name: Cache VS Code download
+        uses: actions/cache@v6
+        with:
+          path: .vscode-test
+          key: vscode-test-${{ runner.os }}-${{ hashFiles('package.json') }}
+      - name: Compile
+        run: npm run compile
+      - name: Unit tests (webview, plain node)
+        run: npm run test:unit
+      - name: Host tests (real VS Code via xvfb)
+        env:
+          OC_TEST_WORKSPACE: ${{ runner.temp }}/oc-rig-ws
+        run: |
+          mkdir -p "$OC_TEST_WORKSPACE"
+          git init "$OC_TEST_WORKSPACE"
+          xvfb-run -a node test/runTest.js

@@ -1,0 +1,8 @@
+import "./setup.test";
+import "./api.test";
+import "./mentions.test";
+import "./tile.test";
+import "./router.test";
+import "./markdown.test";
+import "./store.test";
+import "./stuck.test";
