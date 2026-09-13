@@ -11,10 +11,10 @@
 <img src="assets/hero.png" alt="VSC OpenCode GUI new-session view with prompt composer in a VS Code editor tab">
 </div>
 
-The Claude Code extension's UX model — chat in the editor area, command-palette
-parity, keyboard-first — running [opencode](https://opencode.ai) underneath.
-The extension spawns a headless `opencode serve`; the UI is our own webview app
-talking to it. Nothing embedded, nothing patched.
+VSC OpenCode GUI puts the [opencode](https://opencode.ai) agent in a native
+VS Code chat — an editor tab with command-palette parity. The extension spawns
+a headless `opencode serve`, and a self-contained webview UI talks to it over
+HTTP/SSE.
 
 ## ✨ Features
 
@@ -100,16 +100,6 @@ Node ≥ 22.5 and `opencode` + `git` on `PATH`; ~30 s, cleans up after itself.
 
 UI is exercised in a plain browser via `node scripts/ui-rig.js <dir> [port]`
 (real server) for Playwright passes. See `AGENTS.md` for the verification bar.
-
-</details>
-
-<details>
-<summary>Architecture</summary>
-
-`src/server/` spawns and owns the headless `opencode serve` child (crash
-respawn, kill-by-port). `src/webview/app/` is a Preact + signals app; the
-extension host (`src/webview/AppHost.ts`) relays every API call and pumps both
-SSE streams into the webview as window messages.
 
 </details>
 
