@@ -13,3 +13,6 @@ AGENTS.md
 
 # Disposable UI-rig workspaces (ui-rig.js test scaffolding)
 *-rig/
+
+# Playwright (test:ui) output
+test-results/
