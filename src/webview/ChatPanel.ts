@@ -55,7 +55,7 @@ export class ChatPanel implements vscode.Disposable {
         CHAT_VIEWTYPE,
         "Open Code Sessions",
         vscode.ViewColumn.Active,
-        { enableScripts: true, retainContextWhenHidden: true },
+        { enableScripts: true, retainContextWhenHidden: true, enableFindWidget: true },
       );
     // Tab icon; panel tab icons don't support SVG, so PNG.
     this._panel.iconPath = vscode.Uri.joinPath(extensionUri, "icon.png");

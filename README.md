@@ -19,7 +19,8 @@ HTTP/SSE.
 ## ✨ Features
 
 - **Chat in the editor** — the agent lives in a tab (`Ctrl/Cmd+Esc`), with a
-  sidebar view and session tabs.
+  sidebar view and session tabs; `Ctrl/Cmd+F` searches the visible transcript
+  (VS Code's find widget — loaded rows and expanded thoughts).
 - **Projects × sessions home** — every session of every project on one screen;
   clicking a session from another folder opens it there, deep-linked.
 - **Sub-agents are sessions** — open a child from its chip, steer it mid-run,
