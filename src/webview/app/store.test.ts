@@ -364,6 +364,48 @@ describe("reasoning window reopen (530a2f2)", () => {
   });
 });
 
+// The reconnect leak: a reasoning part whose typed full write
+// (reasoning-start's message.part.updated) was lost in an SSE gap is
+// created by the first delta — which carries field:"text" even for
+// reasoning (server processor sends the part field, not the part type) —
+// so it streams into the main transcript. The resync's fetch brings the
+// typed durable copy, but its text lags the stream, and the old
+// keep-longer-text merge preserved the mis-typed live part until
+// reasoning.ended snapped it under the Thought block. The merge now
+// adopts the durable type while keeping the fresher text.
+describe("reconnect resync heals a mis-typed reasoning part", () => {
+  it("keeps the streamed text and adopts the durable type", async () => {
+    const sid = "rk1";
+    open(sid, [row("m1", "assistant", T0)]);
+    setBusy(sid);
+    await sseFlush("message.part.delta", {
+      sessionID: sid,
+      messageID: "m1",
+      partID: "p1",
+      field: "text", // the server's reasoning deltas say "text"
+      delta: "leaked thought",
+    });
+    assert.equal(findPart(sid, "p1")?.type, "text"); // the leak premise
+    onApi((call) => {
+      if (call.method !== "GET") return undefined;
+      if (call.path.startsWith(`/api/session/${sid}/message`))
+        return { data: [], cursor: {} };
+      if (call.path === `/session/${sid}/message`)
+        return [
+          {
+            info: { id: "m1", role: "assistant", time: { created: T0 } },
+            parts: [textPart("p1", "m1", sid, "", "reasoning")],
+          },
+        ];
+      return undefined;
+    });
+    await refreshMessages(sid);
+    const healed = findPart(sid, "p1");
+    assert.equal(healed?.type, "reasoning");
+    assert.equal((healed as { text?: string }).text, "leaked thought");
+  });
+});
+
 // The zhipuai endpoint's spurious empty steps idle the session mid-turn;
 // nothing else re-busies a v1 turn, so streaming evidence must — in both
 // wire dialects (the live server streams parts as full
