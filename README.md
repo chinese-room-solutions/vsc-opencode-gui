@@ -85,25 +85,24 @@ Requires the [opencode CLI](https://opencode.ai/) where the workspace runs
 ## 🛠️ Development
 
 ```bash
-npm install
-npm run watch
+make watch   # recompile on change (auto-installs deps on first run)
 ```
 
 Then open the repo in VS Code and press `F5` for the Extension Development Host.
+Touching only the webview app? `make webview` is the fast path.
 
-<details>
-<summary>Tests</summary>
+### Tests
 
-`npm test` compiles, runs unit tests, then boots a real VS Code instance for
-the lifecycle scenarios: server boot, restart with port reuse, `deactivate()`
-freeing the port, uncaught-exception handling, orphan-process checks. Needs
-Node ≥ 22.5 and `opencode` + `git` on `PATH`; ~30 s, cleans up after itself.
+```bash
+make test        # compile + unit suite + real VS Code lifecycle suite
+make test-unit   # unit suite only
+make test-ui     # Playwright UI pass (builds first)
+```
 
-UI is exercised in a plain browser via `node scripts/ui-rig.js <dir> [port]`
-(real server) for Playwright passes. See `AGENTS.md` for the verification bar.
+`make test` boots a real VS Code instance for the lifecycle scenarios: server
+boot, restart with port reuse, `deactivate()` freeing the port,
+uncaught-exception handling, orphan-process checks. Needs Node ≥ 22.5 and
+`opencode` + `git` on `PATH`; ~30 s, cleans up after itself.
 
-</details>
-
-## License
-
-[MIT](LICENSE)
+UI is also exercised in a plain browser via `node scripts/ui-rig.js <dir>
+[port]` (real server). See `AGENTS.md` for the verification bar.
