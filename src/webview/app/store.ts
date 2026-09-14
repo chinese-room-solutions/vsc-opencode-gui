@@ -2228,7 +2228,14 @@ export async function refreshMessages(id: string): Promise<void> {
         const parts = m.parts.map((p) => {
           const was = old.parts.find((q) => q.id === p.id);
           if (!was || !isText(p) || !isText(was)) return p;
-          const keep = (was.text?.length ?? 0) > (p.text?.length ?? 0) ? was : p;
+          const longer = (was.text?.length ?? 0) > (p.text?.length ?? 0) ? was : p;
+          // The durable copy's type is authoritative; only its text lags.
+          // A type disagreement is a live copy created by deltas whose
+          // typed full write was lost in an event gap (reconnect): it
+          // rendered as answer text — keep the fresher text, take the
+          // server's type.
+          const keep =
+            longer.type === p.type ? longer : { ...longer, type: p.type };
           if (keep !== p) merged = true;
           return keep;
         });
