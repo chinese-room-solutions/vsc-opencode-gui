@@ -243,25 +243,27 @@
     "compile": "tsc -p ./ && node scripts/build-extension.js && tsc -p tsconfig.webview.json && node scripts/build-webview.js && npm run copy-templates",
     "compile:webview": "tsc -p tsconfig.webview.json && node scripts/build-webview.js && npm run copy-templates",
     "test:unit": "node scripts/build-unit-tests.js && mocha out/test-unit/tests.js",
+    "test:ui": "playwright test -c test/ui/playwright.config.mjs",
     "test": "npm run compile && npm run test:unit && node test/runTest.js",
     "publish": "npm run compile && vsce publish && ovsx publish",
     "watch": "node scripts/build-extension.js --watch"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@preact/signals": "^2.11.1",
     "@types/mocha": "^10.0.10",
     "@types/node": "^18.0.0",
     "@types/vscode": "^1.90.0",
     "@vscode/test-electron": "^3.1.0",
+    "dompurify": "^3.4.14",
     "esbuild": "^0.28.2",
+    "highlight.js": "^11.12.0",
+    "marked": "^18.0.11",
     "mocha": "^11.8.0",
     "preact": "^10.29.8",
     "typescript": "^5.0.0",
-    "vscode-textmate": "^9.3.2",
     "vscode-oniguruma": "^2.0.1",
-    "dompurify": "^3.4.14",
-    "marked": "^18.0.11",
-    "highlight.js": "^11.12.0"
+    "vscode-textmate": "^9.3.2"
   },
   "license": "MIT"
 }
