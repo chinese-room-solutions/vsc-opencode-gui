@@ -101,6 +101,9 @@ export function Session(props: { sessionId?: string; parent?: string }) {
     if (el) kept.current = el;
   };
   const stick = useRef(true);
+  // A sent prompt pinned to the top holds the follow there while its reply
+  // streams (scrollTop of the pin); undefined when not holding.
+  const pinHold = useRef<number | undefined>(undefined);
   // scrollTop of the previous scroll event (see pinned).
   const lastTop = useRef(0);
   // Where to put the reader once this session's content first renders —
@@ -148,7 +151,8 @@ export function Session(props: { sessionId?: string; parent?: string }) {
     const top = el.scrollTop;
     const rising = top < lastTop.current;
     lastTop.current = top;
-    if (stick.current && rising) {
+    const dist = el.scrollHeight - top - el.clientHeight;
+    if (stick.current && rising && dist >= 4) {
       // Leave-the-bottom intent — any input that scrolls up (wheel,
       // scrollbar drag, touch, keyboard). Latch the follow off at the first
       // rising event, or a delta landing mid-gesture snaps the reader back
@@ -157,21 +161,29 @@ export function Session(props: { sessionId?: string; parent?: string }) {
       stick.current = false;
       return;
     }
-    const dist = el.scrollHeight - top - el.clientHeight;
     // Disengaged, only the true bottom re-arms the follow: re-arming at the
     // 80px band re-armed inside the very gesture leaving it. A flick or
     // momentum carries to dist 0, so returning to the tail re-follows.
-    // Armed, only a rising scroll (above) disengages: a non-rising event
-    // past the band is the browser (scroll-anchoring after late layout
-    // growth below the fold), not the reader — the next follow pass
-    // re-bottoms.
+    // A rising event that lands at the bottom (dist < 4) is instead the
+    // browser clamping scrollTop after content above the viewport shrank —
+    // not intent: an armed follow holds, a disengaged one re-arms.
     if (!stick.current) stick.current = dist < 4;
   };
   // Wheel intent precedes its first scroll event by up to a frame; latch
   // here too, so a delta committing in that gap finds the follow already
-  // off.
+  // off. A trackpad flick down bottoms out with a rubber-band recoil whose
+  // negative deltas move nothing (elastic overscroll leaves scrollTop
+  // clamped): no rising scroll event ever confirms that intent, so give
+  // the scroll a beat and restore the follow if the bottom never moved.
   const wheel = (e: WheelEvent) => {
-    if (e.deltaY < 0) stick.current = false;
+    if (e.deltaY < 0) {
+      stick.current = false;
+      window.setTimeout(() => {
+        const el = scroller.current;
+        if (!el || stick.current) return;
+        if (el.scrollHeight - el.scrollTop - el.clientHeight < 4) stick.current = true;
+      }, 120);
+    }
   };
   // Leaving the session saves where the reader stopped, so coming back
   // resumes there. On unmount, not on scroll: programmatic moves (the
@@ -231,7 +243,10 @@ export function Session(props: { sessionId?: string; parent?: string }) {
       }
       return;
     }
-    if (!stick.current) return;
+    if (!stick.current) {
+      pinHold.current = undefined;
+      return;
+    }
     // A just-sent prompt pins itself to the panel's top right away —
     // pushing the previous exchange off — instead of riding up from the
     // bottom while the reply streams (Claude Code). Browser clamping keeps
@@ -250,16 +265,25 @@ export function Session(props: { sessionId?: string; parent?: string }) {
         : undefined;
     if (pill) {
       el.scrollTop += pill.getBoundingClientRect().top - el.getBoundingClientRect().top;
-      // stick.current = false alone holds the pinned view across the
-      // pending→real message swap: the bottom-follow branch below returns
-      // early while the follow is off, so the echo can't scroll the
-      // just-pushed-off turn straight back into view — the pushed message
-      // jumping out and in. Streaming re-arms the follow at the bottom
-      // (pinned) once the reply fills the viewport.
-      stick.current = false;
-    } else {
-      el.scrollTop = el.scrollHeight;
+      pinHold.current = el.scrollTop;
+      return;
     }
+    if (pinHold.current !== undefined) {
+      // The prompt pin holds the view while the reply streams under it,
+      // and releases exactly when the reply reaches the fold: before that
+      // everything is on screen and re-bottoming would scroll the
+      // just-pinned prompt back out of view (the pushed message jumping
+      // out and in); past it the reader is missing content. At the
+      // boundary the jump to the bottom is ~0px, so the handoff reads as
+      // the transcript starting to scroll, not a snap. A short reply never
+      // crosses it; the view keeps showing it whole, and the next prompt
+      // re-pins. No scroll event ever fires while content grows below a
+      // resting scrollTop, so the hold must release itself here — waiting
+      // on one loses the follow.
+      if (el.scrollHeight - el.scrollTop - el.clientHeight <= 0) return;
+      pinHold.current = undefined;
+    }
+    el.scrollTop = el.scrollHeight;
   }, [list]);
 
   // The floating bottom chrome covers the transcript's last stretch, so the
