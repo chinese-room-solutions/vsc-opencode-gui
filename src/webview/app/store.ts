@@ -1123,7 +1123,17 @@ function scheduleRing(sessionID: string): void {
 // transitions ring (a page loaded mid-turn stays silent), subagent
 // children never ring (the parent turn rings when it lands), and the
 // user-initiated retire paths bypass this on purpose.
+// The assistant row that was the transcript's tail when the session last
+// went idle — the live-marker sweep's anti-pulse guard: while the next
+// turn warms up (busy again, no assistant row past the new prompt yet),
+// the settled tail must not re-animate (dot, Thinking label, footer).
+const idleTails: Record<string, string> = {};
+
 function setIdle(sessionID: string): void {
+  const tail = [...(messagesBySession.value.get(sessionID) ?? [])]
+    .reverse()
+    .find((m) => m.info.role === "assistant")?.info.id;
+  if (tail) idleTails[sessionID] = tail;
   const prev = sessionStatus.value[sessionID]?.type ?? "idle";
   sessionStatus.value = {
     ...sessionStatus.value,
@@ -1142,6 +1152,30 @@ function setIdle(sessionID: string): void {
     unreadTabs.value = new Set(unreadTabs.value).add(sessionID);
   }
   scheduleRing(sessionID);
+}
+
+// The row whose live markers animate (the Thinking label, the footer): the
+// newest assistant row past the newest prompt. A prompt admitted mid-turn
+// (a steer) lands its user row while the turn still streams — treating it
+// as the boundary freezes the streaming row's "Thinking..." into "Thought"
+// until the turn's next row lands seconds later. While no assistant row
+// follows the newest prompt, the streaming turn's tail stays live instead,
+// unless that tail already settled through an idle: then the busy turn is
+// a newer one warming up and must not re-animate the old tail.
+export function liveAssistantId(
+  sessionID: string,
+  list: readonly ChatMessage[],
+): string | undefined {
+  let past: string | undefined;
+  let tail: string | undefined;
+  for (const m of list) {
+    if (m.info.role === "user") past = undefined;
+    else if (m.info.role === "assistant") {
+      past = m.info.id;
+      tail = m.info.id;
+    }
+  }
+  return past ?? (tail !== undefined && tail !== idleTails[sessionID] ? tail : undefined);
 }
 
 function upsertSession(info: Session): void {

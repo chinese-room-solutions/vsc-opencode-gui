@@ -38,6 +38,7 @@ import {
   isEmptySession,
   isSubagentSession,
   loadOlderMessages,
+  liveAssistantId,
   markPromptStopped,
   messagesBySession,
   messagesCursor,
@@ -403,6 +404,32 @@ describe("reconnect resync heals a mis-typed reasoning part", () => {
     const healed = findPart(sid, "p1");
     assert.equal(healed?.type, "reasoning");
     assert.equal((healed as { text?: string }).text, "leaked thought");
+  });
+});
+
+// A steer admitted mid-turn lands its user row while the turn still
+// streams; the live sweep must not treat it as the turn boundary (the
+// streaming row's Thinking label would freeze into "Thought" until the
+// turn's next row lands). A tail that settled through an idle is the next
+// turn warming up — it must not re-animate either.
+describe("liveAssistantId (mid-turn steer)", () => {
+  it("keeps the streaming tail live; an idle-settled tail stays settled", async () => {
+    const sid = "st1";
+    open(sid, [row("u1", "user", T0), row("a1", "assistant", T0 + 1)]);
+    setBusy(sid);
+    // The steer's echo lands while a1 still streams.
+    open(sid, [...listOf(sid), row("u2", "user", T0 + 2)]);
+    assert.equal(liveAssistantId(sid, listOf(sid)), "a1");
+    // The turn's next row takes live back.
+    open(sid, [...listOf(sid), row("a2", "assistant", T0 + 3)]);
+    assert.equal(liveAssistantId(sid, listOf(sid)), "a2");
+    // The turn ends; the next turn's warmup must not re-animate a2.
+    await sseFlush("session.idle", { sessionID: sid });
+    setBusy(sid);
+    open(sid, [...listOf(sid), row("u3", "user", T0 + 4)]);
+    assert.equal(liveAssistantId(sid, listOf(sid)), undefined);
+    open(sid, [...listOf(sid), row("a3", "assistant", T0 + 5)]);
+    assert.equal(liveAssistantId(sid, listOf(sid)), "a3");
   });
 });
 

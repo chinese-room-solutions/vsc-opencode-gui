@@ -22,7 +22,7 @@ import {
   messagesFor,
   popover,
   hasQueued,
-  queuedTurns,
+  liveAssistantId,
   refreshMessages,
   refreshPermissions,
   refreshQuestions,
@@ -312,23 +312,8 @@ export function Session(props: { sessionId?: string; parent?: string }) {
     !m.info.error &&
     !m.parts.some((p) => isTool(p) || (isText(p) && p.text)) &&
     !m.info.tokens?.total;
-  const liveId = (() => {
-    if (!busy || !list) return undefined;
-    // A queued steer holds until the running turn reaches a boundary: it
-    // must not blind the turn's live markers (Thinking..., the footer).
-    const queued =
-      id !== undefined &&
-      queuedTurns.value.some((q) => q.id === id && q.kind === "prompt");
-    // Newest assistant row past the newest prompt: each prompt resets the
-    // candidate, each assistant row takes it.
-    let live: string | undefined;
-    for (const m of list) {
-      if (m.info.role === "user") {
-        if (!queued) live = undefined;
-      } else if (m.info.role === "assistant") live = m.info.id;
-    }
-    return live;
-  })();
+  const liveId =
+    id && busy && list ? liveAssistantId(id, list) : undefined;
   // The abort receipt: the server answers a stopped turn with an
   // error-only assistant row ("Aborted"). The stop marker tells that
   // story in the user's words — the receipt would add a red line and
