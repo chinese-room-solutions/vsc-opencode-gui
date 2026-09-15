@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/ho
 import type { ComponentChildren } from "preact";
 import type { ChatMessage } from "../store";
 import {
+  charsPerToken,
   fmtDur,
   insertComposerText,
   modelLabel,
@@ -10,7 +11,7 @@ import {
   revertSession,
   sessionStatus,
 } from "../store";
-import { isText, isTool, type FilePart, type Part, type TextPart, type ToolPart } from "../api";
+import { isText, isTool, tokensTotal, type FilePart, type Part, type TextPart, type ToolPart } from "../api";
 import { enhanceBlockquotes, enhanceCodeBlocks, enhanceInlineCode, renderMarkdown, tagFileRefs } from "../markdown";
 import { openFile } from "../host";
 import {
@@ -872,8 +873,8 @@ export const MessageView = memo(
 // Quiet row under a turn — copy the turn's text, then agent · model · wall
 // time · generated tokens · tok/s. The counter runs while the turn
 // streams: usage only exists at step boundaries, so until then the
-// streamed text is the count (≈5 chars/token on this endpoint), sampled
-// once a second and snapping to the real total when the turn ends.
+// streamed text is the count (chars ÷ the learned chars/token ratio),
+// sampled once a second and snapping to the real total when the turn ends.
 function TurnFooterImpl(props: { msgs: ChatMessage[]; live?: boolean }) {
   const text = props.msgs
     .filter((m) => m.info.role === "assistant")
@@ -900,65 +901,86 @@ function TurnFooterImpl(props: { msgs: ChatMessage[]; live?: boolean }) {
   const end = props.msgs[props.msgs.length - 1]?.info.time.completed;
   const live = props.live && !end;
   // What the turn generated: server-reported output + reasoning, plus the
-  // tail still streaming unreported (≈5 chars/token). The endpoint counts
-  // usage only at step boundaries, and a multi-step message carries tokens
-  // from its FIRST boundary on — without the reportedChars stamp the tail
-  // would die with step 1 and the counter (and its rate) stand still for
-  // the rest of the turn. A v1 row's usage lands via message.updated with
-  // no stamp; nothing past it can be estimated — skip like a counted row.
+  // tail still streaming unreported (chars ÷ the learned ratio). The
+  // endpoint counts usage only at step boundaries, and a multi-step
+  // message carries tokens from its FIRST boundary on — without the
+  // reportedChars stamp the tail would die with step 1 and the counter
+  // (and its rate) stand still for the rest of the turn. A v1 row's usage
+  // lands via message.updated with no stamp; nothing past it can be
+  // estimated — skip like a counted row.
   const real = props.msgs.reduce((n, m) => {
     if (m.info.role !== "assistant" || !m.info.tokens) return n;
     const t = m.info.tokens;
     return n + (t.output ?? 0) + (t.reasoning ?? 0);
   }, 0);
+  // textChars: every text/reasoning char the turn streamed — the rate's
+  // source. Boundary usage reports never touch it (their jumps are mostly
+  // tool-call tokens, which are not a pace), so it grows as one smooth ramp
+  // calibratable to tokens via the learned ratio.
+  let textChars = 0;
   const tail = props.msgs.reduce((n, m) => {
     if (m.info.role !== "assistant") return n;
-    if (m.info.tokens && m.info.reportedChars === undefined) return n;
     const chars = m.parts.reduce(
       (k, p) => k + (isText(p) ? p.text?.length ?? 0 : 0),
       0,
     );
+    textChars += chars;
+    // Zeroed tokens are an announcement, not a measurement — a truthy
+    // object would kill the estimate and hide the count for the whole
+    // stream (seen on real turns: count absent until the first usage).
+    if (tokensTotal(m.info.tokens) && m.info.reportedChars === undefined)
+      return n;
     return n + Math.max(0, chars - (m.info.reportedChars ?? 0));
   }, 0);
-  const gen = real + Math.round(tail / 5);
-  // The running turn samples once a second. The rate is a 30s sliding
-  // window over arrivals (count deltas): the endpoint delivers text in
-  // bursts seconds apart with real silences between, so a shorter window
-  // empties mid-generation and the number blinks between burst pace and
-  // zero. Thirty seconds bridges the gaps and bills bursts across the
-  // span they spread over. While nothing arrives (thinking, tool phases)
-  // the old bursts slide out of the window and the rate would decay a
-  // notch every second even though the model is emitting nothing — so the
-  // last computed pace is held instead, and only new arrivals recompute
-  // it. Settled turns read the end-stamped totals and stand still.
+  const gen = real + Math.round(tail / charsPerToken());
+  // The running turn samples once a second. The rate is a 12s sliding
+  // window over the char ramp (text + reasoning), scaled by the learned
+  // ratio at read time: usage reports land as jumps (tool-call tokens,
+  // estimate corrections) and would spike or dip the window; the ramp
+  // measures only what actually streamed. The window opens at the first
+  // movement — prefill emits nothing and anchoring at the row's birth
+  // bills those seconds against generation. While nothing arrives
+  // (thinking, tool phases) the last computed pace is held — and each
+  // step boundary restarts this effect, so the pace carries across in a
+  // ref instead of blanking until the next step's first tokens.
   const [snap, setSnap] = useState<{
     gen: number;
     rate: number;
     now: number;
   }>();
-  const state = useRef({ live, gen });
-  state.current = { live, gen };
-  const ring = useRef<{ t: number; g: number }[]>([]);
+  const state = useRef({ live, gen, chars: textChars });
+  state.current = { live, gen, chars: textChars };
+  const ring = useRef<{ t: number; c: number }[]>([]);
+  const lastRate = useRef(0);
   useEffect(() => {
     if (!live) return;
-    ring.current = [{ t: Date.now(), g: state.current.gen }];
-    let prevG = state.current.gen;
-    let shown = 0;
+    ring.current = [{ t: Date.now(), c: state.current.chars }];
+    let prevC = state.current.chars;
+    let shown = lastRate.current;
     const sample = () => {
       const now = Date.now();
-      const g = state.current.gen;
-      ring.current.push({ t: now, g });
-      while (ring.current.length > 2 && ring.current[1].t <= now - 30_000)
+      const c = state.current.chars;
+      // Flat start: slide the anchor so the window opens at the first
+      // movement, not at the turn's birth.
+      if (ring.current.length === 1 && ring.current[0].c === c)
+        ring.current[0] = { t: now, c };
+      ring.current.push({ t: now, c });
+      while (ring.current.length > 2 && ring.current[1].t <= now - 12_000)
         ring.current.shift();
       const first = ring.current[0];
       const span = now - first.t;
-      if (g !== prevG) {
-        prevG = g;
+      if (c !== prevC) {
+        prevC = c;
         const rate =
-          span >= 1000 ? Math.max(0, (g - first.g) / (span / 1000)) : 0;
-        if (rate > 0) shown = rate;
+          span >= 1000 && c > first.c
+            ? (c - first.c) / (span / 1000) / charsPerToken()
+            : 0;
+        if (rate > 0) {
+          shown = rate;
+          lastRate.current = rate;
+        }
       }
-      setSnap({ gen: g, rate: shown, now });
+      setSnap({ gen: state.current.gen, rate: shown, now });
     };
     sample();
     const iv = window.setInterval(sample, 1000);
@@ -977,12 +999,15 @@ function TurnFooterImpl(props: { msgs: ChatMessage[]; live?: boolean }) {
   // tok/s runs from the first token, not the prompt: queue and prefill
   // are not generation, and the parts carry that moment (reasoning/text
   // start stamps; durable reasoning rows get it from the server). Live,
-  // the sliding-window rate above; settled, the end-stamped span minus
-  // tool intervals. The wall `secs` beside it stays the whole turn.
+  // the sliding-window rate above; settled, the streamed chars over the
+  // same span minus tool intervals — the count totals every token, the
+  // rate stays a generation pace. The wall `secs` beside it is the whole
+  // turn.
   const from = firstToken ?? start;
   const settledRate =
-    !live && shownGen > 0 && from
-      ? shownGen /
+    !live && textChars > 0 && from
+      ? textChars /
+        charsPerToken() /
         Math.max(
           1,
           Math.max(0, now - from - toolBusyMs(props.msgs, now)) / 1000,

@@ -18,6 +18,7 @@ import {
 } from "./setup.test";
 import {
   baseLoaded,
+  charsPerToken,
   closeSessionTab,
   commands,
   composerFiles,
@@ -1256,6 +1257,83 @@ describe("turn projection from stream events", () => {
     const a1 = findRow(sid, "a1");
     assert.equal(a1?.info.tokens?.input, 5);
     assert.equal(a1?.info.cost, 0.25);
+  });
+
+  it("v1 step-finish accumulates, stamps the boundary, and calibrates the ratio", async () => {
+    const sid = "sfcal";
+    open(sid, [row("a1", "assistant", T0)]);
+    setBusy(sid);
+    await sseFlush("message.part.delta", {
+      sessionID: sid,
+      messageID: "a1",
+      partID: "p1",
+      delta: "0123456789",
+    });
+    await sseFlush("message.part.updated", {
+      sessionID: sid,
+      timestamp: T0,
+      part: {
+        id: "sf1",
+        messageID: "a1",
+        sessionID: sid,
+        type: "step-finish",
+        tokens: tok({ input: 5, output: 12, reasoning: 8 }),
+        cost: 0.25,
+      },
+    });
+    let a1 = findRow(sid, "a1");
+    assert.equal(a1?.info.tokens?.output, 12);
+    assert.equal(a1?.info.tokens?.reasoning, 8);
+    assert.equal(a1?.info.reportedChars, 10);
+    // The row keeps streaming past the boundary; a second step adds on.
+    await sseFlush("message.part.delta", {
+      sessionID: sid,
+      messageID: "a1",
+      partID: "p1",
+      delta: "abc",
+    });
+    await sseFlush("message.part.updated", {
+      sessionID: sid,
+      timestamp: T0 + 1,
+      part: {
+        id: "sf2",
+        messageID: "a1",
+        sessionID: sid,
+        type: "step-finish",
+        tokens: tok({ output: 6, reasoning: 2 }),
+      },
+    });
+    a1 = findRow(sid, "a1");
+    assert.equal(a1?.info.tokens?.output, 18);
+    assert.equal(a1?.info.tokens?.reasoning, 10);
+    assert.equal(a1?.info.reportedChars, 13);
+    // The streamed-chars/usage pairs feed the tail estimator's ratio: one
+    // dominant pair (1M chars / 100M tokens → 0.01) pins it regardless of
+    // whatever earlier tests contributed.
+    await sseFlush("message.part.delta", {
+      sessionID: sid,
+      messageID: "a1",
+      partID: "p2",
+      delta: "x".repeat(500_000),
+    });
+    await sseFlush("message.part.delta", {
+      sessionID: sid,
+      messageID: "a1",
+      partID: "p2",
+      delta: "x".repeat(500_000),
+    });
+    await sseFlush("message.part.updated", {
+      sessionID: sid,
+      timestamp: T0 + 2,
+      part: {
+        id: "sf3",
+        messageID: "a1",
+        sessionID: sid,
+        type: "step-finish",
+        tokens: tok({ output: 100_000_000 }),
+      },
+    });
+    assert.ok(Math.abs(charsPerToken() - 0.01) < 1e-3);
   });
 
   it("compaction steps never touch the ring numbers", async () => {

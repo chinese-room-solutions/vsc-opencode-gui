@@ -109,9 +109,7 @@ function later(fn, ms) {
   }, ms);
   timers.add(t);
   return t;
-}
-
-// Grow a text part over the v1 stream (message.part.delta), then call onDone.
+}// Grow a text part over the v1 stream (message.part.delta), then call onDone.
 function streamText(sid, messageID, partID, { first = 100, count, chars, interval = 150, onChunk, onDone }) {
   streamCount++;
   let s = Math.floor(Math.random() * SENTENCES.length);
@@ -167,6 +165,120 @@ function runPrompt(sid) {
         part: { id: pt, messageID: a, sessionID: sid, type: "text", text: full.join("") },
       }), 150);
     },
+  });
+}
+
+// Multi-step scenario for the live token-rate counter: a turn that streams
+// text, hits a step boundary with a large usage report (the tool-call burst),
+// waits on a tool, streams again, then sits through a tool-only step (a new
+// assistant row with no text for seconds) before settling. All offsets are
+// absolute ms from the POST; /session/status serves busy until the final idle.
+let stepsActive = false;
+// Rows and parts the scenario has emitted, in the v2 page shape. The app
+// re-pulls the message page while the session reads busy (the 30s busy
+// refresh); a static page would wipe every live row and later events would
+// re-dock them without their prompt.
+let stepsRows = [];
+function trackInfo(info) {
+  let r = stepsRows.find((x) => x.id === info.id);
+  if (!r) {
+    r = { id: info.id, type: info.role, time: info.time, content: [] };
+    stepsRows.push(r);
+  }
+  if (info.time) r.time = info.time;
+  if (info.agent) r.agent = info.agent;
+  if (info.modelID) r.model = { id: info.modelID, providerID: info.providerID };
+}
+function trackPart(p) {
+  if (!p || p.type === "step-finish" || p.type === "step-start") return;
+  const r = stepsRows.find((x) => x.id === p.messageID);
+  if (!r) return;
+  const c = { ...p, id: p.id };
+  delete c.messageID;
+  delete c.sessionID;
+  if (c.type === "tool" && c.tool) c.name = c.tool;
+  const i = r.content.findIndex((q) => q.id === p.id);
+  if (i >= 0) r.content[i] = c;
+  else r.content.push(c);
+}
+function trackText(messageID, partID, delta) {
+  const r = stepsRows.find((x) => x.id === messageID);
+  const c = r?.content.find((q) => q.id === partID);
+  if (c) c.text = (c.text ?? "") + delta;
+}
+function runSteps(sid) {
+  stepsActive = true;
+  stepsRows = [];
+  const n = nextTurn++;
+  const t = Date.now();
+  const u = `msg_u${n}`;
+  const A = `msg_aA${n}`;
+  const B = `msg_aB${n}`;
+  const C = `msg_aC${n}`;
+  const p1 = `pt_s1${n}`;
+  const p2 = `pt_s2${n}`;
+  const p3 = `pt_s3${n}`;
+  const T1 = `pt_sT1${n}`;
+  const T2 = `pt_sT2${n}`;
+  const T3 = `pt_sT3${n}`;
+  const D = `msg_aD${n}`;
+  const now = () => Date.now();
+  // Timestamps must be taken when the event fires, not when it is
+  // scheduled — an eagerly-built info lands every stamp at scenario start
+  // and the app reads nonsense orderings.
+  const at = (ms, fn) => later(fn, ms);
+  const msg = (ms, info) =>
+    at(ms, () => { const i = typeof info === "function" ? info() : info; emitV1("message.updated", { sessionID: sid, info: i }); trackInfo(i); });
+  const part = (ms, p) =>
+    at(ms, () => { const q = typeof p === "function" ? p() : p; emitV1("message.part.updated", { sessionID: sid, part: q }); trackPart(q); });
+
+  msg(150, { id: u, role: "user", time: { created: t } });
+  msg(300, { id: A, role: "assistant", time: { created: t + 250 }, providerID: "fake", modelID: "fake-model", agent: "build" });
+  part(400, { id: p1, messageID: A, sessionID: sid, type: "text", text: "" });
+
+  // Phase 1: steady text, 40 deltas x ~170 chars every 150ms (0.5s-6.4s).
+  const f1 = [];
+  streamText(sid, A, p1, { first: 500, count: 40, chars: 170, interval: 150, onChunk: (d) => { f1.push(d); trackText(A, p1, d); } });
+
+  // Burst: the step emits a tool call (the part exists before the step
+  // finishes, as on the real server), usage far past the streamed chars
+  // (the call's tokens), then the step completes and the tool runs 3s.
+  part(6300, () => ({ id: T1, messageID: A, sessionID: sid, type: "tool", tool: "bash", state: { status: "pending", input: { command: "npm test" }, time: { start: Date.now() } } }));
+  part(6550, { id: "sf_s1", messageID: A, sessionID: sid, type: "step-finish", tokens: { input: 200, output: 4000, reasoning: 300, cache: { read: 0, write: 0 } } });
+  msg(6650, () => ({ id: A, role: "assistant", time: { created: t + 250, completed: Date.now() }, providerID: "fake", modelID: "fake-model", agent: "build" }));
+  part(6750, () => ({ id: T1, messageID: A, sessionID: sid, type: "tool", tool: "bash", state: { status: "running", input: { command: "npm test" }, time: { start: Date.now() } } }));
+  part(9550, () => ({ id: T1, messageID: A, sessionID: sid, type: "tool", tool: "bash", state: { status: "completed", input: { command: "npm test" }, output: "ok", time: { start: Date.now() - 2800, end: Date.now() } } }));
+
+  // Phase 2: new step streams text again (10.05s-15.95s), then its own
+  // small usage + a second tool wait.
+  msg(9750, () => ({ id: B, role: "assistant", time: { created: Date.now() }, providerID: "fake", modelID: "fake-model", agent: "build" }));
+  part(9850, { id: p2, messageID: B, sessionID: sid, type: "text", text: "" });
+  const f2 = [];
+  streamText(sid, B, p2, { first: 10050, count: 40, chars: 170, interval: 150, onChunk: (d) => { f2.push(d); trackText(B, p2, d); } });
+  part(15800, () => ({ id: T2, messageID: B, sessionID: sid, type: "tool", tool: "read", state: { status: "pending", input: { filePath: "README.md" }, time: { start: Date.now() } } }));
+  part(16100, { id: "sf_s2", messageID: B, sessionID: sid, type: "step-finish", tokens: { input: 100, output: 350, reasoning: 50, cache: { read: 0, write: 0 } } });
+  msg(16200, () => ({ id: B, role: "assistant", time: { created: Date.now() - 6450, completed: Date.now() }, providerID: "fake", modelID: "fake-model", agent: "build" }));
+  part(16300, () => ({ id: T2, messageID: B, sessionID: sid, type: "tool", tool: "read", state: { status: "running", input: { filePath: "README.md" }, time: { start: Date.now() } } }));
+  part(18800, () => ({ id: T2, messageID: B, sessionID: sid, type: "tool", tool: "read", state: { status: "completed", input: { filePath: "README.md" }, output: "# vsc-opencode-gui", time: { start: Date.now() - 2500, end: Date.now() } } }));
+
+  // Phase 3: tool-only step — the row carries just a running tool for 2.5s
+  // before its text starts (the textless tool-call step of an agentic turn).
+  msg(19000, () => ({ id: C, role: "assistant", time: { created: Date.now() }, providerID: "fake", modelID: "fake-model", agent: "build" }));
+  part(19100, () => ({ id: T3, messageID: C, sessionID: sid, type: "tool", tool: "grep", state: { status: "running", input: { pattern: "tok" }, time: { start: Date.now() } } }));
+  part(20900, () => ({ id: T3, messageID: C, sessionID: sid, type: "tool", tool: "grep", state: { status: "completed", input: { pattern: "tok" }, output: "src/main.ts:41", time: { start: Date.now() - 1800, end: Date.now() } } }));
+  part(21450, { id: "sf_s3", messageID: C, sessionID: sid, type: "step-finish", tokens: { input: 80, output: 200, reasoning: 40, cache: { read: 0, write: 0 } } });
+  msg(21550, () => ({ id: C, role: "assistant", time: { created: Date.now() - 2550, completed: Date.now() }, providerID: "fake", modelID: "fake-model", agent: "build" }));
+  msg(21800, () => ({ id: D, role: "assistant", time: { created: Date.now() }, providerID: "fake", modelID: "fake-model", agent: "build" }));
+  part(21900, { id: p3, messageID: D, sessionID: sid, type: "text", text: "" });
+  const f3 = [];
+  streamText(sid, D, p3, { first: 22500, count: 20, chars: 170, interval: 150, onChunk: (d) => { f3.push(d); trackText(D, p3, d); } });
+
+  // Settle: small usage, completion, idle.
+  part(25600, { id: "sf_s4", messageID: D, sessionID: sid, type: "step-finish", tokens: { input: 60, output: 180, reasoning: 30, cache: { read: 0, write: 0 } } });
+  msg(25700, () => ({ id: D, role: "assistant", time: { created: Date.now() - 3900, completed: Date.now() }, providerID: "fake", modelID: "fake-model", agent: "build" }));
+  at(25850, () => {
+    emitV1("session.idle", { sessionID: sid });
+    stepsActive = false;
   });
 }
 
@@ -226,6 +338,15 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, { streaming: streamCount > 0 });
       return;
     }
+    if (method === "POST" && path === "/__control/steps") {
+      if (streamCount > 0 || stepsActive) {
+        json(res, 409, { error: "scenario in flight" });
+        return;
+      }
+      runSteps(SESSION_ID);
+      json(res, 200, { ok: true });
+      return;
+    }
     if (method === "POST" && path === "/__control/stream-more") {
       const body = await readBody(req);
       if (streamCount > 0) {
@@ -270,7 +391,7 @@ const server = http.createServer(async (req, res) => {
 
   // boot / reads
   if (method === "GET") {
-    if (path === "/session/status") { json(res, 200, { [SESSION_ID]: { type: "idle" } }); return; }
+    if (path === "/session/status") { json(res, 200, { [SESSION_ID]: { type: stepsActive ? "busy" : "idle" } }); return; }
     if (path === "/api/session") { json(res, 200, { data: [sessionRow], cursor: {} }); return; }
     if (path === "/provider") {
       json(res, 200, {
@@ -298,7 +419,7 @@ const server = http.createServer(async (req, res) => {
     let m;
     if ((m = path.match(/^\/api\/session\/([^/]+)\/message$/))) {
       // v2 page: {data}, newest first; short page proves the transcript complete.
-      json(res, 200, { data: [...seedRows].sort((a, b) => b.time.created - a.time.created), cursor: {} });
+      json(res, 200, { data: [...seedRows, ...stepsRows].sort((a, b) => b.time.created - a.time.created), cursor: {} });
       return;
     }
     if ((m = path.match(/^\/api\/session\/([^/]+)\/(permission|question)$/))) {

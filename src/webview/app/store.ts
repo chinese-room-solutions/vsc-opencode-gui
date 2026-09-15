@@ -315,6 +315,23 @@ export const stepUsage = signal<
   Record<string, { timestamp: number; tokens: MessageTokens }>
 >({});
 
+// Chars-per-token learned from boundary feedback: whenever a step's usage
+// lands, the chars streamed since the previous boundary measure the
+// endpoint's true ratio (GLM measures ~4.3-4.7, not the 5 the tail
+// estimate assumed — a fixed 5 reads the live rate ~13% low). Lifetime
+// sums: no tuning, and a single row already lands within a few percent.
+let calibChars = 0;
+let calibTokens = 0;
+function calibrateTokens(chars: number, tokens: number): void {
+  if (chars > 0 && tokens > 0) {
+    calibChars += chars;
+    calibTokens += tokens;
+  }
+}
+export function charsPerToken(): number {
+  return calibTokens > 0 ? calibChars / calibTokens : 5;
+}
+
 // Compact duration for the live counters: 95 → "1m35s", 104552 → "1d5h2m32s".
 export function fmtDur(secs: number): string {
   if (secs < 60) return `${secs}s`;
@@ -1525,6 +1542,9 @@ function applyEvent(event: ServerEvent): void {
       // Only known fields ride along: absent tokens/cost must not clobber
       // what a step-finish already patched onto the row — and a zeroed
       // announcement must not land either (tokensTotal).
+      const prevRow = raw.role === "assistant"
+        ? messagesBySession.value.get(sid)?.find((m) => m.info.id === raw.id)
+        : undefined;
       upsertMessage(sid, {
         id: raw.id,
         role: raw.role,
@@ -1540,6 +1560,24 @@ function applyEvent(event: ServerEvent): void {
         ...(tokensTotal(raw.tokens) ? { tokens: raw.tokens } : {}),
         ...(raw.error ? { error: raw.error } : {}),
       });
+      // A v1 row's first usage often arrives here, not via step-finish —
+      // without a chars stamp the tail estimate dies and the counter
+      // freezes at that number for the rest of the stream (measured on a
+      // real GLM turn: "85" held for 40s, then jumped to the true total).
+      // Stamp like step-finish does; tool-carrying rows skip calibration
+      // for the same reason.
+      if (raw.role === "assistant" && tokensTotal(raw.tokens) && prevRow && !prevRow.info.tokens) {
+        const chars = prevRow.parts.reduce(
+          (k, p) => k + (isText(p) ? p.text?.length ?? 0 : 0),
+          0,
+        );
+        if (!prevRow.parts.some((p) => isTool(p)))
+          calibrateTokens(
+            chars,
+            (raw.tokens?.output ?? 0) + (raw.tokens?.reasoning ?? 0),
+          );
+        patchMessage(sid, raw.id, (info) => ({ ...info, reportedChars: chars }));
+      }
       if (seed) {
         upsertPart(sid, {
           id: `${raw.id}:text`,
@@ -1565,18 +1603,47 @@ function applyEvent(event: ServerEvent): void {
         // Zeroed usage is a step announcement, not a measurement — taking
         // it would pin the ring at 0 until the next real step-finish.
         if (!tokens || !tokensTotal(tokens)) break;
-        const agent = messagesBySession.value
+        const row = messagesBySession.value
           .get(sid)
-          ?.find((m) => m.info.id === part.messageID)?.info.agent;
-        if (agent !== "compaction") {
+          ?.find((m) => m.info.id === part.messageID);
+        if (row?.info.agent !== "compaction") {
           stepUsage.value = {
             ...stepUsage.value,
             [sid]: { timestamp: data.timestamp ?? Date.now(), tokens },
           };
+          // The step's usage is a delta and the row keeps streaming past
+          // the boundary: accumulate (not replace) and stamp the chars the
+          // usage covers, so the tail estimate and the rate counter keep
+          // running for the rest of the row — and the chars/tokens pair
+          // feeds the tail estimator's calibration.
+          const chars = row
+            ? row.parts.reduce(
+                (k, p) => k + (isText(p) ? p.text?.length ?? 0 : 0),
+                0,
+              )
+            : 0;
+          const fresh = Math.max(0, chars - (row?.info.reportedChars ?? 0));
+          // A step that emitted a tool call bills the call's tokens against
+          // almost no chars — the pair would skew the text ratio the tail
+          // estimate and the live rate ride. Only tool-free rows calibrate.
+          if (row && !row.parts.some((p) => isTool(p)))
+            calibrateTokens(
+              fresh,
+              (tokens.output ?? 0) + (tokens.reasoning ?? 0),
+            );
           patchMessage(sid, part.messageID, (info) => ({
             ...info,
             ...(cost !== undefined ? { cost: (info.cost ?? 0) + cost } : {}),
-            tokens,
+            tokens: {
+              input: (info.tokens?.input ?? 0) + (tokens.input ?? 0),
+              output: (info.tokens?.output ?? 0) + (tokens.output ?? 0),
+              reasoning: (info.tokens?.reasoning ?? 0) + (tokens.reasoning ?? 0),
+              cache: {
+                read: (info.tokens?.cache?.read ?? 0) + (tokens.cache?.read ?? 0),
+                write: (info.tokens?.cache?.write ?? 0) + (tokens.cache?.write ?? 0),
+              },
+            },
+            reportedChars: chars,
           }));
         }
         break;
@@ -1762,6 +1829,11 @@ function applyEvent(event: ServerEvent): void {
               0,
             )
           : 0;
+        if (data.tokens && tokensTotal(data.tokens))
+          calibrateTokens(
+            Math.max(0, chars - (row?.info.reportedChars ?? 0)),
+            (data.tokens.output ?? 0) + (data.tokens.reasoning ?? 0),
+          );
         patchMessage(sid, data.assistantMessageID, (info) => {
           const t = info.tokens;
           const d = data.tokens;
