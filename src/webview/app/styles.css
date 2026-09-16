@@ -799,13 +799,23 @@ body {
   color: var(--oc-text-2);
 }
 .crumb-here {
+  max-width: 80ch;
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
   color: var(--oc-text);
   font-weight: 600;
   white-space: nowrap;
 }
 
+/* Rename rides the head's free width, capped past the crumb's cap — long
+   titles cut with an ellipsis like everywhere else (an input clips hard). */
 .head-rename {
   flex: 1;
+  max-width: 80ch;
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
 }
 
 /* "…" overflow (rename / delete) at the head's right, past the ring. */
@@ -2654,14 +2664,15 @@ a.tool-pill {
 /* Sub-agent chip (the task tool): the spawned session is the detail view,
    so the tool renders as a link-shaped pill — status dot, agent name, task
    description — and falls through to that session on click. Surface stays
-   plain input.background; the link reads through the hover. Chips share the
-   part column's width so a run of them reads as one set; the description
-   ellipsizes whatever doesn't fit. */
+   plain input.background; the link reads through the hover. One constant
+   width — a notch past a short chip's natural size, capped by the column —
+   so every chip reads as the same control; the description ellipsizes
+   whatever doesn't fit and the slack rides it. */
 .subagent-chip {
   display: flex;
   align-items: center;
   gap: 9px;
-  width: 100%;
+  width: min(100%, 38ch);
   margin: 10px 0;
   padding: 7px 14px;
   border-radius: 6px;
@@ -2740,6 +2751,7 @@ a.tool-pill {
 }
 
 .subagent-desc {
+  flex: 1;
   overflow: hidden;
   min-width: 0;
   color: var(--oc-text-2);
