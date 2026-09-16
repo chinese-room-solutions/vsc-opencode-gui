@@ -23,8 +23,10 @@ import {
   newSession,
   normPath,
   projects,
+  projectDisplayName,
   purgeProject,
   purgeState,
+  renameProject,
   renameSession,
    sessionTile,
    sessionTitle,
@@ -93,7 +95,7 @@ export function Home() {
   // the twins with their parent folder, in the row and the dialog.
   const nameCounts = new Map<string, number>();
   for (const d of dirList) {
-    const b = baseName(d);
+    const b = projectDisplayName(d);
     nameCounts.set(b, (nameCounts.get(b) ?? 0) + 1);
   }
   const disambig = (d: string) =>
@@ -114,7 +116,9 @@ export function Home() {
       (s) =>
         !q ||
         (s.title || "").toLowerCase().includes(q) ||
-        baseName(s.location?.directory ?? "").toLowerCase().includes(q),
+        projectDisplayName(
+          s.location?.directory ?? "",
+        ).toLowerCase().includes(q),
     );
   const groups: { label: string; rows: Session[] }[] = [];
   for (const s of rows) {
@@ -176,7 +180,7 @@ export function Home() {
               {q
                 ? `No sessions match “${query.trim()}”.`
                 : filter
-                  ? `No sessions in ${baseName(filter)} yet.`
+                  ? `No sessions in ${projectDisplayName(filter)} yet.`
                   : "No sessions yet. Start one above — it shows up under this folder."}
             </div>
           ) : (
@@ -217,44 +221,72 @@ function ProjectRow(props: {
 }) {
   const isCurrent = currentDir.value === props.dir;
   const [confirming, setConfirming] = useState(false);
-  const color = projects.value.find(
+  const [editing, setEditing] = useState(false);
+  const row = projects.value.find(
     (p) => normPath(p.worktree) === props.dir,
-  )?.icon?.color;
-  const tile = tileFor(props.dir, color);
+  );
+  const name = row?.name || baseName(props.dir);
+  const tile = tileFor(props.dir, row?.icon?.color);
   const purge = purgeState.value;
+  const commitRename = (title: string) => {
+    setEditing(false);
+    if (title && title !== name) void renameProject(props.dir, title);
+  };
 
   return (
     <div class={props.selected ? "proj-row selected" : "proj-row"}>
-      <button class="proj-open" title={props.dir} onClick={props.onSelect}>
-        <span class="tile" style={{ background: tile.color }}>
-          {tile.letter}
-        </span>
-        <span class="name">
-          {baseName(props.dir)}
-          {props.disambig && <span class="name-dim"> · {props.disambig}</span>}
-        </span>
-        {isCurrent && <span class="proj-here" title="This window" />}
-      </button>
-      {purge?.dir === props.dir ? (
-        <span class="purge-note">
-          deleting {purge.done}/{purge.total}…
-        </span>
+      {editing ? (
+        <RenameInput
+          class="rename-input"
+          title={name}
+          onCommit={commitRename}
+          onCancel={() => setEditing(false)}
+        />
       ) : (
-        <span class="row-acts">
-          <button
-            class="row-act iconic"
-            title="Delete project"
-            onClick={() => setConfirming(true)}
-          >
-            <TrashIcon />
+        <>
+          <button class="proj-open" title={props.dir} onClick={props.onSelect}>
+            <span class="tile" style={{ background: tile.color }}>
+              {tile.letter}
+            </span>
+            <span class="name">
+              {name}
+              {props.disambig && <span class="name-dim"> · {props.disambig}</span>}
+            </span>
+            {isCurrent && <span class="proj-here" title="This window" />}
           </button>
-        </span>
+          {purge?.dir === props.dir ? (
+            <span class="purge-note">
+              deleting {purge.done}/{purge.total}…
+            </span>
+          ) : (
+            <span class="row-acts">
+              {/* Rename needs a project row to PATCH; session-only dirs
+                  (a folder the server never booted in) have none. */}
+              {row && (
+                <button
+                  class="row-act iconic"
+                  title="Rename project"
+                  onClick={() => setEditing(true)}
+                >
+                  <PencilIcon />
+                </button>
+              )}
+              <button
+                class="row-act iconic"
+                title="Delete project"
+                onClick={() => setConfirming(true)}
+              >
+                <TrashIcon />
+              </button>
+            </span>
+          )}
+        </>
       )}
       {confirming && (
         <div class="confirm-backdrop" onClick={() => setConfirming(false)}>
           <div class="confirm" role="dialog" onClick={(e) => e.stopPropagation()}>
             <div class="confirm-text">
-              Delete project “{baseName(props.dir)}
+              Delete project “{name}
               {props.disambig ? ` · ${props.disambig}` : ""}” and its{" "}
               {props.count} session{props.count === 1 ? "" : "s"}? The sessions
               cannot be recovered.
@@ -325,7 +357,9 @@ function SessionRow(props: { s: Session }) {
               <span class="sess-title">{sessionTitle(s, s.id)}</span>
               {/* Filtered to one project, every row is that project — the
                   label is pure noise then. */}
-              {!homeFilter.value && <span class="sess-proj">{baseName(dir)}</span>}
+              {!homeFilter.value && (
+                <span class="sess-proj">{projectDisplayName(dir)}</span>
+              )}
             </span>
             {st?.type === "busy" && <span class="spin" title="Running" />}
           </button>

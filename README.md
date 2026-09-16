@@ -22,7 +22,8 @@ HTTP/SSE.
   sidebar view and session tabs; `Ctrl/Cmd+F` searches the visible transcript
   (VS Code's find widget — loaded rows and expanded thoughts).
 - **Projects × sessions home** — every session of every project on one screen;
-  clicking a session from another folder opens it there, deep-linked.
+  projects can be renamed in place; clicking a session from another folder
+  opens it there, deep-linked.
 - **Sub-agents are sessions** — open a child from its chip, steer it mid-run,
   stop it alone while the parent's turn continues.
 - **Notifications, visual and sound** — a tab pulses yellow while its

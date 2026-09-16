@@ -27,6 +27,7 @@ import {
   normalizeSession,
   promptSession,
   rejectQuestion,
+  renameProject as renameProjectApi,
   renameSession as renameSessionApi,
   revertSession as revertSessionApi,
   replyPermission,
@@ -79,7 +80,7 @@ import {
   setQuestionSound,
   setReadySound,
 } from "./sound";
-import { tileFor } from "./tile";
+import { tileFor, baseName } from "./tile";
 
 export type Status =
   | { kind: "loading" }
@@ -674,6 +675,37 @@ export async function renameSession(id: string, title: string): Promise<boolean>
     return false;
   }
   patchSession(id, (s) => ({ ...s, title }));
+  return true;
+}
+
+// A project's label: the user-set name when present, the folder name
+// otherwise.
+export function projectDisplayName(dir: string): string {
+  const row = projects.value.find(
+    (p) => normPath(p.worktree) === normPath(dir),
+  );
+  return row?.name || baseName(dir);
+}
+
+// Rename a project's display name; the worktree is untouched.
+export async function renameProject(
+  dir: string,
+  name: string,
+): Promise<boolean> {
+  const row = projects.value.find(
+    (p) => normPath(p.worktree) === normPath(dir),
+  );
+  if (!row) {
+    setSendError("That project is not in the server's project list.");
+    return false;
+  }
+  if (!(await renameProjectApi(row.id, name, row.worktree))) {
+    setSendError("The rename was rejected by the server.");
+    return false;
+  }
+  projects.value = projects.value.map((p) =>
+    p === row ? { ...p, name } : p,
+  );
   return true;
 }
 

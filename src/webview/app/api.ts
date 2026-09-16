@@ -662,16 +662,30 @@ export async function fetchSession(id: string): Promise<Session | undefined> {
 }
 
 // Row of GET /project — a known worktree with its avatar color (assigned by
-// the host's ServerManager on boot when missing).
+// the host's ServerManager on boot when missing) and optional display name.
 export interface Project {
   id: string;
   worktree: string;
+  name?: string;
   icon?: { color?: string };
   time?: { created: number; updated: number };
 }
 
 export async function fetchProjects(): Promise<Project[] | undefined> {
   return getJson<Project[]>("/project");
+}
+
+// PATCH /project/{id} — set the display name. The worktree stays the
+// project's identity; the name is pure label.
+export async function renameProject(
+  id: string,
+  name: string,
+  directory: string,
+): Promise<boolean> {
+  return (
+    (await sendJson("PATCH", `/project/${id}${dirQuery(directory)}`, { name }))
+      ?.ok === true
+  );
 }
 
 // GET /project/current — this server's project (`worktree` is the folder;

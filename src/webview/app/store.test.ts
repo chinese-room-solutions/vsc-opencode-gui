@@ -52,12 +52,14 @@ import {
   pendingPermissions,
   pendingQuestions,
   projects,
+  projectDisplayName,
   providers,
   purgeProject,
   purgeState,
   queueCommand,
   queuedTurns,
   refreshMessages,
+  renameProject,
   resyncFromServer,
   resolveFileRef,
   revertSession,
@@ -1890,6 +1892,38 @@ describe("hostMessage routing", () => {
     hostMessage({ type: "toggle-context" });
     hostMessage({ type: "toggle-context" });
     assert.equal(sendError.value, undefined);
+  });
+});
+
+describe("project rename", () => {
+  it("patches the name into the projects list", async () => {
+    projects.value = [
+      { id: "prjA", worktree: "D:/work/alpha" },
+      { id: "prjB", worktree: "D:/work/beta", name: "Kept" },
+    ];
+    onApi((call) => {
+      if (call.method === "PATCH" && call.path.startsWith("/project/prjA"))
+        return {};
+      return undefined;
+    });
+    assert.equal(await renameProject("D:\\work\\alpha", "Alpha One"), true);
+    assert.equal(projects.value[0].name, "Alpha One");
+    assert.equal(projectDisplayName("D:/work/alpha"), "Alpha One");
+    assert.equal(projectDisplayName("D:\\work\\beta"), "Kept");
+    assert.equal(projectDisplayName("D:/work/missing"), "missing");
+  });
+  it("surfaces a server rejection without touching the list", async () => {
+    projects.value = [{ id: "prjA", worktree: "D:/work/alpha" }];
+    onApi((call) => {
+      if (call.method === "PATCH") return API_FAIL;
+      return undefined;
+    });
+    assert.equal(await renameProject("D:/work/alpha", "X"), false);
+    assert.equal(projects.value[0].name, undefined);
+    assert.equal(
+      sendError.value?.text,
+      "The rename was rejected by the server.",
+    );
   });
 });
 
