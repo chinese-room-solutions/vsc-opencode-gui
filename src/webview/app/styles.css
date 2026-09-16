@@ -2654,13 +2654,14 @@ a.tool-pill {
 /* Sub-agent chip (the task tool): the spawned session is the detail view,
    so the tool renders as a link-shaped pill — status dot, agent name, task
    description — and falls through to that session on click. Surface stays
-   plain input.background; the link reads through the hover. */
+   plain input.background; the link reads through the hover. Chips share the
+   part column's width so a run of them reads as one set; the description
+   ellipsizes whatever doesn't fit. */
 .subagent-chip {
   display: flex;
   align-items: center;
   gap: 9px;
-  width: fit-content;
-  max-width: 100%;
+  width: 100%;
   margin: 10px 0;
   padding: 7px 14px;
   border-radius: 6px;
