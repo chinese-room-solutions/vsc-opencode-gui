@@ -62,8 +62,8 @@ files are never touched.
 | `opencodeGui.readySound` | `true` | Chime when a turn finishes (1.5 s grace cancels on follow-ups). |
 | `opencodeGui.permissionSound` | `true` | Chime on permission asks. |
 | `opencodeGui.questionSound` | `true` | Chime on questions. |
-| `opencodeGui.stuckToolSeconds` | `300` | Silence before a tool is marked stuck; `0` disables. |
-| `opencodeGui.stuckAutoAbortSeconds` | `0` | Silence before auto-interrupt; `0` = manual chip only. |
+| `opencodeGui.stuckToolSeconds` | `300` | Silence before a tool counts as stuck (gates auto-abort); `0` disables. |
+| `opencodeGui.stuckAutoAbortSeconds` | `0` | Silence past the stuck threshold before the turn is stopped automatically (sends nothing into the session); `0` disables. Tool rows show elapsed time on hover — ticking while running, the total once settled. |
 
 ## 📦 Install
 

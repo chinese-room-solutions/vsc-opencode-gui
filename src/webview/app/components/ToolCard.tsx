@@ -11,7 +11,7 @@ import {
   sessions,
   stopSession,
 } from "../store";
-import { interruptStuck, silenceLabel, stuckState } from "../stuck";
+import { silenceLabel } from "../stuck";
 import { CheckIcon, CopyIcon, PixelMark, PixelSpinner, StopIcon } from "../icons";
 
 // One-line tool rows: status dot + display name + the
@@ -144,22 +144,8 @@ function stubChildId(marked: { rawAgent: string; description: string }): string 
 // server-side; the same word on the chip keeps the two apart. A pending
 // permission ask or question in the child pulses the chip yellow — the ask
 // itself docks only in the child's view, so this is the cue in the parent.
-// No stuck chip under the card: interruption acts on actions, not
-// sub-agents — the card's stop button stops the child deliberately, and the
-// stuck watcher auto-stops a dead one.
-function stuckInterrupt(
-  part: ToolPart,
-  stuck: { since: number; label: string; childId?: string },
-): () => void {
-  return () =>
-    void interruptStuck(part.sessionID, {
-      kind: "tool",
-      label: stuck.label,
-      minutes: Math.max(1, Math.round((Date.now() - stuck.since) / 60_000)),
-      ...(stuck.childId ? { childId: stuck.childId } : {}),
-    });
-}
-
+// The card's stop button stops the child deliberately, and the stuck
+// watcher auto-stops a dead one.
 function SubagentChip(props: {
   agent: string;
   description: string;
@@ -355,17 +341,26 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
   // The todo list IS the todowrite result — like the official app, that one
   // card starts open.
   const [open, setOpen] = useState(part.tool === "todowrite");
-  // Stuck mark for a running part; the per-second re-render keeps the
-  // tooltip's silence label ticking. The chip ticks itself (StuckChip).
-  const stuckEntry = stuckState.value[part.sessionID];
-  const stuck =
-    stuckEntry && !stuckEntry.escalated ? stuckEntry.parts[part.id] : undefined;
+  // Elapsed-on-hover, the row's timer in place of the old "Show" title:
+  // ticking while the part runs in the live turn, the total once it
+  // settles. The tick only drives re-renders — the tip itself is plain
+  // text swapping in place, no animation (the dot's blink must not
+  // reach it, which is why it rides the row, not the dot).
+  const running = props.live === true && state?.status === "running";
   const [, tick] = useState(0);
   useEffect(() => {
-    if (!stuck) return;
+    if (!running) return;
     const t = window.setInterval(() => tick((n) => n + 1), 1000);
     return () => window.clearInterval(t);
-  }, [stuck?.since]);
+  }, [running]);
+  const start = state?.time?.start;
+  const end = state?.time?.end;
+  const elapsed =
+    running && start
+      ? silenceLabel(Date.now() - start)
+      : !running && start && end
+        ? silenceLabel(end - start)
+        : undefined;
   // A sub-agent relayed new facts (steer) or re-attached after an interrupt
   // runs again long after its bash call closed — the child session's own
   // status keeps the chip honest then. Tracked only for opened sessions, so
@@ -483,17 +478,11 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
     >
       <div
         class={expandable ? "tool-row expander" : "tool-row"}
-        title={expandable ? (open ? "Hide" : "Show") : part.tool}
+        data-tip={elapsed}
         onClick={expandable ? () => setOpen(!open) : undefined}
       >
         {/* "failed", not "error": the app's boot-error banner owns .error. */}
-        <span
-          class={`tool-dot ${failed ? "failed" : status}${stuck ? " stuck" : ""}`}
-          data-tip={
-            stuck ? `no output for ${silenceLabel(Date.now() - stuck.since)}` : undefined
-          }
-          aria-hidden="true"
-        />
+        <span class={`tool-dot ${failed ? "failed" : status}`} aria-hidden="true" />
         <span class="tool-name">{toolName(part.tool)}</span>
         {linkPath || url ? (
           <a
@@ -517,9 +506,6 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
           </span>
         )}
       </div>
-      {stuck && (
-        <StuckChip since={stuck.since} kind="tool" onInterrupt={stuckInterrupt(part, stuck)} />
-      )}
       {open && (
         <>
           {todos.length > 0 && (
@@ -552,41 +538,6 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
         </>
       )}
       </div>
-  );
-}
-
-// The stuck affordance: a warning chip whose silence label ticks, running
-// the interrupt-with-nudge flow on click. The silence rides data-tip, not
-// title — a native tooltip re-runs its show delay every time the attribute
-// changes, so it blinks each tick; the CSS pseudo-tooltip updates in place.
-export function StuckChip(props: {
-  since: number;
-  kind: "tool" | "turn";
-  onInterrupt: () => void;
-}) {
-  const [, tick] = useState(0);
-  useEffect(() => {
-    const t = window.setInterval(() => tick((n) => n + 1), 1000);
-    return () => window.clearInterval(t);
-  }, []);
-  const silence = silenceLabel(Date.now() - props.since);
-  const tip = props.kind === "tool" ? `no output for ${silence}` : undefined;
-  const label =
-    props.kind === "tool"
-      ? "Interrupt"
-      : `No activity for ${silence} — Interrupt`;
-  return (
-    <button
-      type="button"
-      class="stuck-chip"
-      data-tip={tip}
-      onClick={(e) => {
-        e.stopPropagation();
-        props.onInterrupt();
-      }}
-    >
-      {label}
-    </button>
   );
 }
 

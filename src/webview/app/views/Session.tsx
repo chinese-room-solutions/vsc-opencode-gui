@@ -9,7 +9,6 @@ import {
   TurnFooter,
 } from "../components/MessageView";
 import { RenameInput } from "../components/RenameInput";
-import { StuckChip } from "../components/ToolCard";
 import { DotsIcon, StopIcon, WordmarkIcon } from "../icons";
 import { isText, isTool } from "../api";
 import {
@@ -36,7 +35,6 @@ import {
   stoppedPrompts,
 } from "../store";
 import { navigate } from "../router";
-import { interruptStuck, stuckState } from "../stuck";
 import { useArm } from "../useArm";
 import type { ChatMessage } from "../store";
 
@@ -401,30 +399,6 @@ export function Session(props: { sessionId?: string; parent?: string }) {
   }, [gap]);
   const working = gap && gapHold;
 
-  // Turn-level stuck: the same mark the tool rows use, for the session as a
-  // whole (busy, nothing running, no events). Renders under the wait
-  // indicators; the chip ticks itself.
-  const stuckEntry = id ? stuckState.value[id] : undefined;
-  const turnMark =
-    stuckEntry && !stuckEntry.escalated && id
-      ? stuckEntry.turn
-      : undefined;
-  const turnChip = turnMark && id && (
-    <StuckChip
-      since={turnMark.since}
-      kind="turn"
-      onInterrupt={() =>
-        void interruptStuck(id, {
-          kind: "turn",
-          minutes: Math.max(
-            1,
-            Math.round((Date.now() - turnMark.since) / 60_000),
-          ),
-        })
-      }
-    />
-  );
-
   // The "Waiting for the model..." placeholder holds through short idles —
   // the endpoint's spurious empty steps idle mid-turn, and a hard flicker
   // off would read as a dead turn. Once the idle is sustained (reload of a
@@ -596,7 +570,6 @@ export function Session(props: { sessionId?: string; parent?: string }) {
                     )}
                   </div>
                 </div>
-                {turnChip}
               </div>
             </div>
           )}
@@ -607,7 +580,6 @@ export function Session(props: { sessionId?: string; parent?: string }) {
                   <span class="dot" aria-hidden="true" />
                   <div class="thinking-line">Working...</div>
                 </div>
-                {turnChip}
               </div>
             </div>
           )}

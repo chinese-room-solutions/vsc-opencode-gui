@@ -57,6 +57,69 @@ for (let i = 1; i <= SEED_TURNS; i++) {
     text: `Question ${i}: ${filler(i * 3, 1)}`,
   });
   const ca = cu + 1_000;
+  // The last turn leads with settled tool calls so the rig can exercise
+  // tool cards: one shell, a fold of reads/searches, one edit with a diff.
+  const tools =
+    i === SEED_TURNS
+      ? [
+          {
+            type: "tool",
+            id: "pt_tbash",
+            name: "bash",
+            state: {
+              status: "completed",
+              input: { command: "npm run compile" },
+              output: "out/webview/app.js   390.6kb\nDone in 19ms",
+              time: { start: ca, end: ca + 5_200 },
+            },
+          },
+          {
+            type: "tool",
+            id: "pt_tr1",
+            name: "read",
+            state: {
+              status: "completed",
+              input: { filePath: "README.md" },
+              output: "# vsc-opencode-gui\n...",
+              time: { start: ca + 5_400, end: ca + 5_900 },
+            },
+          },
+          {
+            type: "tool",
+            id: "pt_tr2",
+            name: "read",
+            state: {
+              status: "completed",
+              input: { filePath: "package.json" },
+              output: "{\n  \"name\": \"vsc-opencode-gui\",\n...",
+              time: { start: ca + 5_400, end: ca + 6_100 },
+            },
+          },
+          {
+            type: "tool",
+            id: "pt_tg1",
+            name: "grep",
+            state: {
+              status: "completed",
+              input: { pattern: "panelOpen" },
+              output: "src/main.ts:41",
+              time: { start: ca + 6_300, end: ca + 6_700 },
+            },
+          },
+          {
+            type: "tool",
+            id: "pt_te1",
+            name: "edit",
+            state: {
+              status: "completed",
+              input: { filePath: "src/main.ts" },
+              metadata: { diff: "--- a/src/main.ts\n+++ b/src/main.ts\n@@ -1,1 +1,2 @@\n+// tuned" },
+              output: "Edited src/main.ts",
+              time: { start: ca + 6_900, end: ca + 8_400 },
+            },
+          },
+        ]
+      : [];
   seedRows.push({
     id: `msg_a${i}`,
     type: "assistant",
@@ -65,7 +128,10 @@ for (let i = 1; i <= SEED_TURNS; i++) {
     model: { id: "fake-model", providerID: "fake" },
     cost: 0.01,
     tokens: { input: 100 * i, output: 400 * i, reasoning: 0, cache: { read: 0, write: 0 }, total: 500 * i },
-    content: [{ type: "text", id: `pt_a${i}`, text: filler(i * 11, 6) }],
+    content: [
+      ...tools,
+      { type: "text", id: `pt_a${i}`, text: filler(i * 11, 6) },
+    ],
   });
 }
 const lastSeedAssistant = `msg_a${SEED_TURNS}`;

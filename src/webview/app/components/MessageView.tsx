@@ -24,6 +24,7 @@ import {
 } from "../icons";
 import { ToolCard } from "./ToolCard";
 import { openLightbox } from "./Lightbox";
+import { silenceLabel } from "../stuck";
 
 // Compact units for the live counters: 95s → "1m35s", 12340 → "12.3k".
 // Sub-1000 values pass through unrounded, so rates keep their decimal.
@@ -615,11 +616,23 @@ function ExploreGroup(props: { parts: ToolPart[] }) {
       p.state?.status === "error" ||
       (!!p.state?.error && p.state.error !== ""),
   );
+  // The fold's own hover timer: the span the whole run took, first start
+  // to last end — reads overlap in parallel calls, a sum would not.
+  const starts = props.parts
+    .map((p) => p.state?.time?.start)
+    .filter((t): t is number => typeof t === "number");
+  const ends = props.parts
+    .map((p) => p.state?.time?.end)
+    .filter((t): t is number => typeof t === "number");
+  const elapsed =
+    starts.length > 0 && ends.length === props.parts.length
+      ? silenceLabel(Math.max(...ends) - Math.min(...starts))
+      : undefined;
   return (
     <div class="explore">
       <div
         class="tool-row expander explore-head"
-        title={open ? "Hide" : "Show"}
+        data-tip={elapsed}
         onClick={() => setOpen(!open)}
       >
         <span

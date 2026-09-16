@@ -35,6 +35,16 @@ init();
 
 window.addEventListener("message", (e) => hostMessage(e.data));
 
+// Hover tips ([data-tip]) center on the cursor: the CSS anchor is a custom
+// property this one delegated listener keeps fed — a tool row spans the
+// panel, a fixed corner anchor would park the tip at its far end.
+document.addEventListener("mousemove", (e) => {
+  const el = e.target instanceof Element ? e.target.closest<HTMLElement>("[data-tip]") : null;
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  el.style.setProperty("--tip-x", `${Math.round(e.clientX - r.left)}px`);
+});
+
 // On macOS the webview never sees Cmd+C/X/V/A natively: VS Code's Edit menu
 // owns them and its when-clauses don't cover webview iframes, so copy/paste
 // silently die in every editable (rename fields, composer). Capture phase —

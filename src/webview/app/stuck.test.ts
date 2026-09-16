@@ -67,10 +67,7 @@ describe("stuck", () => {
       assert.equal(marksOf(sid), undefined);
       setNow(T0 + 1_100);
       runStuckTick();
-      assert.deepEqual(marksOf(sid)?.parts["p1"], {
-        since: T0,
-        label: "Shell",
-      });
+      assert.deepEqual(marksOf(sid)?.parts["p1"], { since: T0 });
       const mark = stuckState.value;
       setNow(T0 + 1_200);
       runStuckTick(); // fingerprint unchanged — no re-write
@@ -226,7 +223,7 @@ describe("stuck", () => {
       runStuckTick();
       const mark = marksOf(sid)?.parts["p1"];
       assert.equal(mark?.childId, "child1");
-      assert.equal(mark?.label, "Task");
+      assert.equal(mark?.since, T0 + 2_000);
     });
 
     it("a live compaction turn is excluded wholesale", () => {

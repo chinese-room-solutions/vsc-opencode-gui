@@ -2598,34 +2598,10 @@ body {
   background: var(--vscode-errorForeground);
 }
 
-/* Stuck (opencodeGui.stuckToolSeconds of silence): the running dot turns
-   warning-amber and an interrupt chip offers the escape hatch. Literal
-   amber: some themes map editorWarning.foreground to green. */
-.tool-dot.stuck {
-  background: #ffcc00;
-}
-
-.stuck-chip {
-  display: inline-flex;
-  align-items: center;
-  margin-top: 4px;
-  padding: 1px 9px;
-  font-size: 11px;
-  color: #ffcc00;
-  background: none;
-  border: 1px solid #ffcc00;
-  border-radius: 9px;
-  cursor: pointer;
-}
-
-.stuck-chip:hover {
-  background: color-mix(in srgb, #ffcc00 12%, transparent);
-}
-
 /* In-place tooltip for ticking tips ([data-tip]): a native title re-runs
-   its show delay on every attribute change, so a per-second silence label
+   its show delay on every attribute change, so a per-second elapsed label
    blinks the bubble; pseudo-element content swaps stay put. Placed above —
-   the live transcript's scrollport clips below the chip. */
+   the live transcript's scrollport clips below. */
 [data-tip] {
   position: relative;
 }
@@ -2634,7 +2610,8 @@ body {
   content: attr(data-tip);
   position: absolute;
   bottom: calc(100% + 4px);
-  left: 0;
+  left: var(--tip-x, 0);
+  transform: translateX(-50%);
   z-index: 30;
   padding: 3px 8px;
   font-size: 11px;

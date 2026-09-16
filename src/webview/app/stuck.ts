@@ -5,19 +5,19 @@
 // each tick instead of hooking it, so it stays a drop-in. Pending parts
 // never flag (they include tools waiting on a permission/question, and those
 // asks gate escalation too), and compaction turns are excluded wholesale —
-// aborting the summary turn would wedge the session. Detection only surfaces
-// the silence; the user (or the delegating agent, one level up) judges.
-// opencodeGui.stuckToolSeconds (baked by AppHost) is the threshold; 0
-// disables detection. opencodeGui.stuckAutoAbortSeconds escalates to an
-// automatic interrupt-and-nudge; 0 (default) keeps the manual chip.
-import { isTool, toolName } from "./api";
+// aborting the summary turn would wedge the session. Detection is headless:
+// running tool cards show their own elapsed-on-hover, the composer's Stop
+// interrupts, and nothing is sent into the session. The marks feed only the
+// opt-in auto-abort. opencodeGui.stuckToolSeconds (baked by AppHost) is the
+// threshold; 0 disables detection. opencodeGui.stuckAutoAbortSeconds
+// escalates to an automatic interrupt; 0 (default) keeps it detection-only.
+import { isTool } from "./api";
 import type { Part } from "./api";
 import {
   fmtDur,
   messagesBySession,
   pendingPermissions,
   pendingQuestions,
-  sendPrompt,
   sessionStatus,
   stopSession,
 } from "./store";
@@ -26,7 +26,6 @@ import { signal } from "@preact/signals";
 
 export interface StuckPartMark {
   since: number;
-  label: string;
   childId?: string;
 }
 export interface StuckSessionMark {
@@ -49,8 +48,6 @@ function numMeta(name: string, fallback: number): number {
 
 const stuckToolSeconds = numMeta("opencode-stuck-tool", 300);
 const stuckAutoAbortSeconds = numMeta("opencode-stuck-auto-abort", 0);
-const stuckMinutes = (since: number, now: number): number =>
-  Math.max(1, Math.round((now - since) / 60_000));
 
 // Last activity per tool part (session → part → epoch ms) and per session,
 // tracked by diffing what the signals show between ticks: a new list for a
@@ -175,9 +172,6 @@ function stuckTick(): void {
         if (now - since >= toolMs)
           parts[p.id] = {
             since,
-            // Display name ("Shell"), not the schema id ("bash") — the nudge
-            // quotes it, and the id can name a shell the box doesn't run.
-            label: toolName(p.tool),
             // A sub-agent task tool's worker is its own session: the fix is
             // aborting the CHILD, which returns the result to the parent's
             // turn — the main thread never stops.
@@ -211,11 +205,9 @@ function stuckTick(): void {
     void interruptStuck(
       sid,
       turnDue
-        ? { kind: "turn", minutes: stuckMinutes(turn.since, now) }
+        ? { kind: "turn" }
         : {
             kind: "tool",
-            label: partDue!.label,
-            minutes: stuckMinutes(partDue!.since, now),
             ...(partDue!.childId ? { childId: partDue!.childId } : {}),
           },
     );
@@ -236,25 +228,20 @@ function stuckTick(): void {
 
 window.setInterval(stuckTick, 1000);
 
-// Nudge sent after a stuck turn is interrupted, so the agent — not a held
-// queued prompt — decides what to do next.
-const stuckToolNudge = (label: string, minutes: number): string =>
-  `The "${label}" call had no output for ${minutes} minute${minutes === 1 ? "" : "s"} and was interrupted — it may be stuck. Assess the situation and continue with a different approach.`;
-const stuckTurnNudge = (minutes: number): string =>
-  `No activity for ${minutes} minute${minutes === 1 ? "" : "s"} while the turn was running, so it was interrupted. Assess and continue if work remains.`;
-
-export type StuckReason =
-  | { kind: "tool"; label: string; minutes: number; childId?: string }
-  | { kind: "turn"; minutes: number };
+type StuckReason =
+  | { kind: "tool"; childId?: string }
+  | { kind: "turn" };
 
 // One flow at a time per session (a double-click must not double-abort).
 const interruptingStuck = new Set<string>();
 
-// Abort a stuck turn, wait for the abort to land, then send the nudge as a
-// fresh prompt. A stuck SUB-AGENT task part instead kills only the child
-// session: its result returns to the parent's turn, which keeps running —
-// the model sees the aborted task and adapts, no nudge needed.
-export async function interruptStuck(
+// Abort a stuck turn. No follow-up prompt is sent: canned text would ride
+// into the transcript in this UI's language and could drift a session
+// conducted in another — the transcript's "Interrupted" mark tells the
+// story, and the user's next prompt steers the agent. A stuck SUB-AGENT
+// task part instead kills only the child session: its result returns to
+// the parent's turn, which keeps running.
+async function interruptStuck(
   id: string,
   reason: StuckReason,
 ): Promise<void> {
@@ -262,23 +249,10 @@ export async function interruptStuck(
   interruptingStuck.add(id);
   try {
     if (reason.kind === "tool" && reason.childId) {
-      if (hasPendingAsk(reason.childId)) return;
-      await stopSession(reason.childId);
+      if (!hasPendingAsk(reason.childId)) await stopSession(reason.childId);
       return;
     }
-    if (hasPendingAsk(id) || compactionLive(id)) return;
-    await stopSession(id);
-    // stopSession retires the turn once the abort POST succeeded — still
-    // busy means the interrupt was refused (already surfaced) and the nudge
-    // must not ride into a turn that never stopped.
-    if ((sessionStatus.value[id]?.type ?? "idle") !== "idle") return;
-    if (hasPendingAsk(id) || compactionLive(id)) return;
-    await sendPrompt(
-      id,
-      reason.kind === "tool"
-        ? stuckToolNudge(reason.label, reason.minutes)
-        : stuckTurnNudge(reason.minutes),
-    );
+    if (!hasPendingAsk(id) && !compactionLive(id)) await stopSession(id);
   } finally {
     interruptingStuck.delete(id);
   }
