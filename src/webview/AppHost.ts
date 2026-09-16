@@ -588,12 +588,16 @@ export class AppHost implements vscode.Disposable {
   private _html(webview: vscode.Webview): string {
     const error = this._error;
 
-    const resource = (name: string) =>
-      webview
-        .asWebviewUri(
-          vscode.Uri.joinPath(this._extensionUri, "out", "webview", name),
-        )
+    // The query busts the webview service worker's cache-first fetch: the
+    // URI must change when the file does, or a rebuilt bundle never loads.
+    const resource = (name: string) => {
+      const file = vscode.Uri.joinPath(this._extensionUri, "out", "webview", name);
+      const version = Math.floor(fs.statSync(file.fsPath).mtimeMs);
+      return webview
+        .asWebviewUri(file)
+        .with({ query: String(version) })
         .toString();
+    };
 
     return this._readTemplate("chat.html")
       // The theme style carries its own {{NONCE}} placeholder, so it goes
