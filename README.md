@@ -24,8 +24,8 @@ HTTP/SSE.
 - **Projects × sessions home** — every session of every project on one screen;
   projects can be renamed in place; clicking a session from another folder
   opens it there, deep-linked.
-- **Sub-agents are sessions** — open a child from its chip, steer it mid-run,
-  stop it alone while the parent's turn continues.
+- **Sub-agents are sessions** — open a child from its task chip, steer it
+  mid-run, stop it alone; the parent's turn collects the result.
 - **Notifications, visual and sound** — a tab pulses yellow while its
   session (or any sub-agent under it) waits on you, green when a turn
   finishes in a tab you haven't opened; chimes cover ready, permission,
@@ -82,9 +82,9 @@ make install   # compile, package the .vsix, install — then reload VS Code
 Requires the [opencode CLI](https://opencode.ai/) where the workspace runs
 (remote workspaces: on the remote machine). `make uninstall` removes it.
 
-> ℹ️ On server start, two skills (`oc-task`, `oc-attachments`) are
-> installed into your opencode config dir (`~/.config/opencode/skills/`) so
-> every session gets sub-agent delegation and attachment reuse.
+> ℹ️ On server start, the `oc-attachments` skill is installed into your
+> opencode config dir (`~/.config/opencode/skills/`) so every session gets
+> attachment reuse. Sub-agent delegation uses the built-in `task` tool.
 
 ## 🛠️ Development
 

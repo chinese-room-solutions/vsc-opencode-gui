@@ -37,11 +37,8 @@ const rigPort = process.argv[3]
 let apiPort = 43100 + Math.floor(Math.random() * 1000);
 if (apiPort === rigPort) apiPort++;
 
-// Install the oc-task skill (sub-agent delegation) and the oc-attachments
-// skill before the server boots — skills are discovered at boot. Same
-// installs the extension's ServerManager does; without them the rig has
-// no sub-agent flow.
-const stub = path.join(root, "out", "oc-subagent.js");
+// Install the oc-attachments skill before the server boots — skills are
+// discovered at boot. Same install the extension's ServerManager does.
 const configRoot =
   process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
 const installSkill = (name, content) => {
@@ -49,13 +46,6 @@ const installSkill = (name, content) => {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "SKILL.md"), content);
 };
-if (fs.existsSync(stub)) {
-  const skill = spawnSync(process.execPath, [stub, "--print-skill"], {
-    encoding: "utf-8",
-    windowsHide: true,
-  });
-  if (skill.status === 0 && skill.stdout) installSkill("oc-task", skill.stdout);
-}
 const attachmentsSkill = path.join(root, "out", "oc-attachments-skill.md");
 if (fs.existsSync(attachmentsSkill)) {
   installSkill("oc-attachments", fs.readFileSync(attachmentsSkill, "utf-8"));
@@ -69,11 +59,9 @@ const child = spawn("opencode", ["serve", "--port", String(apiPort)], {
   // Isolate the server's data (sessions, DB) inside the rig workspace.
   // Without this it uses ~/.local/share/opencode — the user's real global
   // store — and any test cleanup (session deletes) destroys real data.
-  // OPENCODE_GUI_PORT lets the task skill's stub find this server.
   env: {
     ...process.env,
     XDG_DATA_HOME: path.join(workspaceDir, ".oc-data"),
-    OPENCODE_GUI_PORT: String(apiPort),
   },
 });
 

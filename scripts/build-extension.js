@@ -32,16 +32,11 @@ async function main() {
       path.join(root, "node_modules", "vscode-oniguruma", "release", "onig.wasm"),
       path.join(root, "out", "onig.wasm"),
     );
-    // Plain assets copied next to the bundle: the sub-agent runner (spawned
-    // via bash by the task skill, not a bundle), and the attachments skill
-    // text. Each also lands in out/server/ — the tsc-compiled copies the test
-    // suite imports resolve __dirname there.
+    // Plain assets copied next to the bundle: the attachments skill text.
+    // It also lands in out/server/ — the tsc-compiled copy the test suite
+    // imports resolve __dirname there.
     for (const dir of [path.join(root, "out"), path.join(root, "out", "server")]) {
       fs.mkdirSync(dir, { recursive: true });
-      fs.copyFileSync(
-        path.join(root, "src", "server", "oc-subagent.js"),
-        path.join(dir, "oc-subagent.js"),
-      );
       fs.copyFileSync(
         path.join(root, "src", "server", "oc-attachments-skill.md"),
         path.join(dir, "oc-attachments-skill.md"),

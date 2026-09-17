@@ -939,9 +939,8 @@ export function sessionTitle(s: Session | undefined, id: string): string {
   return raw.replace(/\s+\(@\S+ subagent\)$/, "");
 }
 
-// Sub-agent sessions: native task spawns carry parentID; the task skill's
-// stub children have none (POST /session ignores it) and are recognized by
-// the title suffix the stub writes.
+// Sub-agent sessions: task-tool spawns carry parentID; the title suffix
+// ("… (@agent subagent)") also catches the async-era spawns without one.
 export function isSubagentSession(s: Session): boolean {
   return Boolean(s.parentID) || / \(@\S+ subagent\)$/.test(s.title);
 }

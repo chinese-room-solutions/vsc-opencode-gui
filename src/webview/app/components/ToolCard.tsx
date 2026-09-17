@@ -104,44 +104,6 @@ function displayAgent(raw: string | undefined): string {
     .join("-");
 }
 
-// The v2 engine has no task tool, so the `task` skill teaches the model to
-// delegate through a marked bash command running the extension's stub; the
-// stub prints the child session id before the sub-agent's result, which is
-// what the chip opens.
-const SUBAGENT_STUB = "oc-subagent.js";
-const CHILD_ID = /\[sub-agent session: (ses_[^\]\s]+)\]/;
-// The --flag matchers, compiled once — parseSubagentCommand runs per parent
-// re-render (every streaming delta).
-const SUBAGENT_DESC_RE = /--description (?:"([^"]*)"|([^\s"]+))/;
-const SUBAGENT_AGENT_RE = /--agent (?:"([^"]*)"|([^\s"]+))/;
-const flagValue = (command: string, re: RegExp): string | undefined => {
-  const m = command.match(re);
-  return m?.[1] ?? m?.[2];
-};
-
-function parseSubagentCommand(
-  command: string,
-): { agent: string; rawAgent: string; description: string } | undefined {
-  const description = flagValue(command, SUBAGENT_DESC_RE);
-  if (!command.includes(SUBAGENT_STUB) || !description) return undefined;
-  const rawAgent = flagValue(command, SUBAGENT_AGENT_RE) ?? "general";
-  return { agent: displayAgent(rawAgent), rawAgent, description };
-}
-
-// The stub child has no parentID (POST /session ignores it), so it resolves
-// by the title the stub writes — newest match wins.
-function stubChildId(marked: { rawAgent: string; description: string }): string | undefined {
-  const kids = sessions.value
-    .filter(
-      (s) =>
-        marked.description &&
-        s.title.startsWith(marked.description) &&
-        s.title.includes(`@${marked.rawAgent} subagent`),
-    )
-    .sort((a, b) => b.time.updated - a.time.updated);
-  return kids[0]?.id;
-}
-
 // One chip standing in for a whole sub-agent session, like the official
 // app's — status dot, agent name, the task's description; a blinking dot
 // while it runs. The chip falls through to the child session on click and is
@@ -387,13 +349,11 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
   };
 
   // A spawned sub-agent is the one tool that renders as a link, not a card:
-  // its details live in the child session, one click away. Native task tool
-  // calls, and (until the v2 engine grows a task tool) the marked stub
-  // command the task skill teaches, both render as the same chip. A part
-  // stuck "running"/"pending" vouches for liveness only inside the live
-  // turn: a server death leaves it unfinalized in the store, and trusting
-  // it after a reload spins chips for work nothing is doing. The child's
-  // own status decides then (a steer re-activating a settled card included).
+  // its details live in the child session, one click away. A part stuck
+  // "running"/"pending" vouches for liveness only inside the live turn: a
+  // server death leaves it unfinalized in the store, and trusting it after
+  // a reload spins chips for work nothing is doing. The child's own status
+  // decides then (a steer re-activating a settled card included).
   if (part.tool === "task") {
     const status = part.state?.status ?? "pending";
     const description =
@@ -416,30 +376,6 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
         />
       </>
     );
-  }
-  if (part.tool === "bash") {
-    const marked = parseSubagentCommand(inputStr(part, "command") ?? "");
-    if (marked) {
-      const status = part.state?.status ?? "pending";
-      const sessionId =
-        part.state?.output?.match(CHILD_ID)?.[1] ?? stubChildId(marked);
-      const running =
-        (props.live === true &&
-          (status === "pending" || status === "running")) ||
-        childBusy(sessionId);
-      return (
-        <>
-          <SubagentChip
-            agent={marked.agent}
-            description={marked.description}
-            sessionId={sessionId}
-            running={running}
-            failed={status === "error" || !!part.state?.error}
-            asking={childAsk(sessionId)}
-          />
-        </>
-      );
-    }
   }
 
   const status = state?.status ?? "pending";
