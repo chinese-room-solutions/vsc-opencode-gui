@@ -980,6 +980,16 @@ export function sessionTile(s: Session | undefined, id: string) {
   return color ? tileFor(title, color) : tileFor(dir || title);
 }
 
+// A session counts as working on busy OR retry: the server's retry backoff
+// keeps the turn alive (the composer treats retry as working too), and a
+// chip/stop button that drops out for the whole backoff window reads as a
+// finished sub-agent that is anything but.
+export function sessionWorking(id: string | undefined): boolean {
+  if (id === undefined) return false;
+  const t = sessionStatus.value[id]?.type;
+  return t === "busy" || t === "retry";
+}
+
 // Copy-on-write so signal subscribers see each change. Events only touch
 // sessions already opened; the rest are fetched wholesale on open.
 function mutateMessages(
@@ -1313,6 +1323,9 @@ function applyEvent(event: ServerEvent): void {
       if (data.sessionID && data.status) {
         if (data.status.type === "idle") setIdle(data.sessionID);
         else {
+          // A live status (busy, retry — backoffs run minutes) keeps the
+          // turn going: a pending step-failed grace must not idle over it.
+          cancelIdle(data.sessionID);
           sessionStatus.value = {
             ...sessionStatus.value,
             [data.sessionID]: data.status,
@@ -1514,8 +1527,11 @@ function applyEvent(event: ServerEvent): void {
       cancelRing(sid);
       sessionStatus.value = { ...sessionStatus.value, [sid]: { type: "busy" } };
     } else if (event.type === "session.next.step.failed") {
+      // A failed step retries under the server's policy (status "retry"
+      // follows on the stream) — only the server's own idle truth ends the
+      // turn, so this is a grace, not an immediate idle.
       cancelIdle(sid);
-      setIdle(sid);
+      scheduleIdle(sid);
     } else if (
       event.type === "session.next.step.ended" &&
       data.finish !== "tool-calls" &&
@@ -2853,20 +2869,30 @@ function markSettled(map: Map<string, number>, id: string): void {
 // One session's pending asks, merged in: the open view's dock uses this to
 // discover an ask made while the page was closed or reloaded. Both
 // pipelines: the v2 per-session route, plus the v1 global list (which the
-// v2 route never includes).
+// v2 route never includes). Each list is authoritative only for its own
+// pipeline: a docked ask survives unless ITS pipeline's list loaded and no
+// longer carries it (1.18.30 serves tool asks on /permission only — the
+// /api per-session list is structurally empty there, so treating a fetched
+// empty list as truth would wipe every live ask on session open and lock
+// the turn behind it).
 export async function refreshPermissions(id: string): Promise<void> {
   const [fresh, legacy] = await Promise.all([
     fetchSessionPermissions(id),
     fetchPendingPermissions(),
   ]);
   if (!fresh && !legacy) return;
-  const keep = pendingPermissions.value.filter((p) => p.sessionID !== id);
+  const keep = pendingPermissions.value.filter(
+    (p) =>
+      p.sessionID !== id ||
+      (p.v1 === true ? legacy === undefined : fresh === undefined),
+  );
+  const known = new Set(keep.map((p) => p.id));
   pendingPermissions.value = [
     ...keep,
-    ...(fresh ?? []).filter((p) => !settledPermissions.has(p.id)),
+    ...(fresh ?? []).filter((p) => !settledPermissions.has(p.id) && !known.has(p.id)),
     ...(legacy ?? [])
       .filter((p) => p.sessionID === id)
-      .filter((p) => !settledPermissions.has(p.id)),
+      .filter((p) => !settledPermissions.has(p.id) && !known.has(p.id)),
   ];
 }
 
@@ -2900,13 +2926,20 @@ const settledQuestions = new Map<string, number>();
 
 // One session's pending questions, merged in: the open view's dock uses
 // this to discover a question asked while the page was closed or reloaded.
+// Same pipeline-scoped authority as refreshPermissions: an ask retires only
+// when its own pipeline's list loaded without it.
 export async function refreshQuestions(id: string): Promise<void> {
   const fresh = await fetchSessionQuestions(id);
   if (!fresh) return;
-  const keep = pendingQuestions.value.filter((q) => q.sessionID !== id);
+  const keep = pendingQuestions.value.filter(
+    (q) =>
+      q.sessionID !== id ||
+      (q.v1 === true ? !fresh.globalLoaded : !fresh.v2Loaded),
+  );
+  const known = new Set(keep.map((q) => q.id));
   pendingQuestions.value = [
     ...keep,
-    ...fresh.filter((q) => !settledQuestions.has(q.id)),
+    ...fresh.rows.filter((q) => !settledQuestions.has(q.id) && !known.has(q.id)),
   ];
 }
 

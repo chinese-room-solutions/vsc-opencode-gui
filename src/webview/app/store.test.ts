@@ -59,6 +59,8 @@ import {
   queueCommand,
   queuedTurns,
   refreshMessages,
+  refreshPermissions,
+  refreshQuestions,
   renameProject,
   resyncFromServer,
   resolveFileRef,
@@ -70,6 +72,7 @@ import {
   sessionStatus,
   sessionTile,
   sessionTitle,
+  sessionWorking,
   sessions,
   setSelection,
   status,
@@ -1431,6 +1434,147 @@ describe("asks: permissions and questions", () => {
     assert.equal(pendingQuestions.value[0].v1, true);
     await sseFlush("question.rejected", { sessionID: sid, requestID: "qq1" });
     assert.equal(pendingQuestions.value.length, 0);
+    assert.equal(sessionStatus.value[sid]?.type, "idle");
+  });
+});
+
+// A session-open refresh must never retire an ask its own pipeline's list
+// did not confirm absent: 1.18.30 serves tool asks on /permission only (the
+// /api per-session route reads a registry tools never write), so a wiped
+// dock locks the turn behind an ask the UI can no longer answer.
+describe("ask refresh is pipeline-scoped", () => {
+  it("keeps a docked v1 ask when the v1 list fails to load", async () => {
+    const sid = "ak4";
+    await sseFlush("permission.asked", {
+      id: "per4",
+      sessionID: sid,
+      permission: "bash",
+      patterns: ["cargo test"],
+      always: [],
+    });
+    onApi((call) => {
+      if (call.path === `/api/session/${sid}/permission`) return { data: [] };
+      if (call.path === "/permission") return API_FAIL;
+      return undefined;
+    });
+    await refreshPermissions(sid);
+    assert.equal(pendingPermissions.value.length, 1);
+    assert.equal(pendingPermissions.value[0].id, "per4");
+  });
+
+  it("retires the v1 ask once the v1 list loads without it", async () => {
+    const sid = "ak5";
+    await sseFlush("permission.asked", {
+      id: "per5",
+      sessionID: sid,
+      permission: "bash",
+      patterns: ["cargo test"],
+      always: [],
+    });
+    onApi((call) => {
+      if (call.path === `/api/session/${sid}/permission`) return { data: [] };
+      if (call.path === "/permission") return [];
+      return undefined;
+    });
+    await refreshPermissions(sid);
+    assert.equal(pendingPermissions.value.length, 0);
+  });
+
+  it("keeps a docked v2 ask when the v2 list fails to load", async () => {
+    const sid = "ak6";
+    await sseFlush("permission.v2.asked", {
+      id: "per6",
+      sessionID: sid,
+      action: "edit",
+      resources: ["a.ts"],
+      save: [],
+    });
+    onApi((call) => {
+      if (call.path === `/api/session/${sid}/permission`) return API_FAIL;
+      if (call.path === "/permission") return [];
+      return undefined;
+    });
+    await refreshPermissions(sid);
+    assert.equal(pendingPermissions.value.length, 1);
+    assert.equal(pendingPermissions.value[0].v1 ?? false, false);
+  });
+
+  it("keeps a docked v1 question when the global list fails to load", async () => {
+    const sid = "ak7";
+    await sseFlush("question.asked", {
+      id: "qq7",
+      sessionID: sid,
+      questions: [{ question: "which?", header: "Q", options: [] }],
+    });
+    onApi((call) => {
+      if (call.path === `/api/session/${sid}/question`) return { data: [] };
+      if (call.path === "/question") return API_FAIL;
+      return undefined;
+    });
+    await refreshQuestions(sid);
+    assert.equal(pendingQuestions.value.length, 1);
+  });
+
+  it("retires the v1 question once the global list loads without it", async () => {
+    const sid = "ak8";
+    await sseFlush("question.asked", {
+      id: "qq8",
+      sessionID: sid,
+      questions: [{ question: "which?", header: "Q", options: [] }],
+    });
+    onApi((call) => {
+      if (call.path === `/api/session/${sid}/question`) return { data: [] };
+      if (call.path === "/question") return [];
+      return undefined;
+    });
+    await refreshQuestions(sid);
+    assert.equal(pendingQuestions.value.length, 0);
+  });
+});
+
+// The chip's pulse and stop button follow the child's status: a retrying
+// provider step is mid-turn (backoffs run minutes), and a failed step under
+// the server's retry policy is not a turn end — the server's own idle truth
+// settles it.
+describe("a retrying turn stays working", () => {
+  it("counts retry as working (sessionWorking)", async () => {
+    const sid = "rk1";
+    await sseFlush("session.next.step.started", { sessionID: sid });
+    assert.equal(sessionWorking(sid), true);
+    await sseFlush("session.status", {
+      sessionID: sid,
+      status: { type: "retry", attempt: 2, message: "429" },
+    });
+    assert.equal(sessionWorking(sid), true);
+    await sseFlush("session.status", {
+      sessionID: sid,
+      status: { type: "idle" },
+    });
+    assert.equal(sessionWorking(sid), false);
+  });
+
+  it("a failed step holds busy through the grace; idle truth settles it", async () => {
+    const sid = "rk2";
+    await sseFlush("session.next.step.started", { sessionID: sid });
+    await sseFlush("session.next.step.failed", { sessionID: sid });
+    assert.equal(sessionStatus.value[sid]?.type, "busy");
+    await sseFlush("session.status", {
+      sessionID: sid,
+      status: { type: "retry", attempt: 1 },
+    });
+    // The grace must not idle over a live retry status.
+    fireExact(3000);
+    assert.equal(sessionWorking(sid), true);
+    await sseFlush("session.idle", { sessionID: sid });
+    assert.equal(sessionWorking(sid), false);
+  });
+
+  it("a failed step with no follow-up idles after the grace", async () => {
+    const sid = "rk3";
+    open(sid, [row("u1", "user", T0)]);
+    await sseFlush("session.next.step.started", { sessionID: sid });
+    await sseFlush("session.next.step.failed", { sessionID: sid });
+    fireExact(3000);
     assert.equal(sessionStatus.value[sid]?.type, "idle");
   });
 });

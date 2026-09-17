@@ -271,9 +271,16 @@ export interface QuestionRequest {
 // per-session route plus the global /question list (v1 asks; the /api route
 // returns [] for them — wire-verified 1.18.25). The /api copy wins on an id
 // collision, so a v2 ask that shows up in both keeps the v2 reply route.
+// Which of the two lists actually loaded rides along: a refresh may only
+// retire an ask its own pipeline's list confirmed absent.
+export interface SessionQuestions {
+  rows: QuestionRequest[];
+  v2Loaded: boolean;
+  globalLoaded: boolean;
+}
 export async function fetchSessionQuestions(
   id: string,
-): Promise<QuestionRequest[] | undefined> {
+): Promise<SessionQuestions | undefined> {
   const [v2, global] = await Promise.all([
     getJson<{ data?: QuestionRequest[] }>(`/api/session/${id}/question`),
     getJson<QuestionRequest[]>("/question"),
@@ -284,7 +291,11 @@ export async function fetchSessionQuestions(
   const v1Rows = (global ?? [])
     .filter((q) => q.sessionID === id && !seen.has(q.id))
     .map((q) => ({ ...q, v1: true }));
-  return [...v2Rows, ...v1Rows];
+  return {
+    rows: [...v2Rows, ...v1Rows],
+    v2Loaded: v2 !== undefined,
+    globalLoaded: global !== undefined,
+  };
 }
 
 // Chat message. Only the fields the UI reads; the server sends more.

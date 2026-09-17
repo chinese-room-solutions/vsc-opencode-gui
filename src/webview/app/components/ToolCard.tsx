@@ -7,7 +7,7 @@ import { route, navigate } from "../router";
 import {
   pendingPermissions,
   pendingQuestions,
-  sessionStatus,
+  sessionWorking,
   sessions,
   stopSession,
 } from "../store";
@@ -83,10 +83,15 @@ function childSessionId(part: ToolPart, description: string): string | undefined
   if (live) return live;
   const parent = route.value.view === "session" ? route.value.id : undefined;
   if (!parent) return undefined;
-  const kids = sessions.value.filter(
-    (s) => s.parentID === parent && description && s.title.startsWith(description),
-  );
-  return kids[kids.length - 1]?.id;
+  const kids = sessions.value
+    .filter(
+      (s) => s.parentID === parent && description && s.title.startsWith(description),
+    )
+    // Newest wins: descriptions repeat across children (two sub-agents can
+    // carry the same label), and the chip must open the one this part
+    // spawned — the most recent — not whichever the fetch order put last.
+    .sort((a, b) => b.time.updated - a.time.updated);
+  return kids[0]?.id;
 }
 
 // "general" → "General"; "oc-model-glm-5-3-flash" → "Oc-Model-Glm-5-3-Flash",
@@ -215,8 +220,10 @@ function SubagentChip(props: {
         {background ? `${props.description} (background)` : props.description}
       </span>
       {/* Stop kills only the child session's loop — the parent's turn gets
-          the aborted task result and continues on its own. */}
-      {running && sessionId && (
+          the aborted task result and continues on its own. Rendered while it
+          asks too: a child the user wants dead must not wait on its own
+          permission ask. */}
+      {(running || props.asking) && sessionId && (
         <button
           type="button"
           class="subagent-stop"
@@ -363,10 +370,9 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
         : undefined;
   // A sub-agent relayed new facts (steer) or re-attached after an interrupt
   // runs again long after its bash call closed — the child session's own
-  // status keeps the chip honest then. Tracked only for opened sessions, so
-  // a never-opened child simply falls back to the part's status.
-  const childBusy = (id: string | undefined) =>
-    id !== undefined && sessionStatus.value[id]?.type === "busy";
+  // status keeps the chip honest then. Retry counts as working (see
+  // sessionWorking): the provider backoff is mid-turn, not finished.
+  const childBusy = (id: string | undefined) => sessionWorking(id);
   // The child's pending asks — the chip's asking pulse. Permissions and
   // questions both stall the child on the user; the title says which.
   const childAsk = (
