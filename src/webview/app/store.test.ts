@@ -80,6 +80,7 @@ import {
   homeFilter,
   agents,
   hiddenModels,
+  peerNames,
 } from "./store";
 import type { ChatMessage, Status } from "./store";
 import { clampPartText, isTruncatedPart, PART_TEXT_CAP } from "./api";
@@ -1865,6 +1866,21 @@ describe("hostMessage routing", () => {
   it("hidden-models filters to strings", () => {
     hostMessage({ type: "hidden-models", ids: ["a", 2, "b"] });
     assert.deepEqual(hiddenModels.value, ["a", "b"]);
+  });
+  it("peers builds the id → name/title map", () => {
+    hostMessage({
+      type: "peers",
+      peers: [
+        { id: "ep1", name: "zen-garden", title: "Fix the rate" },
+        { id: 2, name: "bad-id" },
+        { id: "ep2", name: "", title: "empty name drops" },
+        { id: "ep3", name: "no-title", title: 7 },
+      ],
+    });
+    assert.deepEqual(peerNames.value, {
+      ep1: { name: "zen-garden", title: "Fix the rate" },
+      ep3: { name: "no-title", title: "" },
+    });
   });
   it("files-picked filters unsupported types and lands on the draft", () => {
     hostMessage({

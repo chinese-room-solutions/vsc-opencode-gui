@@ -238,6 +238,13 @@ export const hiddenModels = signal<string[]>(
   readStringList("opencode-hidden-models"),
 );
 
+// Live peer registry (opencode-plugin-peers): endpoint id → display name
+// and current session title. The host polls the plugin's registry and
+// pushes "peers" messages; peer-card headers resolve senders through it.
+export const peerNames = signal<Record<string, { name: string; title: string }>>(
+  {},
+);
+
 // A baked-in meta's JSON string array ([] when absent or malformed).
 function readStringList(name: string): string[] {
   const raw =
@@ -2196,6 +2203,7 @@ export function hostMessage(msg: unknown) {
     files?: unknown;
     modifier?: string;
     enabled?: boolean;
+    peers?: unknown;
   };
   // The webview became visible again: events streamed while VS Code had
   // it suspended were lost — pull truth.
@@ -2208,6 +2216,20 @@ export function hostMessage(msg: unknown) {
   // Manage Models ran host-side; the picker re-filters from the new list.
   if (m.type === "hidden-models" && Array.isArray(m.ids)) {
     hiddenModels.value = m.ids.filter((x): x is string => typeof x === "string");
+  }
+  // Peer registry snapshot (PeerRegistry poll). Replaces the map whole:
+  // renames and departures both land as a fresh snapshot.
+  if (m.type === "peers" && Array.isArray(m.peers)) {
+    const rows: Record<string, { name: string; title: string }> = {};
+    for (const p of m.peers) {
+      const e = p as { id?: unknown; name?: unknown; title?: unknown };
+      if (typeof e.id === "string" && typeof e.name === "string" && e.name)
+        rows[e.id] = {
+          name: e.name,
+          title: typeof e.title === "string" ? e.title : "",
+        };
+    }
+    peerNames.value = rows;
   }
   // The codeCopyModifier setting changed host-side.
   if (m.type === "copy-modifier" && typeof m.modifier === "string") {

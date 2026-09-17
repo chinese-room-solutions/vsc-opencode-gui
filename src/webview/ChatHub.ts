@@ -1,4 +1,5 @@
 import { AppHost } from "./AppHost";
+import type { PeerInfo } from "./Peers";
 
 type State =
   | { kind: "loading" }
@@ -9,6 +10,7 @@ type State =
 // webview (sidebar + editor tab), replaying it to late-attaching ones.
 export class ChatHub {
   private _state: State = { kind: "loading" };
+  private _peers: PeerInfo[] = [];
   private readonly _chats = new Set<AppHost>();
 
   // Current loading/error/url state (test surface).
@@ -19,6 +21,7 @@ export class ChatHub {
   register(chat: AppHost) {
     this._chats.add(chat);
     this._push(chat, this._state);
+    chat.setPeers(this._peers);
   }
 
   unregister(chat: AppHost) {
@@ -63,6 +66,12 @@ export class ChatHub {
   // The questionSound setting changed (main.ts watches it).
   setQuestionSound(enabled: boolean) {
     for (const chat of this._chats) chat.setQuestionSound(enabled);
+  }
+
+  // The peer registry (PeerRegistry) changed — peer cards re-name.
+  setPeers(peers: PeerInfo[]) {
+    this._peers = peers;
+    for (const chat of this._chats) chat.setPeers(peers);
   }
 
   private _broadcast() {

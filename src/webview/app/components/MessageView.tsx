@@ -7,6 +7,7 @@ import {
   fmtDur,
   insertComposerText,
   modelLabel,
+  peerNames,
   resolveFileRef,
   revertSession,
   sessionStatus,
@@ -697,14 +698,20 @@ function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
     if (peer.text) {
       // A peer injection is its own row (the plugin prompts it standalone),
       // so the whole pill becomes the peer card. No UserActions: revert and
-      // the prompt-history sweep are the user's own words' semantics.
+      // the prompt-history sweep are the user's own words' semantics. The
+      // header names the sender via the live registry (renames land), with
+      // the metadata's own fields as the fallback when the peer is gone.
+      const known = peer.from ? peerNames.value[peer.from] : undefined;
+      const head = known
+        ? known.title
+          ? `Peer · ${known.name} · "${known.title}"`
+          : `Peer · ${known.name}`
+        : peer.title || peer.from
+          ? `Peer · ${peer.title ?? peer.from}`
+          : "Peer message";
       return (
         <div class="msg user peer" onClick={jumpToTurn}>
-          <div class="peer-head">
-            {peer.title || peer.from
-              ? `Peer · ${peer.title ?? peer.from}`
-              : "Peer message"}
-          </div>
+          <div class="peer-head">{head}</div>
           <ClampedText
             text={peer.text}
             base="markdown msg-text user-text"

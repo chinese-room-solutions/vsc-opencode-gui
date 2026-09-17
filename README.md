@@ -32,6 +32,9 @@ HTTP/SSE.
   and question events.
 - **Steer mid-turn** — a prompt sent while the agent works lands at the next
   step boundary, so ongoing work stays steerable.
+- **Peer messages carry their sender** — messages from other opencode
+  sessions (opencode-plugin-peers) show the peer's name and live session
+  title; renames land within seconds.
 - **Attachments become real files** — images, PDFs, documents are snapshotted
   to the workspace before the turn starts, so the agent can reuse them on disk.
 - **Context & cost ring** — live context-window fill; click for the cost and

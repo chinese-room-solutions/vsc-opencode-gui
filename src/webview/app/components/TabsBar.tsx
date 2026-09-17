@@ -230,6 +230,16 @@ export function TabsBar() {
             <button
               class="menu-item"
               onClick={() => {
+                // The raw id (ses_…): what peer routing and the API want.
+                void navigator.clipboard.writeText(menu.id).catch(() => {});
+                closeMenu();
+              }}
+            >
+              <span class="menu-label">Copy Session ID</span>
+            </button>
+            <button
+              class="menu-item"
+              onClick={() => {
                 setRenaming(menu.id);
                 closeMenu();
               }}

@@ -6,6 +6,7 @@ import { themeStyle } from "../theme";
 import { tokenizeToTokens } from "../tokenizer";
 import { savePromptAttachments } from "../attachments";
 import { log } from "../log";
+import type { PeerInfo } from "./Peers";
 
 // The last app route (workspaceState-backed; per-folder, so no cross-folder
 // validation is needed). Baked into the page so a reload restores it.
@@ -100,6 +101,8 @@ export class AppHost implements vscode.Disposable {
   // page reaches that within 15 s, so a just-loaded webview never reads
   // as dead).
   private _lastPingAt?: number;
+  // Last peer registry snapshot (replayed on ping; see setPeers).
+  private _peers: PeerInfo[] = [];
 
   attach(webview: vscode.Webview) {
     for (const d of this._attachments) d.dispose();
@@ -150,6 +153,10 @@ export class AppHost implements vscode.Disposable {
         // isUnresponsive, the signal Restart uses to rebuild a dead tab.
         if (message.type === "ping") {
           this._lastPingAt = Date.now();
+          // Replay the peer registry: the page may have loaded after the
+          // last push, and the store set is idempotent.
+          if (this._peers.length > 0)
+            this._post({ type: "peers", peers: this._peers });
         }
         // The webview's own console is unreachable from tooling; the app
         // forwards its failure diagnostics here.
@@ -330,6 +337,14 @@ export class AppHost implements vscode.Disposable {
   // Same for questionSound.
   setQuestionSound(enabled: boolean) {
     this._post({ type: "question-sound", enabled });
+  }
+
+  // Peer registry snapshot (PeerRegistry) for peer-card headers. The page
+  // may not be listening when the first one races its load, so every ping
+  // replays it — cheap, and idempotent in the store.
+  setPeers(peers: PeerInfo[]) {
+    this._peers = peers;
+    this._post({ type: "peers", peers });
   }
 
   // The webview became visible again. VS Code suspends hidden webviews

@@ -1,9 +1,11 @@
-import { useState } from "preact/hooks";
+import { useRef, useState } from "preact/hooks";
 import type { Session } from "../api";
 import { postToHost } from "../host";
 import { RenameInput } from "../components/RenameInput";
 import {
+  CheckIcon,
   CloseIcon,
+  CopyIcon,
   NewSessionIcon,
   PencilIcon,
   SearchIcon,
@@ -313,6 +315,16 @@ function ProjectRow(props: {
 function SessionRow(props: { s: Session }) {
   const [editing, setEditing] = useState(false);
   const [armed, arm, disarm] = useArm();
+  // Copy feedback: the glyph flips to a green check for a beat (the
+  // code-block copy control's pattern, markdown.ts copyButton).
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<number | undefined>(undefined);
+  const copyId = () => {
+    void navigator.clipboard.writeText(s.id).catch(() => {});
+    setCopied(true);
+    clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(() => setCopied(false), 1200);
+  };
   const s = props.s;
   const dir = normPath(s.location?.directory ?? "");
   const foreign = dir !== currentDir.value;
@@ -365,6 +377,14 @@ function SessionRow(props: { s: Session }) {
           </button>
           <span class="row-acts">
             <button
+              class={copied ? "row-act iconic done" : "row-act iconic"}
+              // The raw id (ses_…): what peer routing and the API want.
+              title="Copy Session ID"
+              onClick={copyId}
+            >
+              {copied ? <CheckIcon /> : <CopyIcon />}
+            </button>
+            <button
               class="row-act iconic"
               title="Rename"
               onClick={() => {
@@ -376,7 +396,7 @@ function SessionRow(props: { s: Session }) {
             </button>
             <button
               class={armed ? "row-act iconic armed" : "row-act iconic"}
-              title={armed ? undefined : "Delete session"}
+              title={armed ? undefined : "Delete"}
               onClick={() => {
                 if (armed) {
                   disarm();

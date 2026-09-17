@@ -562,6 +562,12 @@ body {
   color: var(--oc-text);
 }
 
+/* The copy-id control's success beat (check glyph, markdown.ts
+   copyButton's pattern). */
+.row-act.done {
+  color: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+}
+
 .row-act.iconic {
   display: inline-flex;
   align-items: center;
@@ -2455,6 +2461,9 @@ body {
   color: var(--oc-text-2);
   font-size: 11px;
   letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .peer .user-pill {
