@@ -946,16 +946,16 @@ function TurnFooterImpl(props: { msgs: ChatMessage[]; live?: boolean }) {
     return n + Math.max(0, chars - (m.info.reportedChars ?? 0));
   }, 0);
   const gen = real + Math.round(tail / charsPerToken());
-  // The running turn samples once a second. The rate is a 12s sliding
-  // window over the char ramp (text + reasoning), scaled by the learned
-  // ratio at read time: usage reports land as jumps (tool-call tokens,
-  // estimate corrections) and would spike or dip the window; the ramp
-  // measures only what actually streamed. The window opens at the first
-  // movement — prefill emits nothing and anchoring at the row's birth
-  // bills those seconds against generation. While nothing arrives
-  // (thinking, tool phases) the last computed pace is held — and each
-  // step boundary restarts this effect, so the pace carries across in a
-  // ref instead of blanking until the next step's first tokens.
+  // The running turn samples once a second. The rate is the median of
+  // the last five moving seconds of the char ramp (text + reasoning),
+  // scaled by the learned ratio at read time: usage reports land as jumps
+  // (tool-call tokens, estimate corrections) and would spike or dip a
+  // mean, and the median also drops the slow start instead of averaging
+  // it into every reading for a full window. Seconds with no movement
+  // push no sample — pauses (thinking, tool phases) hold the last pace —
+  // and each step boundary restarts this effect, so the pace carries
+  // across in refs instead of blanking until the next step's first
+  // tokens.
   const [snap, setSnap] = useState<{
     gen: number;
     rate: number;
@@ -963,37 +963,27 @@ function TurnFooterImpl(props: { msgs: ChatMessage[]; live?: boolean }) {
   }>();
   const state = useRef({ live, gen, chars: textChars });
   state.current = { live, gen, chars: textChars };
-  const ring = useRef<{ t: number; c: number }[]>([]);
+  const paces = useRef<number[]>([]);
   const lastRate = useRef(0);
   useEffect(() => {
     if (!live) return;
-    ring.current = [{ t: Date.now(), c: state.current.chars }];
     let prevC = state.current.chars;
     let shown = lastRate.current;
     const sample = () => {
-      const now = Date.now();
       const c = state.current.chars;
-      // Flat start: slide the anchor so the window opens at the first
-      // movement, not at the turn's birth.
-      if (ring.current.length === 1 && ring.current[0].c === c)
-        ring.current[0] = { t: now, c };
-      ring.current.push({ t: now, c });
-      while (ring.current.length > 2 && ring.current[1].t <= now - 12_000)
-        ring.current.shift();
-      const first = ring.current[0];
-      const span = now - first.t;
       if (c !== prevC) {
+        paces.current.push(c - prevC);
+        if (paces.current.length > 5) paces.current.shift();
         prevC = c;
+        const sorted = [...paces.current].sort((a, b) => a - b);
         const rate =
-          span >= 1000 && c > first.c
-            ? (c - first.c) / (span / 1000) / charsPerToken()
-            : 0;
+          sorted[Math.floor(sorted.length / 2)] / charsPerToken();
         if (rate > 0) {
           shown = rate;
           lastRate.current = rate;
         }
       }
-      setSnap({ gen: state.current.gen, rate: shown, now });
+      setSnap({ gen: state.current.gen, rate: shown, now: Date.now() });
     };
     sample();
     const iv = window.setInterval(sample, 1000);
