@@ -2470,31 +2470,31 @@ body {
   min-height: 0;
 }
 
-/* Folded pills preview at a 7-line budget. Short messages stay whole and
+/* Folded pills preview at a 5-line budget. Short messages stay whole and
    bare; replies never fold — the reader comes for them in full. */
 .user-text.clamped {
-  max-height: calc(7 * 1.5em);
+  max-height: calc(5 * 1.5em);
   overflow: hidden;
 }
 
-/* An overflowing pill dissolves over its last line instead of ending in a
-   hard clip. Painted only when the clamp actually cuts (`cut`, set beside
-   `clamped`). An alpha MASK, not an overlay wash: a wash paints pill color
-   over whatever the content sits on (a dark code block) and reads as a
-   band. The gradient is fully out 0.3em into the clipped line — before its
-   glyphs begin, and at full transparency — so full lines stay solid and no
-   ghost text bakes into the bottom; "Show more" carries the there-is-more
-   hint. */
+/* An overflowing pill dissolves across its last line instead of ending in a
+    hard clip. Painted only when the clamp actually cuts (`cut`, set beside
+    `clamped`). An alpha MASK, not an overlay wash: a wash paints pill color
+    over whatever the content sits on (a dark code block) and reads as a
+    band. The gradient holds the last line's x-height solid, then fades to
+    fully transparent at the box's bottom edge — the line stays readable and
+    no ghost text bakes in below; "Show more" carries the there-is-more
+    hint. */
 .user-text.clamped.cut {
   -webkit-mask-image: linear-gradient(
     to bottom,
-    #000 calc(100% - 1.5em),
-    transparent calc(100% - 1.2em)
+    #000 calc(100% - 0.8em),
+    transparent calc(100% - 0.05em)
   );
   mask-image: linear-gradient(
     to bottom,
-    #000 calc(100% - 1.5em),
-    transparent calc(100% - 1.2em)
+    #000 calc(100% - 0.8em),
+    transparent calc(100% - 0.05em)
   );
 }
 
@@ -3303,14 +3303,16 @@ a.tool-pill:hover {
 .home,
 .menu-list,
 .ctx-body,
-.ctx-raw {
+.ctx-raw,
+.tb-tabs {
   scrollbar-width: none;
 }
 
 .home::-webkit-scrollbar,
 .menu-list::-webkit-scrollbar,
 .ctx-body::-webkit-scrollbar,
-.ctx-raw::-webkit-scrollbar {
+.ctx-raw::-webkit-scrollbar,
+.tb-tabs::-webkit-scrollbar {
   display: none;
 }
 
