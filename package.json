@@ -4,7 +4,7 @@
   "description": "opencode GUI for local and remote VS Code workspaces",
   "publisher": "chinese-room-solutions",
   "author": "Chinese Room Solutions",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "repository": {
     "type": "git",
     "url": "https://github.com/chinese-room-solutions/vsc-opencode-gui.git"
