@@ -37,7 +37,7 @@ export class ChatPanel implements vscode.Disposable {
     projectStore: ProjectStore,
     openProject: OpenProjectHandler,
     hiddenModels: HiddenModels,
-    panel?: vscode.WebviewPanel,
+    column?: vscode.ViewColumn,
   ) {
     this._hub = hub;
     this._onDispose = onDispose;
@@ -49,14 +49,12 @@ export class ChatPanel implements vscode.Disposable {
       openProject,
       hiddenModels,
     );
-    this._panel =
-      panel ??
-      vscode.window.createWebviewPanel(
-        CHAT_VIEWTYPE,
-        "Open Code Sessions",
-        vscode.ViewColumn.Active,
-        { enableScripts: true, retainContextWhenHidden: true, enableFindWidget: true },
-      );
+    this._panel = vscode.window.createWebviewPanel(
+      CHAT_VIEWTYPE,
+      "Open Code Sessions",
+      column ?? vscode.ViewColumn.Active,
+      { enableScripts: true, retainContextWhenHidden: true, enableFindWidget: true },
+    );
     // Tab icon; panel tab icons don't support SVG, so PNG.
     this._panel.iconPath = vscode.Uri.joinPath(extensionUri, "icon.png");
     this._panel.onDidDispose(() => {
@@ -80,12 +78,15 @@ export class ChatPanel implements vscode.Disposable {
     return ChatPanel._instance;
   }
 
-  // Adopt a panel VS Code restored after a window reload instead of
-  // creating a new one. On a relaunch both this and the startup
-  // showPanel() can run: the restored panel wins (it sits in the group the
-  // user left it in), the other tab is dropped — keeping both is how empty
-  // duplicate tabs accumulated across relaunches.
-  static restore(
+  // A tab VS Code restored after a window reload comes back with the
+  // options it was persisted with — and panel options are readonly, so a
+  // tab persisted without enableFindWidget is Ctrl+F-dead forever if
+  // adopted. Swap it instead: a fresh panel in the same column first (the
+  // group never empties), then drop the restored one. The restored panel's
+  // options aren't readable from the API, so every restore swaps; from
+  // then on the persisted tab carries the flag and the swap is just the
+  // normal revive reboot.
+  static replace(
     hub: ChatHub,
     extensionUri: vscode.Uri,
     panel: vscode.WebviewPanel,
@@ -106,8 +107,9 @@ export class ChatPanel implements vscode.Disposable {
       projectStore,
       openProject,
       hiddenModels,
-      panel,
+      panel.viewColumn ?? vscode.ViewColumn.Active,
     );
+    panel.dispose();
     return ChatPanel._instance;
   }
 

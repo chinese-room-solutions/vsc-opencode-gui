@@ -231,13 +231,15 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   // Bring back the editor tab after a window reload/restart, like any
-  // other editor tab. A restored tab means the user had chat open.
+  // other editor tab. A restored tab means the user had chat open; it is
+  // swapped for a fresh panel (ChatPanel.replace) because a revived one
+  // carries its persisted panel options, which predate enableFindWidget.
   context.subscriptions.push(
     vscode.window.registerWebviewPanelSerializer(CHAT_VIEWTYPE, {
       deserializeWebviewPanel: (panel) => {
         ensureServer();
         void context.workspaceState.update("opencode.panelOpen", true);
-        ChatPanel.restore(
+        ChatPanel.replace(
           hub,
           context.extensionUri,
           panel,
