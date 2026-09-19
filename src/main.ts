@@ -299,11 +299,39 @@ export function activate(context: vscode.ExtensionContext) {
   // Reopen the chat tab if it was open before restart but left no tab to
   // restore (state loss). When a tab was restored, the serializer claims
   // it; creating ours alongside it is the duplicate-tab bug.
-  if (
-    context.workspaceState.get<boolean>("opencode.panelOpen") &&
-    !vscode.window.tabGroups.all.some((g) => g.tabs.some(isChatTab))
-  ) {
-    showPanel();
+  if (context.workspaceState.get<boolean>("opencode.panelOpen")) {
+    const chatTabs = (viewType: string) =>
+      vscode.window.tabGroups.all.flatMap((g) =>
+        g.tabs.filter(
+          (t) => (t.input as { viewType?: string })?.viewType === viewType,
+        ),
+      );
+    const stale = () => [
+      ...chatTabs(CHAT_VIEWTYPE),
+      ...chatTabs(`mainThreadWebview-${CHAT_VIEWTYPE}`),
+    ];
+    const heal = () => {
+      if (ChatPanel.instance) return;
+      for (const tab of stale()) void vscode.window.tabGroups.close(tab);
+      showPanel();
+    };
+    if (stale().length === 0) {
+      showPanel();
+    } else {
+      // The serializer is the designated reviver, but after an
+      // extension-host restart the surviving tab never deserializes —
+      // no panel, no server, a frozen page as the whole UI. A live
+      // restore is claimed within moments of activation, so an active
+      // tab still unclaimed after 2 s is that corpse: heal fast (the
+      // user is staring at it). A hidden/background tab may deserialize
+      // only when shown, so it gets the long grace instead.
+      const grace = stale().some((t) => t.isActive) ? 2_000 : 10_000;
+      const claimTimer = setTimeout(heal, grace);
+      claimTimer.unref?.();
+      context.subscriptions.push({
+        dispose: () => clearTimeout(claimTimer),
+      });
+    }
   }
 
   // A chat tab can also close without ever being shown (closed from the
