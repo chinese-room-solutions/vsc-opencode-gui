@@ -36,4 +36,8 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" *.vsix --title "$GITHUB_REF_NAME" --generate-notes
+        # Idempotent: if the release already exists (created manually or by a
+        # re-run), fall back to uploading the VSIX into it.
+        run: >
+          gh release create "$GITHUB_REF_NAME" *.vsix --title "$GITHUB_REF_NAME" --generate-notes
+          || gh release upload "$GITHUB_REF_NAME" *.vsix --clobber
