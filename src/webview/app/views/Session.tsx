@@ -8,34 +8,28 @@ import {
   StatusStats,
   TurnFooter,
 } from "../components/MessageView";
-import { RenameInput } from "../components/RenameInput";
-import { DotsIcon, StopIcon, WordmarkIcon } from "../icons";
+import { StopIcon, WordmarkIcon } from "../icons";
 import { isText, isTool } from "../api";
 import {
-  deleteSession,
   interruptedPrompts,
   loadOlderMessages,
   hasOlder,
   markPromptStopped,
   messagesBySession,
   messagesFor,
-  popover,
   hasQueued,
   liveAssistantId,
   refreshMessages,
   refreshPermissions,
   refreshQuestions,
   refreshStatuses,
-  renameSession,
   sendError,
   sessionStatus,
   sessionTitle,
   sessions,
-  setPopover,
   stoppedPrompts,
 } from "../store";
 import { navigate } from "../router";
-import { useArm } from "../useArm";
 import type { ChatMessage } from "../store";
 
 // A turn is one prompt plus everything answering it. The v2 rows are flat
@@ -78,8 +72,6 @@ export function Session(props: { sessionId?: string; parent?: string }) {
   const id = props.sessionId;
   const list = id ? messagesFor(id).value : undefined;
   const session = id ? sessions.value.find((s) => s.id === id) : undefined;
-  const title = id ? (session?.title ?? id) : "";
-  const [renaming, setRenaming] = useState(false);
   const parentSession = props.parent
     ? sessions.value.find((s) => s.id === props.parent)
     : undefined;
@@ -441,18 +433,7 @@ export function Session(props: { sessionId?: string; parent?: string }) {
               <span class="crumb-here">{sessionTitle(session, id)}</span>
             </nav>
           )}
-          {renaming && (
-            <HeadRename
-              id={id}
-              title={title}
-              onDone={() => setRenaming(false)}
-            />
-          )}
           <ContextRing sessionId={id} />
-          <HeadMenu
-            id={id}
-            onRename={() => setRenaming(true)}
-          />
         </div>
       )}
       {/* The fade overlay hangs off the wrap, not the scroller: inside it
@@ -603,81 +584,5 @@ export function Session(props: { sessionId?: string; parent?: string }) {
         <Composer sessionId={id} status={st} />
       </div>
     </div>
-  );
-}
-
-// The session head's "…": rename and delete, the actions the tab's
-// right-click menu also offers. Delete arms on the first click. It shares
-// the app's one-open-popover rule (closing the ring and the composer
-// pickers when it opens, and vice versa).
-function HeadMenu(props: { id: string; onRename: () => void }) {
-  const open = popover.value === "headmenu";
-  const [armed, arm, disarm] = useArm();
-
-  const close = () => {
-    setPopover(undefined);
-    disarm();
-  };
-
-  const del = () => {
-    if (!armed) {
-      arm();
-      return;
-    }
-    close();
-    void deleteSession(props.id);
-  };
-
-  return (
-    <div class="headmenu">
-      {open && <div class="backdrop" onClick={close} />}
-      <button
-        type="button"
-        class="headmenu-btn"
-        title="Session actions"
-        aria-label="Session actions"
-        aria-expanded={open}
-        onClick={() => setPopover(open ? undefined : "headmenu")}
-      >
-        <DotsIcon />
-      </button>
-      {open && (
-        <div class="menu headmenu-pop">
-          <button
-            class="menu-item"
-            onClick={() => {
-              close();
-              props.onRename();
-            }}
-          >
-            <span class="menu-texts">
-              <span class="menu-label">Rename</span>
-            </span>
-          </button>
-          <div class="menu-sep" />
-          <button
-            class={armed ? "menu-item armed" : "menu-item"}
-            onClick={del}
-          >
-            <span class="menu-texts">
-              <span class="menu-label">
-                {armed ? "Confirm Deletion" : "Delete…"}
-              </span>
-            </span>
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function HeadRename(props: { id: string; title: string; onDone: () => void }) {
-  return (
-    <RenameInput
-      class="rename-input head-rename"
-      title={props.title}
-      onCommit={(t) => void renameSession(props.id, t)}
-      onCancel={props.onDone}
-    />
   );
 }

@@ -173,16 +173,6 @@ export function StopIcon() {
   );
 }
 
-export function DotsIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
-      <circle cx="3.2" cy="8" r="1.4" fill="currentColor" />
-      <circle cx="8" cy="8" r="1.4" fill="currentColor" />
-      <circle cx="12.8" cy="8" r="1.4" fill="currentColor" />
-    </svg>
-  );
-}
-
 export function SlidersIcon() {
   return (
     <svg

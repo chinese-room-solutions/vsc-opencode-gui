@@ -354,11 +354,11 @@ export function fmtDur(secs: number): string {
   return out;
 }
 
-// The one popover/menu currently open — composer pickers, the session head's
-// "…" menu, and the ring's context panel ("ctx"). Mutually exclusive:
+// The one popover/menu currently open — composer pickers and the ring's
+// context panel ("ctx"). Mutually exclusive:
 // opening one dismisses the others instead of stacking panels. The panel is
 // also toggled from the host command.
-export type Popover = "model" | "variant" | "agent" | "headmenu" | "ctx";
+export type Popover = "model" | "variant" | "agent" | "ctx";
 export const popover = signal<Popover | undefined>(undefined);
 
 export function setPopover(p: Popover | undefined): void {

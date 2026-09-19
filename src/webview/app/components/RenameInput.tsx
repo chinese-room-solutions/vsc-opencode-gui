@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 
-// Inline rename field shared by the tab bar, the session head, and Home's
+// Inline rename field shared by the tab bar and Home's
 // rows: Enter commits the trimmed text (no-op when empty or unchanged),
 // Escape/blur cancel. Focus+select happens once on mount — a function ref
 // re-runs on every render, so selecting there re-selected all text on each
