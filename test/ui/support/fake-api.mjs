@@ -348,6 +348,38 @@ function runSteps(sid) {
   });
 }
 
+// Batched-delivery scenario for the live token-rate counter: one
+// underlying pace (~170 chars/150ms) delivered two ways — steady 150ms
+// deltas, then one 2.8k-char batch every 2.5s (the provider-offload
+// pattern that reads as pace when seconds without movement are dropped
+// from the window). Usage lands only at the end; the spec compares the
+// two phases' displayed rates.
+function runBatches(sid) {
+  stepsActive = true;
+  stepsRows = [];
+  const n = nextTurn++;
+  const t = Date.now();
+  const u = `msg_u${n}`;
+  const A = `msg_aA${n}`;
+  const p1 = `pt_b1${n}`;
+  const at = (ms, fn) => later(fn, ms);
+  const msg = (ms, info) =>
+    at(ms, () => { const i = typeof info === "function" ? info() : info; emitV1("message.updated", { sessionID: sid, info: i }); trackInfo(i); });
+  const part = (ms, p) =>
+    at(ms, () => { const q = typeof p === "function" ? p() : p; emitV1("message.part.updated", { sessionID: sid, part: q }); trackPart(q); });
+  msg(150, { id: u, role: "user", time: { created: t } });
+  msg(300, { id: A, role: "assistant", time: { created: t + 250 }, providerID: "fake", modelID: "fake-model", agent: "build" });
+  part(400, { id: p1, messageID: A, sessionID: sid, type: "text", text: "" });
+  streamText(sid, A, p1, { first: 500, count: 20, chars: 170, interval: 150, onChunk: (d) => trackText(A, p1, d) });
+  streamText(sid, A, p1, { first: 4000, count: 6, chars: 2800, interval: 2500, onChunk: (d) => trackText(A, p1, d) });
+  part(17200, { id: "sf_b1", messageID: A, sessionID: sid, type: "step-finish", tokens: { input: 100, output: 5000, reasoning: 0, cache: { read: 0, write: 0 } } });
+  msg(17300, () => ({ id: A, role: "assistant", time: { created: t + 250, completed: Date.now() }, providerID: "fake", modelID: "fake-model", agent: "build" }));
+  at(17500, () => {
+    emitV1("session.idle", { sessionID: sid });
+    stepsActive = false;
+  });
+}
+
 // --- HTTP plumbing ---
 const CORS = {
   "access-control-allow-origin": "*",
@@ -410,6 +442,15 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       runSteps(SESSION_ID);
+      json(res, 200, { ok: true });
+      return;
+    }
+    if (method === "POST" && path === "/__control/batches") {
+      if (streamCount > 0 || stepsActive) {
+        json(res, 409, { error: "scenario in flight" });
+        return;
+      }
+      runBatches(SESSION_ID);
       json(res, 200, { ok: true });
       return;
     }

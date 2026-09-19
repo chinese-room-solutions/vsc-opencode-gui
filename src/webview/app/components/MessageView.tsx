@@ -953,42 +953,49 @@ function TurnFooterImpl(props: { msgs: ChatMessage[]; live?: boolean }) {
     return n + Math.max(0, chars - (m.info.reportedChars ?? 0));
   }, 0);
   const gen = real + Math.round(tail / charsPerToken());
-  // The running turn samples once a second. The rate is the median of
-  // the last five moving seconds of the char ramp (text + reasoning),
-  // scaled by the learned ratio at read time: usage reports land as jumps
-  // (tool-call tokens, estimate corrections) and would spike or dip a
-  // mean, and the median also drops the slow start instead of averaging
-  // it into every reading for a full window. Seconds with no movement
-  // push no sample — pauses (thinking, tool phases) hold the last pace —
-  // and each step boundary restarts this effect, so the pace carries
-  // across in refs instead of blanking until the next step's first
-  // tokens.
+  // The running turn samples once a second. The rate is the char ramp's
+  // mean over the last seven seconds, net of tool time, scaled by the
+  // learned ratio at read time: providers offload tokens in batches, so
+  // one second's delta can carry several seconds of generation, and a
+  // per-move median reads each batch as pace — the idle seconds the
+  // batch accumulated over never entered its window. The mean over
+  // idle seconds too amortizes batches to delivered throughput; netting
+  // out the tool-busy span keeps tool phases (which stream no text)
+  // from dragging it, the same subtraction the settled rate applies. A
+  // zero reading holds the last nonzero one rather than blanking
+  // mid-turn, and the window lives in a ref so each step boundary
+  // restart carries it across.
   const [snap, setSnap] = useState<{
     gen: number;
     rate: number;
     now: number;
   }>();
-  const state = useRef({ live, gen, chars: textChars });
-  state.current = { live, gen, chars: textChars };
-  const paces = useRef<number[]>([]);
+  const state = useRef({ live, gen, chars: textChars, busy: 0 });
+  state.current = {
+    live,
+    gen,
+    chars: textChars,
+    busy: toolBusyMs(props.msgs, Date.now()),
+  };
+  const hist = useRef<{ c: number; b: number }[]>([]);
   const lastRate = useRef(0);
   useEffect(() => {
     if (!live) return;
-    let prevC = state.current.chars;
     let shown = lastRate.current;
     const sample = () => {
-      const c = state.current.chars;
-      if (c !== prevC) {
-        paces.current.push(c - prevC);
-        if (paces.current.length > 5) paces.current.shift();
-        prevC = c;
-        const sorted = [...paces.current].sort((a, b) => a - b);
-        const rate =
-          sorted[Math.floor(sorted.length / 2)] / charsPerToken();
-        if (rate > 0) {
-          shown = rate;
-          lastRate.current = rate;
-        }
+      const h = hist.current;
+      h.push({ c: state.current.chars, b: state.current.busy });
+      if (h.length > 8) h.shift();
+      const spanS = h.length - 1;
+      const rate =
+        spanS > 0
+          ? Math.max(0, h[h.length - 1].c - h[0].c) /
+            charsPerToken() /
+            Math.max(1, spanS - (state.current.busy - h[0].b) / 1000)
+          : 0;
+      if (rate > 0) {
+        shown = rate;
+        lastRate.current = rate;
       }
       setSnap({ gen: state.current.gen, rate: shown, now: Date.now() });
     };

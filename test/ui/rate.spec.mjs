@@ -66,3 +66,49 @@ test("rate holds through usage bursts and tool-only steps", async ({ page, rig }
 
   expect(watched.errors).toEqual([]);
 });
+
+// The same underlying pace (~170 chars/150ms) delivered two ways: steady
+// 150ms deltas, then one 2.8k-char batch every 2.5s — the offload pattern
+// providers show. The displayed rate must not depend on delivery shape: a
+// sampler that drops no-movement seconds reads the batch size as pace
+// (~2.5x here) while the idle seconds the batch accumulated over never
+// count.
+test("batched delivery reads the same pace as steady delivery", async ({ page, rig }) => {
+  const watched = watchPage(page);
+  await openSession(page, rig.url);
+
+  await control(rig, "/__control/batches", {});
+  const samples = await pollFooter(page, 20_000);
+  const dump = () => samples.map((s) => `${s.t}:${s.rate ?? "-"}`).join(" ");
+  const med = (a, b) => {
+    const v = samples
+      .filter((s) => s.t >= a && s.t <= b)
+      .map((s) => s.rate)
+      .filter((r) => r !== null && r > 0);
+    v.sort((x, y) => x - y);
+    expect(v.length, dump()).toBeGreaterThan(4);
+    return v[Math.floor(v.length / 2)];
+  };
+
+  // Steady phase (deltas 0.5s-3.35s) reads a positive pace.
+  const steady = med(2500, 3900);
+
+  // Batchy phase (4s-16.5s) reads within 1.7x of steady — same generation,
+  // different arrival shape.
+  const batchy = med(11000, 16000);
+  expect(batchy / steady, dump()).toBeGreaterThan(0.55);
+  expect(batchy / steady, dump()).toBeLessThan(1.7);
+
+  // No blanks across the live span, batchy phase included.
+  const missing = samples
+    .filter((s) => s.t >= 1500 && s.t <= 16000)
+    .filter((s) => s.rate === null);
+  expect(missing, dump()).toEqual([]);
+
+  // Settled (idle at 17.5s): the whole-turn pace agrees with the live one.
+  const settled = med(18000, 20000);
+  expect(settled / steady, dump()).toBeGreaterThan(0.6);
+  expect(settled / steady, dump()).toBeLessThan(1.6);
+
+  expect(watched.errors).toEqual([]);
+});
