@@ -8,7 +8,7 @@
 ![opencode CLI](https://img.shields.io/badge/requires-opencode_CLI-8A2BE2)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-<img src="assets/hero.png" alt="VSC OpenCode GUI new-session view with prompt composer in a VS Code editor tab">
+<img src="https://github.com/chinese-room-solutions/vsc-opencode-gui/releases/download/media/vsc-opencode-gui.gif" alt="VSC OpenCode GUI demo: session home, chat in an editor tab, mid-turn steering">
 </div>
 
 VSC OpenCode GUI puts the [opencode](https://opencode.ai) agent in a native

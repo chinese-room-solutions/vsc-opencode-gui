@@ -4,9 +4,6 @@ out/
 .playwright-mcp/
 *.vsix
 *.png
-!assets/
-!assets/**
-AGENTS.md
 .rig-q*/
 .rig-q*.log
 .oc-data/
