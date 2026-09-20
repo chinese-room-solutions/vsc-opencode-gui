@@ -53,8 +53,7 @@ import {
   isText,
   isTool,
   clampPartText,
-  clampToolOutput,
-  PART_TEXT_CAP,
+  clampToolState,
   forgetTruncatedParts,
   isTruncatedPart,
   stringifyError,
@@ -716,15 +715,14 @@ export async function renameProject(
   return true;
 }
 
-// Close a tab and drop its cached transcript — reopening refetches. The
-// router stays free of store imports; this is the tab-close entry point.
-export function closeSessionTab(id: string): void {
+// Drop one session's cached transcript: rows, computed view, older-page
+// cursor/pool, truncation markers.
+function dropTranscript(id: string): void {
   forgetTruncatedParts(
     (messagesBySession.value.get(id) ?? []).flatMap((m) =>
       m.parts.map((p) => p.id),
     ),
   );
-  closeTab(id);
   // The computed view dies with the transcript; a future open builds a
   // fresh one.
   listViews.delete(id);
@@ -737,17 +735,28 @@ export function closeSessionTab(id: string): void {
   olderPool.delete(id);
 }
 
+// A viewed sub-agent session loads its transcript under its own id; sweep
+// the children with the parent or they (and their whole-transcript
+// reconnect refetches) stay in memory for the webview's life.
+function dropChildTranscripts(parentID: string): void {
+  for (const kid of sessions.value)
+    if (kid.parentID === parentID) dropTranscript(kid.id);
+}
+
+// Close a tab and drop its cached transcript — reopening refetches. The
+// router stays free of store imports; this is the tab-close entry point.
+export function closeSessionTab(id: string): void {
+  dropChildTranscripts(id);
+  dropTranscript(id);
+  closeTab(id);
+}
+
 // Drop a session from every local store; its tab (if any) closes, and a
 // closed active tab goes home.
 function dropSessionLocal(id: string): void {
   // Every per-session store, or deletes leak state.
   cancelIdle(id);
   cancelRing(id);
-  forgetTruncatedParts(
-    (messagesBySession.value.get(id) ?? []).flatMap((m) =>
-      m.parts.map((p) => p.id),
-    ),
-  );
   sessions.value = sessions.value.filter((s) => s.id !== id);
   if (pickedVariants.delete(id)) savePickedVariants();
   restoringVariants.delete(id);
@@ -772,10 +781,6 @@ function dropSessionLocal(id: string): void {
   stoppedPrompts.value = new Set(
     [...stoppedPrompts.value].filter((s) => s !== id),
   );
-  const cursors = new Map(messagesCursor.value);
-  cursors.delete(id);
-  messagesCursor.value = cursors;
-  olderPool.delete(id);
   loadingMessages.delete(id);
   loadingOlder.delete(id);
   postedRows.delete(id);
@@ -1035,16 +1040,8 @@ function upsertPart(sessionID: string, part: Part): void {
   // Display-only text clamps before it enters state (see clampPartText).
   if (isText(part) && typeof part.text === "string")
     part = { ...part, text: clampPartText(part.id, part.text) };
-  if (
-    isTool(part) &&
-    part.state &&
-    typeof part.state.output === "string" &&
-    part.state.output.length > PART_TEXT_CAP
-  )
-    part = {
-      ...part,
-      state: { ...part.state, output: clampToolOutput(part.id, part.state.output) },
-    };
+  if (isTool(part) && part.state)
+    part = { ...part, state: clampToolState(part.id, part.state) };
   mutateMessages(sessionID, (list) =>
     list.map((m) => {
       if (m.info.id !== part.messageID) return m;
@@ -1948,7 +1945,7 @@ function patchToolState(
             ...m,
             parts: m.parts.map((p) =>
               p.id === callID && isTool(p) && p.state
-                ? { ...p, state: fn(p.state) }
+                ? { ...p, state: clampToolState(callID, fn(p.state)) }
                 : p,
             ),
           },

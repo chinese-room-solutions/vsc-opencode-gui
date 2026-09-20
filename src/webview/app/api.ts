@@ -437,9 +437,7 @@ const PART_TEXT_HEAD = 524_288;
 const PART_TEXT_TAIL = 65_536;
 const truncatedParts = new Set<string>();
 
-export function clampPartText(partID: string, text: string): string {
-  if (text.length <= PART_TEXT_CAP) return text;
-  truncatedParts.add(partID);
+function clampText(text: string): string {
   return (
     text.slice(0, PART_TEXT_HEAD) +
     `\n\n[… truncated for display — ${text.length} chars total …]\n\n` +
@@ -447,10 +445,59 @@ export function clampPartText(partID: string, text: string): string {
   );
 }
 
+export function clampPartText(partID: string, text: string): string {
+  if (text.length <= PART_TEXT_CAP) return text;
+  truncatedParts.add(partID);
+  return clampText(text);
+}
+
 // Tool outputs render beside text rows and update as whole strings on the
 // stream — same clamp, same tracker.
 export const clampToolOutput = (partID: string, output: string): string =>
   clampPartText(partID, output);
+
+// Deep clamp for the structured blobs no stream delta ever appends to
+// (tool input/structured/metadata arrive whole), so they don't register in
+// the truncation tracker.
+const CLAMP_DEEP_DEPTH = 8;
+function clampStringsDeep(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") return value.length <= PART_TEXT_CAP ? value : clampText(value);
+  if (depth >= CLAMP_DEEP_DEPTH || typeof value !== "object" || value === null)
+    return value;
+  if (Array.isArray(value))
+    return value.map((v) => clampStringsDeep(v, depth + 1));
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value))
+    out[k] = clampStringsDeep(v, depth + 1);
+  return out;
+}
+
+// Bound one tool part's state — applied at every entry path (live stream,
+// durable fetch, legacy fetch) so no dialect can smuggle a multi-MB payload
+// into state. Tool input (a write's whole file content), structured
+// (unified patches) and metadata (legacy diffs) hold the bulk of a coding
+// transcript; display reads only small fields off them, so the cap loses
+// nothing visible. A content[] result folds into output (the display copy)
+// and is then dropped — kept raw it holds the text twice.
+export function clampToolState(
+  partID: string,
+  state: ToolState,
+): ToolState {
+  const next = { ...state };
+  if (!next.output && Array.isArray(next.content)) {
+    const texts = next.content
+      .map((c) => (typeof c?.text === "string" ? c.text : ""))
+      .filter(Boolean);
+    if (texts.length > 0) next.output = texts.join("\n");
+  }
+  if (typeof next.output === "string")
+    next.output = clampToolOutput(partID, next.output);
+  next.input = clampStringsDeep(next.input) as ToolState["input"];
+  next.structured = clampStringsDeep(next.structured) as ToolState["structured"];
+  next.metadata = clampStringsDeep(next.metadata) as ToolState["metadata"];
+  delete next.content;
+  return next;
+}
 
 export const isTruncatedPart = (partID: string): boolean =>
   truncatedParts.has(partID);
@@ -582,16 +629,6 @@ export async function fetchMessages(
       if (isText(p) && typeof p.text === "string")
         p.text = clampPartText(p.id, p.text);
       if (!isTool(p) || !p.state) continue;
-      // A durable completed tool has no output string — its result lives in
-      // content text items. Fold them in so a reload keeps the transcript's
-      // outputs (the tool body's OUT row reads this).
-      const texts = (p.state.content ?? [])
-        .map((c) => c.text ?? "")
-        .filter(Boolean);
-      if (!p.state.output && texts.length > 0)
-        p.state.output = texts.join("\n");
-      if (typeof p.state.output === "string")
-        p.state.output = clampToolOutput(p.id, p.state.output);
       // A row that never ran keeps its input as the JSON text the stream
       // was writing when the turn died; the live dialect serves the object.
       const raw = p.state.input as unknown;
@@ -605,6 +642,7 @@ export async function fetchMessages(
       if (typeof p.state.error === "object" && p.state.error !== null) {
         p.state = { ...p.state, error: stringifyError(p.state.error) };
       }
+      p.state = clampToolState(p.id, p.state);
     }
     const info: Message = {
       id: r.id,
@@ -657,9 +695,13 @@ export async function fetchLegacyMessages(
       .map((p) => {
         if (isText(p) && typeof p.text === "string")
           p.text = clampPartText(p.id, p.text);
-        return p.type === "tool" && (p as { tool?: string }).tool === undefined
-          ? { ...p, tool: (p as { name?: string }).name }
-          : p;
+        const named =
+          p.type === "tool" && (p as { tool?: string }).tool === undefined
+            ? { ...p, tool: (p as { name?: string }).name }
+            : p;
+        return isTool(named) && named.state
+          ? { ...named, state: clampToolState(named.id, named.state) }
+          : named;
       }),
   }));
 }
