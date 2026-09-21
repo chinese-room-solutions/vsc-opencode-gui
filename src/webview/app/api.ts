@@ -38,6 +38,17 @@ export type SessionStatus =
   | { type: "busy" }
   | { type: "retry"; attempt: number; message: string; next: number };
 
+// capabilities.input of a catalog model: the modalities it accepts. Absent
+// (model missing from the catalog, or no capabilities block) means unknown —
+// callers fall back to the legacy attachment allowlist.
+export interface ModelInput {
+  text?: boolean;
+  audio?: boolean;
+  image?: boolean;
+  video?: boolean;
+  pdf?: boolean;
+}
+
 // GET /provider. `default` is a lookup map, never rendered. Only the model
 // `limit` is read (context-window size for the ring).
 export interface Providers {
@@ -52,6 +63,7 @@ export interface Providers {
         name?: string;
         variants?: Record<string, unknown>;
         limit?: { context?: number };
+        capabilities?: { attachment?: boolean; input?: ModelInput };
       }
     >;
   }[];
@@ -833,6 +845,16 @@ const MIME_OF_EXT: Record<string, string> = {
   gif: "image/gif",
   webp: "image/webp",
   pdf: "application/pdf",
+  mp3: "audio/mpeg",
+  wav: "audio/wav",
+  ogg: "audio/ogg",
+  m4a: "audio/mp4",
+  flac: "audio/flac",
+  aac: "audio/aac",
+  mp4: "video/mp4",
+  webm: "video/webm",
+  mov: "video/quicktime",
+  mkv: "video/x-matroska",
 };
 
 // Attachable text extensions — source, config, data. Anything attachable
@@ -845,16 +867,50 @@ const TEXT_EXT = new Set(
 const TEXT_MIME_RE = /text\/|application\/(json|ld\+json|toml|x-toml|x-yaml|xml|yaml|javascript)/;
 
 // Type and gate of an attached file, decided from its name and blob type.
-// Images and pdf are known by extension (or a sniffed blob type, when the
-// name has none); text extensions ride as text/plain; anything else is
-// refused — an unknown mime reaches the endpoint as a binary blob it
-// "reads" into the context as raw bytes. `undefined` = not attachable.
+// Images, pdf and audio/video are known by extension (or a sniffed blob
+// type, when the name has none); text extensions ride as text/plain;
+// anything else is refused — an unknown mime reaches the endpoint as a
+// binary blob it "reads" into the context as raw bytes. `undefined` = not
+// classifiable from name/type; callers may then sniff content (sniffsText).
 export function attachMime(name: string, type: string): string | undefined {
   const ext = extOf(name);
   if (MIME_OF_EXT[ext]) return MIME_OF_EXT[ext];
   if (TEXT_EXT.has(ext) || TEXT_MIME_RE.test(type)) return "text/plain";
   if (type && Object.values(MIME_OF_EXT).includes(type)) return type;
   return undefined;
+}
+
+// Content sniff for files the name/type layers couldn't classify: the
+// prefix rides as text iff it holds no NUL byte and decodes as UTF-8.
+// The stream option tolerates a read window cut mid-codepoint — a text
+// file must not be refused because its first 8 KB ended inside a char.
+export function sniffsText(bytes: Uint8Array): boolean {
+  if (bytes.includes(0)) return false;
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes, {
+      stream: true,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Model-aware half of the gate: may a mime ride to a model whose catalog
+// entry declares `input`? Text (and the directory mention mime) always
+// passes; every other modality needs its flag. `input` undefined — the
+// catalog doesn't know the model — keeps the legacy allowlist: image+pdf
+// pass, audio/video don't.
+export function attachAllowed(mime: string, input?: ModelInput): boolean {
+  if (mime.startsWith("text/") || mime === "application/x-directory")
+    return true;
+  if (input === undefined)
+    return mime.startsWith("image/") || mime === "application/pdf";
+  if (mime.startsWith("image/")) return input.image === true;
+  if (mime === "application/pdf") return input.pdf === true;
+  if (mime.startsWith("audio/")) return input.audio === true;
+  if (mime.startsWith("video/")) return input.video === true;
+  return false;
 }
 
 function fileMime(uri: string): string {

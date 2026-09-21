@@ -598,7 +598,26 @@ const server = http.createServer(async (req, res) => {
     if (path === "/api/session") { json(res, 200, { data: [sessionRow], cursor: {} }); return; }
     if (path === "/provider") {
       json(res, 200, {
-        all: [{ id: "fake", name: "Fake Labs", models: { "fake-model": { name: "Fake Model", limit: { context: 200_000 }, variants: { default: {}, high: {} } } } }],
+        all: [{
+          id: "fake",
+          name: "Fake Labs",
+          models: {
+            // The seeded session's model: legacy-ish multimodal (image+pdf,
+            // no audio/video) — existing attachment specs ride on it.
+            "fake-model": {
+              name: "Fake Model",
+              limit: { context: 200_000 },
+              variants: { default: {}, high: {} },
+              capabilities: { input: { text: true, image: true, pdf: true, audio: false, video: false } },
+            },
+            // Audio-only twin for the attach-gate spec: denies image/pdf.
+            "fake-audio": {
+              name: "Fake Audio",
+              limit: { context: 100_000 },
+              capabilities: { input: { text: true, image: false, pdf: false, audio: true, video: false } },
+            },
+          },
+        }],
         default: { fake: "fake-model" },
         connected: ["fake"],
       });

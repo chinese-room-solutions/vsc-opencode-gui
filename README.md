@@ -34,6 +34,9 @@ HTTP/SSE.
   sender's name and live session title (opencode-plugin-peers).
 - **Attachments become real files** - images, PDFs, and documents are saved
   into the workspace before the turn starts, ready for the agent to reuse.
+  Media types gate on the active model's input support - text always
+  attaches, and any file whose first bytes read as UTF-8 text attaches by
+  content, not by extension list.
 - **Context & cost ring** - live context-window fill, click for the cost and
   token breakdown.
 - **Remote-ready** - over SSH, dev containers, WSL, or Codespaces the

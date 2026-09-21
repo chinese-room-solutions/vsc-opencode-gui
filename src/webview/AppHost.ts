@@ -204,7 +204,9 @@ export class AppHost implements vscode.Disposable {
           void vscode.commands.executeCommand("opencodeGui.manageModels");
         }
         // Composer "+": native multi-select dialog; the picks go back as
-        // {uri, name} chips the next prompt sends as file parts.
+        // {uri, name, text} chips the next prompt sends as file parts.
+        // Textiness is stamped here by sniffing each file's head — best
+        // effort per file, an unreadable head just skips the stamp.
         if (message.type === "attach-file") {
           void (async () => {
             try {
@@ -213,13 +215,22 @@ export class AppHost implements vscode.Disposable {
                 openLabel: "Attach",
               });
               if (!uris?.length) return;
-              this._post({
-                type: "files-picked",
-                files: uris.map((u) => ({
-                  uri: u.toString(true),
-                  name: path.basename(u.fsPath),
-                })),
-              });
+              const files = await Promise.all(
+                uris.map(async (u) => {
+                  let text = false;
+                  try {
+                    text = await sniffedText(u);
+                  } catch (err) {
+                    log.error(`attach sniff failed for ${u.fsPath}:`, err);
+                  }
+                  return {
+                    uri: u.toString(true),
+                    name: path.basename(u.fsPath),
+                    text,
+                  };
+                }),
+              );
+              this._post({ type: "files-picked", files });
             } catch (err) {
               log.error("attach dialog failed:", err);
             }
@@ -731,4 +742,32 @@ function escapeAttr(s: string): string {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll('"', "&quot;");
+}
+
+// Same rule as sniffsText in the webview (src/webview/app/api.ts) — the
+// host and webview share no module, so the helper is duplicated across the
+// seam. True iff the prefix holds no NUL byte and decodes as UTF-8.
+function sniffsText(bytes: Uint8Array): boolean {
+  if (bytes.includes(0)) return false;
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes, {
+      stream: true,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The webview can't read file:// picks, so the host stamps textiness from
+// the file's first 8 KB for the attachment gate to prefer after name/type.
+async function sniffedText(uri: vscode.Uri): Promise<boolean> {
+  const handle = await fs.promises.open(uri.fsPath, "r");
+  try {
+    const buf = Buffer.alloc(8192);
+    const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+    return sniffsText(buf.subarray(0, bytesRead));
+  } finally {
+    await handle.close();
+  }
 }

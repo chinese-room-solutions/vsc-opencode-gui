@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from "preact/hooks";
 import type { JSX } from "preact";
-import { attachMime, extOf, findFiles, isText, type SessionStatus } from "../api";
+import { attachAllowed, attachMime, extOf, findFiles, isText, sniffsText, type SessionStatus } from "../api";
 import { postToHost } from "../host";
 import { atTrigger } from "../mentions";
 import {
   addComposerFiles,
   agents,
+  attachInputs,
   commands,
   composerFiles,
   composerFilesFor,
@@ -32,20 +33,33 @@ const BUILTIN_COMMANDS = [
   { name: "compact", description: "Summarize the conversation to free context" },
 ];
 
-// File attach from paste/drop, mirroring the opencode web app: images, pdf
-// and text-ish files become data-URI file parts; the 10 MB cap keeps a
-// paste from wedging the postMessage relay. attachMime is the gate and the
-// payload type — the data URL's own prefix gets restamped, since Windows
-// gives text files an empty blob type and FileReader then writes
-// "application/octet-stream".
+// File attach from paste/drop, mirroring the opencode web app: images, pdf,
+// audio/video and text-ish files become data-URI file parts; the 10 MB cap
+// keeps a paste from wedging the postMessage relay. attachMime is the gate
+// and the payload type — the data URL's own prefix gets restamped, since
+// Windows gives text files an empty blob type and FileReader then writes
+// "application/octet-stream". Files the name/type layers can't classify
+// get a content sniff of their first 8 KB (sniffsText). attachAllowed adds
+// the active model's input modalities on top.
 const EXT_FROM_MIME: Record<string, string> = {
   "image/png": "png",
   "image/jpeg": "jpg",
   "image/gif": "gif",
   "image/webp": "webp",
   "application/pdf": "pdf",
+  "text/plain": "txt",
+  "audio/mpeg": "mp3",
+  "audio/wav": "wav",
+  "audio/ogg": "ogg",
+  "audio/mp4": "m4a",
+  "audio/flac": "flac",
+  "audio/aac": "aac",
+  "video/mp4": "mp4",
+  "video/webm": "webm",
+  "video/quicktime": "mov",
+  "video/x-matroska": "mkv",
 };
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_FILE_BYTES = 50 * 1024 * 1024;
 
 const readDataUrl = (f: File) =>
   new Promise<string>((resolve, reject) => {
@@ -58,18 +72,45 @@ const readDataUrl = (f: File) =>
 let pasteSeq = 0;
 
 // Turn pasted/dropped Files into composer chips (data-URI attachments).
-// Unsupported types and oversize files are counted and surfaced once
-// through sendError; the rest attach to the composer that took the action.
+// Refused files are counted per reason and surfaced once through sendError;
+// the rest attach to the composer that took the action. The byte cap guards
+// the webview→host relay (the data URI rides it inside the prompt body) —
+// larger files still attach through the + picker, which sends a file:// url
+// the server reads from disk.
 async function attachFiles(
-  key: string,
+  sessionId: string | undefined,
   files: Iterable<File>,
 ): Promise<void> {
+  const key = sessionId ?? "draft";
+  const input = attachInputs(sessionId);
   const added: { uri: string; name: string }[] = [];
-  let skipped = 0;
+  const reasons: [label: string, n: number][] = [];
+  const refuse = (label: string) => {
+    const row = reasons.find(([l]) => l === label);
+    if (row) row[1]++;
+    else reasons.push([label, 1]);
+  };
   for (const f of files) {
-    const mime = attachMime(f.name, f.type);
-    if (!mime || f.size > MAX_FILE_BYTES) {
-      skipped++;
+    let mime = attachMime(f.name, f.type);
+    // Unclassified name/type: sniff the first 8 KB — valid UTF-8 text
+    // rides as text/plain, binaries stay refused. A failed prefix read
+    // just leaves the file unclassified (skipped below).
+    if (mime === undefined) {
+      try {
+        if (sniffsText(new Uint8Array(await f.slice(0, 8192).arrayBuffer())))
+          mime = "text/plain";
+      } catch {}
+    }
+    if (!mime) {
+      refuse("unsupported type");
+      continue;
+    }
+    if (f.size > MAX_FILE_BYTES) {
+      refuse("over 50 MB - use + for large files");
+      continue;
+    }
+    if (!attachAllowed(mime, input)) {
+      refuse("not supported by this model");
       continue;
     }
     const name =
@@ -81,16 +122,20 @@ async function attachFiles(
     try {
       uri = (await readDataUrl(f)).replace(/^data:[^;,]*/, `data:${mime}`);
     } catch {
-      skipped++;
+      refuse("unreadable");
       continue;
     }
     added.push({ uri, name });
   }
   if (added.length) addComposerFiles(key, added);
-  if (skipped)
+  if (reasons.length) {
+    const skipped = reasons.reduce((n, [, c]) => n + c, 0);
     setSendError(
-      `${skipped} file${skipped > 1 ? "s" : ""} not attached (unsupported type, unreadable, or over 10 MB).`,
+      `${skipped} file${skipped > 1 ? "s" : ""} not attached (${reasons
+        .map(([l, n]) => (n > 1 ? `${n} ${l}` : l))
+        .join(", ")}).`,
     );
+  }
 }
 
 // Composer: one bordered card — autosizing textarea on top, chip row (attach,
@@ -350,7 +395,7 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
     const files = Array.from(e.clipboardData?.files ?? []);
     if (files.length === 0) return;
     e.preventDefault();
-    void attachFiles(draftKey, files);
+    void attachFiles(props.sessionId, files);
   };
 
   // File drops are captured at window level: anything dropped over the chat
@@ -390,7 +435,7 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
       const dt = e.dataTransfer;
       const files = Array.from(dt?.files ?? []);
       if (files.length > 0) {
-        void attachFiles(draftKey, files);
+        void attachFiles(props.sessionId, files);
         return;
       }
       let urls: string[] = [];

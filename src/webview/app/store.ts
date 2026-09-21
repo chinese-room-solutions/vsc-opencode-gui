@@ -2,6 +2,7 @@ import { computed, effect, signal } from "@preact/signals";
 import type { ReadonlySignal } from "@preact/signals";
 import {
   attachmentParts,
+  attachAllowed,
   attachMime,
   createSession,
   compactSession,
@@ -41,6 +42,7 @@ import {
   type Message,
   type MessageTokens,
   type MessageWithParts,
+  type ModelInput,
   type ModelSelection,
   type Part,
   type PermissionRequest,
@@ -427,6 +429,15 @@ export function modelFree(model?: ModelSelection): boolean {
     | { cost?: { input?: number; output?: number } }
     | undefined;
   return m?.cost?.input === 0 && m?.cost?.output === 0;
+}
+
+// Input modalities of the model a composer would send on — the session
+// row's model, else the draft pick or the server default (currentSelection).
+// Undefined = the catalog doesn't know the model, so attachment gating
+// keeps its legacy allowlist.
+export function attachInputs(id: string | undefined): ModelInput | undefined {
+  const model = currentSelection(id).model;
+  return model && catalogModel(model.providerID, model.id)?.capabilities?.input;
 }
 
 // /provider marks every catalog provider whose env var exists as
@@ -2142,6 +2153,10 @@ export const composerInsert = signal<
 interface ComposerFile {
   uri: string;
   name: string;
+  // Host-stamped: the first 8 KB decoded as UTF-8 text (the webview can't
+  // read file:// picks itself). Only consulted when the name doesn't
+  // classify.
+  text?: boolean;
 }
 
 // Composer text drafts, keyed like attachments (session id, "draft" for
@@ -2260,26 +2275,45 @@ export function hostMessage(msg: unknown) {
     setQuestionSound(m.enabled);
   }
   // Composer "+" (attach): the host open dialog answered. The dialog can't
-  // filter by type, so the paste gate applies here — a refused pick is
-  // surfaced once rather than sent as a binary blob the endpoint would
-  // "read" into the context as raw bytes. The pick lands on whichever
-  // composer is on screen (home has none, so anything but a session is
-  // the draft).
+  // filter by type, so the attachment gate applies here — name/type first,
+  // then the host's content sniff stamp (text), then the active model's
+  // input modalities — and a refused pick is surfaced once rather than sent
+  // as a binary blob the endpoint would "read" into the context as raw
+  // bytes. The pick lands on whichever composer is on screen (home has
+  // none, so anything but a session is the draft).
   if (m.type === "files-picked" && Array.isArray(m.files)) {
     const rows = (m.files as ComposerFile[]).filter(
       (f) => !!f && typeof f.uri === "string",
     );
-    const ok = rows.filter((f) => attachMime(f.name ?? "", ""));
-    if (ok.length < rows.length)
+    const target = route.value.view === "session" ? route.value.id : undefined;
+    const input = attachInputs(target);
+    let unsupported = 0;
+    let notForModel = 0;
+    const ok = rows.filter((f) => {
+      const mime =
+        attachMime(f.name ?? "", "") ?? (f.text ? "text/plain" : undefined);
+      if (mime === undefined) unsupported++;
+      else if (!attachAllowed(mime, input)) notForModel++;
+      else return true;
+      return false;
+    });
+    const refused = unsupported + notForModel;
+    if (refused)
       setSendError(
-        `${rows.length - ok.length} file${
-          rows.length - ok.length > 1 ? "s" : ""
-        } not attached (unsupported type).`,
+        `${refused} file${refused > 1 ? "s" : ""} not attached (${
+          [
+            unsupported &&
+              (unsupported > 1 ? `${unsupported} unsupported type` : "unsupported type"),
+            notForModel &&
+              (notForModel > 1
+                ? `${notForModel} not supported by this model`
+                : "not supported by this model"),
+          ]
+            .filter(Boolean)
+            .join(", ")
+        }).`,
       );
-    addComposerFiles(
-      route.value.view === "session" ? route.value.id : "draft",
-      ok,
-    );
+    addComposerFiles(target ?? "draft", ok);
   }
   if (m.type === "new-session") {
     void newSession();

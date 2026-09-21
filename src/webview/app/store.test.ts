@@ -26,6 +26,7 @@ import {
   contextLimit,
   currentDir,
   currentSelection,
+  attachInputs,
   defaultAgent,
   deleteSession,
   displayModel,
@@ -1803,6 +1804,9 @@ describe("catalog helpers", () => {
               cost: { input: 0, output: 0 },
             },
             m2: {},
+            m3: {
+              capabilities: { input: { text: true, audio: true } },
+            },
           },
         },
       ],
@@ -1838,6 +1842,21 @@ describe("catalog helpers", () => {
       providerID: "cfg",
       id: "zz",
     });
+  });
+  it("attachInputs resolves the session model's flags, else undefined", () => {
+    const sid = "ai1";
+    sessions.value = [
+      sessRow(sid, { model: { id: "m3", providerID: "zai" } }),
+    ];
+    assert.deepEqual(attachInputs(sid), { text: true, audio: true });
+    // A model the catalog doesn't know (here: wrong provider) is unknown.
+    const other = "ai2";
+    sessions.value = [
+      ...sessions.value.filter((s) => s.id !== other),
+      sessRow(other, { model: { id: "m3", providerID: "nope" } }),
+    ];
+    assert.equal(attachInputs(other), undefined);
+    sessions.value = [];
   });
 });
 
@@ -2027,6 +2046,9 @@ describe("hostMessage routing", () => {
     });
   });
   it("files-picked filters unsupported types and lands on the draft", () => {
+    // The draft's model (server default) is unknown to the catalog, so the
+    // legacy allowlist applies: image+text pass, exe drops.
+    providers.value = undefined;
     hostMessage({
       type: "files-picked",
       files: [
@@ -2040,6 +2062,68 @@ describe("hostMessage routing", () => {
       sendError.value?.text,
       "1 file not attached (unsupported type).",
     );
+  });
+  it("files-picked drops a pdf the session model has no input for", () => {
+    providers.value = {
+      all: [
+        {
+          id: "zai",
+          models: {
+            m1: {
+              capabilities: {
+                input: { text: true, image: true, pdf: false },
+              },
+            },
+          },
+        },
+      ],
+      default: {},
+      connected: ["zai"],
+    } as unknown as Providers;
+    const sid = "fp1";
+    sessions.value = [
+      sessRow(sid, { model: { id: "m1", providerID: "zai" } }),
+    ];
+    navigate({ view: "session", id: sid });
+    hostMessage({
+      type: "files-picked",
+      files: [
+        { uri: "u1", name: "a.pdf" },
+        { uri: "u2", name: "b.png" },
+      ],
+    });
+    assert.deepEqual(
+      composerFiles.value[sid]?.map((f) => f.name),
+      ["b.png"],
+    );
+    assert.equal(
+      sendError.value?.text,
+      "1 file not attached (not supported by this model).",
+    );
+    sessions.value = [];
+  });
+  it("files-picked rides a sniffed-text stamp as text/plain", () => {
+    providers.value = undefined;
+    const sid = "fp2";
+    sessions.value = [sessRow(sid)];
+    navigate({ view: "session", id: sid });
+    hostMessage({
+      type: "files-picked",
+      files: [
+        { uri: "u1", name: "notes.weird", text: true },
+        { uri: "u2", name: "blob.bin" },
+        { uri: "u3", name: "plain.txt" },
+      ],
+    });
+    assert.deepEqual(
+      composerFiles.value[sid]?.map((f) => f.name),
+      ["notes.weird", "plain.txt"],
+    );
+    assert.equal(
+      sendError.value?.text,
+      "1 file not attached (unsupported type).",
+    );
+    sessions.value = [];
   });
   it("navigate maps /session/{id} and bounces unknown ids home", () => {
     sessions.value = [sessRow("nav1")];

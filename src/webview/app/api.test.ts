@@ -7,6 +7,7 @@ import {
   dispatchWindowMessage,
 } from "./setup.test";
 import {
+  attachAllowed,
   attachMime,
   attachmentParts,
   clampPartText,
@@ -17,6 +18,7 @@ import {
   isTruncatedPart,
   normalizePermission,
   normalizeSession,
+  sniffsText,
   stringifyError,
   toolName,
   PART_TEXT_CAP,
@@ -151,6 +153,80 @@ describe("api", () => {
       assert.equal(attachMime("clipboard", "image/png"), "image/png");
       assert.equal(attachMime("clipboard", "application/json"), "text/plain");
       assert.equal(attachMime("clipboard", "application/octet-stream"), undefined);
+    });
+    it("knows audio and video extensions", () => {
+      assert.equal(attachMime("clip.mp3", ""), "audio/mpeg");
+      assert.equal(attachMime("clip.wav", ""), "audio/wav");
+      assert.equal(attachMime("clip.ogg", ""), "audio/ogg");
+      assert.equal(attachMime("clip.m4a", ""), "audio/mp4");
+      assert.equal(attachMime("clip.flac", ""), "audio/flac");
+      assert.equal(attachMime("clip.aac", ""), "audio/aac");
+      assert.equal(attachMime("clip.mp4", ""), "video/mp4");
+      assert.equal(attachMime("clip.webm", ""), "video/webm");
+      assert.equal(attachMime("clip.mov", ""), "video/quicktime");
+      assert.equal(attachMime("clip.mkv", ""), "video/x-matroska");
+      assert.equal(attachMime("clipboard", "audio/mpeg"), "audio/mpeg");
+      assert.equal(attachMime("clipboard", "video/webm"), "video/webm");
+    });
+  });
+
+  describe("attachAllowed", () => {
+    it("text and directory mimes always pass", () => {
+      assert.equal(attachAllowed("text/plain"), true);
+      assert.equal(attachAllowed("application/x-directory"), true);
+      assert.equal(
+        attachAllowed("text/plain", { text: false }),
+        true,
+      );
+    });
+    it("each media mime needs its input flag", () => {
+      const input = { text: true, image: true, audio: true, video: true, pdf: true };
+      assert.equal(attachAllowed("image/png", input), true);
+      assert.equal(attachAllowed("application/pdf", input), true);
+      assert.equal(attachAllowed("audio/mpeg", input), true);
+      assert.equal(attachAllowed("video/mp4", input), true);
+      assert.equal(attachAllowed("image/png", { ...input, image: false }), false);
+      assert.equal(attachAllowed("application/pdf", { ...input, pdf: false }), false);
+      assert.equal(attachAllowed("audio/mpeg", { ...input, audio: false }), false);
+      assert.equal(attachAllowed("video/mp4", { ...input, video: false }), false);
+      // A declared input block with a flag absent reads as false.
+      assert.equal(attachAllowed("image/png", { text: true }), false);
+    });
+    it("undefined input keeps the legacy allowlist: image+pdf yes, media no", () => {
+      assert.equal(attachAllowed("image/png"), true);
+      assert.equal(attachAllowed("application/pdf"), true);
+      assert.equal(attachAllowed("text/plain"), true);
+      assert.equal(attachAllowed("audio/mpeg"), false);
+      assert.equal(attachAllowed("video/mp4"), false);
+      assert.equal(attachAllowed("application/octet-stream"), false);
+    });
+  });
+
+  describe("sniffsText", () => {
+    const enc = new TextEncoder();
+    it("accepts empty and plain ascii prefixes", () => {
+      assert.equal(sniffsText(new Uint8Array(0)), true);
+      assert.equal(sniffsText(enc.encode("just notes\n")), true);
+    });
+    it("accepts multibyte text and emoji", () => {
+      assert.equal(sniffsText(enc.encode("héllo — ✓ 你好")), true);
+      assert.equal(sniffsText(enc.encode("emoji 🎉 trailer")), true);
+    });
+    it("rejects a NUL byte anywhere in the window", () => {
+      assert.equal(sniffsText(Uint8Array.of(0x41, 0x00, 0x42)), false);
+    });
+    it("rejects invalid utf-8", () => {
+      // lone continuation, and a byte that can't start a codepoint
+      assert.equal(sniffsText(Uint8Array.of(0x41, 0x80, 0x42)), false);
+      assert.equal(sniffsText(Uint8Array.of(0x41, 0xff, 0x42)), false);
+    });
+    it("tolerates a window cut mid-codepoint", () => {
+      const euro = enc.encode("€"); // E2 82 AC, 3 bytes
+      assert.equal(sniffsText(euro.subarray(0, 1)), true);
+      assert.equal(sniffsText(euro.subarray(0, 2)), true);
+      const emoji = enc.encode("🎉"); // 4 bytes
+      assert.equal(sniffsText(emoji.subarray(0, 1)), true);
+      assert.equal(sniffsText(emoji.subarray(0, 3)), true);
     });
   });
 

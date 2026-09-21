@@ -7,7 +7,7 @@ import { log } from "./log";
 // doc can't reference it). The host snapshots every data part of a prompt
 // to disk before relaying it, giving turns a stable path to work from;
 // the attachments skill documents the convention. The composer gates what
-// can attach (attachMime: images, pdf, text files).
+// can attach (attachMime: images, pdf, audio/video, text files).
 const EXT_OF_MIME: Record<string, string> = {
   "image/png": "png",
   "image/jpeg": "jpg",
@@ -15,6 +15,16 @@ const EXT_OF_MIME: Record<string, string> = {
   "image/webp": "webp",
   "application/pdf": "pdf",
   "text/plain": "txt",
+  "audio/mpeg": "mp3",
+  "audio/wav": "wav",
+  "audio/ogg": "ogg",
+  "audio/mp4": "m4a",
+  "audio/flac": "flac",
+  "audio/aac": "aac",
+  "video/mp4": "mp4",
+  "video/webm": "webm",
+  "video/quicktime": "mov",
+  "video/x-matroska": "mkv",
 };
 
 // Write one prompt's attachments to
