@@ -34,16 +34,11 @@ HTTP/SSE.
   sender's name and live session title (opencode-plugin-peers).
 - **Attachments become real files** - images, PDFs, and documents are saved
   into the workspace before the turn starts, ready for the agent to reuse.
-  Media types gate on the active model's input support - text always
-  attaches, and any file whose first bytes read as UTF-8 text attaches by
-  content, not by extension list. Click a picked file's chip to open it -
-  text files in the editor, anything else with the system's tool for its
-  type. Dragging files in from the OS needs Shift held - without it VS Code
-  itself claims the drop and opens the file as an editor.
-- **@-mentions are inline chips** - `@path` tokens in the composer render as
-  chips while you type (with `#line`-range support) and turn clickable once
-  the file finder vouches for the path: files open in the editor,
-  directories with the system's tool. Sent messages keep the same pills.
+  What attaches gates on the model's inputs; a chip click opens the file in
+  the editor or with the system's tool.
+- **@-mentions are inline chips** - `@path` tokens render as chips in the
+  composer and in sent messages. Files open in the editor, directories with
+  the system's tool.
 - **Context & cost ring** - live context-window fill, click for the cost and
   token breakdown.
 - **Remote-ready** - over SSH, dev containers, WSL, or Codespaces the
