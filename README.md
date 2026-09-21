@@ -34,11 +34,6 @@ HTTP/SSE.
   sender's name and live session title (opencode-plugin-peers).
 - **Attachments become real files** - images, PDFs, and documents are saved
   into the workspace before the turn starts, ready for the agent to reuse.
-  What attaches gates on the model's inputs; a chip click opens the file in
-  the editor or with the system's tool.
-- **@-mentions are inline chips** - `@path` tokens render as chips in the
-  composer and in sent messages. Files open in the editor, directories with
-  the system's tool.
 - **Context & cost ring** - live context-window fill, click for the cost and
   token breakdown.
 - **Remote-ready** - over SSH, dev containers, WSL, or Codespaces the
