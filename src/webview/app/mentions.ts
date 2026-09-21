@@ -67,6 +67,9 @@ export function parseMentions(
       });
       continue;
     }
+    // Bare words are mention-style prose — "@here", "@channel" — not paths;
+    // only path-shaped tokens (separator, extension, #range, ~) attach files.
+    if (!/[/.#~\\]/.test(token)) continue;
     let path = token;
     let range = "";
     const lr = /^(.*)#(\d+)(?:-(\d+))?$/.exec(token);

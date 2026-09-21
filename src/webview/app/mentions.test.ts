@@ -82,5 +82,16 @@ describe("mentions", () => {
     it("mentions after opening punctuation count", () => {
       assert.equal(parse("(@a.ts) [\"@b.ts\"]", "/r", []).length, 2);
     });
+    it("leaves bare words as prose (no file part)", () => {
+      assert.deepEqual(parse("ping @here and @channel", "/r", []), []);
+      assert.deepEqual(parse("ask @reviewer, then stop", "/r", []), []);
+      assert.deepEqual(parse("try @src or @v2", "/r", []), []);
+    });
+    it("still attaches path-shaped tokens", () => {
+      assert.equal(parse("see @README.md", "/r", []).length, 1);
+      assert.equal(parse("look in @src/", "/r", []).length, 1);
+      assert.equal(parse("home @~/x.ts", "/r", []).length, 1);
+      assert.equal(parse("run @reviewer on it", "/r", ["reviewer"]).length, 1);
+    });
   });
 });
