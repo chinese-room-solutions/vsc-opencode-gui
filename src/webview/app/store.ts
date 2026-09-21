@@ -2193,6 +2193,29 @@ export const dropDraft = (k: string) => {
 export const composerFiles = signal<Record<string, ComposerFile[]>>({});
 export const composerFilesFor = (key: string): ComposerFile[] =>
   composerFiles.value[key] ?? [];
+// Attach-time snapshot bridge: the composer asks for a pasted non-image
+// attachment's disk path, the host's "attachment-saved" reply resolves.
+// Times out to undefined so a lost reply can't wedge an attach (the chip
+// then keeps its data URI — inert but sendable).
+const snapshotWaiters = new Map<string, (path: string) => void>();
+export function requestAttachmentSnapshot(
+  sessionId: string,
+  uri: string,
+  name: string,
+  mime: string,
+): Promise<string | undefined> {
+  postToHost({ type: "save-attachment", sessionId, uri, name, mime });
+  return new Promise((resolve) => {
+    const done = (path: string | undefined) => {
+      clearTimeout(t);
+      snapshotWaiters.delete(uri);
+      resolve(path);
+    };
+    const t = window.setTimeout(() => done(undefined), 2000);
+    snapshotWaiters.set(uri, (path) => done(path));
+  });
+}
+
 export function addComposerFiles(key: string, files: ComposerFile[]): void {
   composerFiles.value = {
     ...composerFiles.value,
@@ -2231,6 +2254,8 @@ export function hostMessage(msg: unknown) {
     modifier?: string;
     enabled?: boolean;
     peers?: unknown;
+    from?: string;
+    sessionId?: string;
   };
   // The webview became visible again: events streamed while VS Code had
   // it suspended were lost — pull truth.
@@ -2314,6 +2339,15 @@ export function hostMessage(msg: unknown) {
         }).`,
       );
     addComposerFiles(target ?? "draft", ok);
+  }
+  // The host snapshotted a pasted attachment: hand the path to the waiting
+  // attach (requestAttachmentSnapshot) so the chip is born with it.
+  if (
+    m.type === "attachment-saved" &&
+    typeof m.from === "string" &&
+    typeof m.path === "string"
+  ) {
+    snapshotWaiters.get(m.from)?.(m.path);
   }
   if (m.type === "new-session") {
     void newSession();

@@ -27,37 +27,56 @@ const EXT_OF_MIME: Record<string, string> = {
   "video/x-matroska": "mkv",
 };
 
-// Write one prompt's attachments to
-// <workspace>/.opencode/attachments/<sessionId>/<ts>-<name>. Best effort
-// by design: a failed side-save must never fail the send, so every error
-// is logged and skipped. Data-URIs only (a file:// url is a mention of a
-// file already on disk) — the composer's caps (10 MB, attachMime) bound
-// the work.
+// Write one data-URI attachment to
+// <workspace>/.opencode/attachments/<sessionId>/<ts>-<name> and return its
+// absolute path. Best effort: errors are logged and returned as undefined —
+// a failed side-save must never fail the attach or the send.
+export async function saveAttachment(
+  workspaceDir: string,
+  sessionId: string,
+  dataUri: string,
+  filename: string,
+  mime: string,
+): Promise<string | undefined> {
+  const m = /^data:[^;]+;base64,(.*)$/s.exec(dataUri);
+  if (!m) return undefined;
+  try {
+    const dir = path.join(workspaceDir, ".opencode", "attachments", sessionId);
+    const base = path.basename(filename || "file");
+    const safe = base.replace(/[\\/:*?"<>|]/g, "_");
+    const rawExt = path.extname(safe);
+    const ext = rawExt || `.${EXT_OF_MIME[mime] ?? "bin"}`;
+    const stem = rawExt ? safe.slice(0, -rawExt.length) : safe;
+    const file = path.join(dir, `${Date.now()}-${stem}${ext}`);
+    await fs.promises.mkdir(dir, { recursive: true });
+    await fs.promises.writeFile(file, Buffer.from(m[1], "base64"));
+    return file;
+  } catch (err) {
+    log.error("attachment snapshot failed:", err);
+    return undefined;
+  }
+}
+
+// Write one prompt's data parts (pasted attachments; + picks already carry
+// their on-disk path). See saveAttachment for the layout and the best-effort
+// contract.
 export async function savePromptAttachments(
   workspaceDir: string,
   sessionId: string,
   parts: unknown,
 ): Promise<void> {
   if (!Array.isArray(parts)) return;
-  const dir = path.join(workspaceDir, ".opencode", "attachments", sessionId);
   for (const part of parts) {
     const p = part as { type?: string; mime?: string; url?: string; filename?: string };
     if (p?.type !== "file" || typeof p.url !== "string") {
       continue;
     }
-    const m = /^data:[^;]+;base64,(.*)$/s.exec(p.url);
-    if (!m) continue;
-    try {
-      const base = path.basename(p.filename || "file");
-      const safe = base.replace(/[\\/:*?"<>|]/g, "_");
-      const rawExt = path.extname(safe);
-      const ext = rawExt || `.${EXT_OF_MIME[p.mime ?? ""] ?? "bin"}`;
-      const stem = rawExt ? safe.slice(0, -rawExt.length) : safe;
-      const file = path.join(dir, `${Date.now()}-${stem}${ext}`);
-      await fs.promises.mkdir(dir, { recursive: true });
-      await fs.promises.writeFile(file, Buffer.from(m[1], "base64"));
-    } catch (err) {
-      log.error("attachment snapshot failed:", err);
-    }
+    await saveAttachment(
+      workspaceDir,
+      sessionId,
+      p.url,
+      p.filename || "file",
+      p.mime ?? "",
+    );
   }
 }

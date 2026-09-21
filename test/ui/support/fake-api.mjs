@@ -119,6 +119,22 @@ for (let i = 1; i <= SEED_TURNS; i++) {
               filename: "DT DevOps - Software Engineer Nomination Form.pdf",
               url: "data:application/pdf;base64,ZmFrZQ==",
             },
+            {
+              // "+"-picked attachments keep their on-disk path — the chips
+              // open on click (text in the editor, pdf with the system tool).
+              type: "file",
+              id: `pt_u${i}j`,
+              mime: "application/json",
+              filename: "picked-config.json",
+              url: "file:///repo/picks/config.json",
+            },
+            {
+              type: "file",
+              id: `pt_u${i}p`,
+              mime: "application/pdf",
+              filename: "picked-handbook.pdf",
+              url: "file:///repo/picks/handbook.pdf",
+            },
           ],
         }
       : {}),

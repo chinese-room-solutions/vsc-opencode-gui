@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "preact/hooks";
 import type { JSX } from "preact";
 import { attachAllowed, attachMime, extOf, findFiles, isText, sniffsText, type SessionStatus } from "../api";
-import { postToHost } from "../host";
+import { postToHost, openFile, openExternal } from "../host";
 import { atTrigger } from "../mentions";
 import {
   addComposerFiles,
@@ -17,6 +17,7 @@ import {
   messagesBySession,
   putDraft,
   queueCommand,
+  requestAttachmentSnapshot,
   runSlashCommand,
   sendPrompt,
   setSendError,
@@ -124,6 +125,14 @@ async function attachFiles(
     } catch {
       refuse("unreadable");
       continue;
+    }
+    // Non-image attachments snapshot to disk before the chip exists: the
+    // chip is click-to-open from birth and the prompt carries a file://
+    // url the server reads directly (no base64 through the relay). Images
+    // keep their data URI — the chip row and lightbox render it directly.
+    // A timeout or error keeps the data URI (inert but sendable).
+    if (!mime.startsWith("image/")) {
+      uri = (await requestAttachmentSnapshot(key, uri, name, mime)) ?? uri;
     }
     added.push({ uri, name });
   }
@@ -688,7 +697,21 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
                   </button>
                 </span>
               ) : (
-                <span class="file-chip" key={`${f.name}:${i}`} title={f.name}>
+                <span
+                  class={
+                    f.uri.startsWith("file:") ? "file-chip chip-open" : "file-chip"
+                  }
+                  key={`${f.name}:${i}`}
+                  title={f.uri.startsWith("file:") ? `${f.name} (click to open)` : f.name}
+                  onClick={() => {
+                    // The + picker's picks keep their on-disk path — open
+                    // it, text in the editor, else the system tool.
+                    if (!f.uri.startsWith("file:")) return;
+                    (attachMime(f.name, "") === "text/plain"
+                      ? openFile
+                      : openExternal)(f.uri);
+                  }}
+                >
                   <span class="chip-ext">{extOf(f.name).toUpperCase()}</span>
                   <span class="chip-name">{f.name}</span>
                   <button
@@ -696,7 +719,11 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
                     class="chip-x"
                     title="Remove"
                     aria-label={`Remove ${f.name}`}
-                    onClick={() => removeFile(i)}
+                    onClick={(e) => {
+                      // Removing must not also open the chip's file.
+                      e.stopPropagation();
+                      removeFile(i);
+                    }}
                   >
                     ×
                   </button>

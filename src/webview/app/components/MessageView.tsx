@@ -12,10 +12,10 @@ import {
   revertSession,
   sessionStatus,
 } from "../store";
-import { extOf, isText, isTool, tokensTotal, type FilePart, type Part, type TextPart, type ToolPart } from "../api";
+import { extOf, isText, isTool, tokensTotal, attachMime, type FilePart, type Part, type TextPart, type ToolPart } from "../api";
 import { pillifyOwnText } from "../mentions";
 import { enhanceBlockquotes, enhanceCodeBlocks, enhanceInlineCode, renderMarkdown, tagFileRefs } from "../markdown";
-import { openFile } from "../host";
+import { openFile, openExternal } from "../host";
 import {
   CheckIcon,
   ChevronIcon,
@@ -401,20 +401,36 @@ function peerMessage(parts: Part[]): {
 
 // Attachment chips above a user pill's text (Claude Code's): images a slim
 // thumbnail crop — name and pixel size move to the hover title — other files
-// their name; an image click opens the lightbox. Data-URI parts only —
-// @-mentions pillify inline via pillifyOwnText instead.
+// their name; an image click opens the lightbox, a chip with an on-disk path
+// (the + picker's file:// parts) opens it — text in the editor, anything
+// else with the system tool for its type. Pasted data-URI chips have no
+// path and stay inert; @-mentions pillify inline via pillifyOwnText instead.
 function AttachChip(props: { p: FilePart }) {
   const [dims, setDims] = useState<{ w: number; h: number } | undefined>();
   const f = props.p;
   // "+"-dialog parts carry the picked path; the chip shows the bare name.
   const name = f.filename?.split(/[\\/]/).pop() || "file";
-  if (!f.url?.startsWith("data:image/"))
+  if (!f.url?.startsWith("data:image/")) {
+    const open =
+      f.url && f.url.startsWith("file:")
+        ? (e: MouseEvent) => {
+            e.stopPropagation(); // the row's click-to-jump
+            (attachMime(name, "") === "text/plain"
+              ? openFile
+              : openExternal)(f.url!);
+          }
+        : undefined;
     return (
-      <span class="file-chip" title={name}>
+      <span
+        class={open ? "file-chip chip-open" : "file-chip"}
+        title={open ? `${name} (click to open)` : name}
+        onClick={open}
+      >
         <span class="chip-ext">{extOf(name).toUpperCase()}</span>
         <span class="chip-name">{name}</span>
       </span>
     );
+  }
   return (
     <span
       class="file-chip chip-img"
@@ -691,11 +707,15 @@ function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
     const sid = parts[0]?.sessionID;
     const pending = info.id.startsWith("pending:");
     const command = info.id.startsWith("cmd:");
-    const files = parts.filter(
-      (p): p is FilePart =>
-        p.type === "file" &&
-        !!(p as { url?: string }).url?.startsWith("data:"),
-    );
+    const files = parts.filter((p): p is FilePart => {
+      if (p.type !== "file") return false;
+      const f = p as FilePart;
+      // data: = pasted attachment. file:// without a source range = a
+      // "+"-picked file; file:// WITH source is an @-mention, pillified
+      // into the text instead.
+      if (f.url?.startsWith("data:")) return true;
+      return !!f.url?.startsWith("file:") && !f.source;
+    });
     const peer = peerMessage(parts);
     if (peer.text) {
       // A peer injection is its own row (the plugin prompts it standalone),

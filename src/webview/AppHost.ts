@@ -4,7 +4,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { themeStyle } from "../theme";
 import { tokenizeToTokens } from "../tokenizer";
-import { savePromptAttachments } from "../attachments";
+import { saveAttachment, savePromptAttachments } from "../attachments";
 import { log } from "../log";
 import type { PeerInfo } from "./Peers";
 
@@ -240,11 +240,7 @@ export class AppHost implements vscode.Disposable {
         // workspace folder; open and reveal the (1-based) line range.
         if (message.type === "open-file" && typeof message.path === "string") {
           const open = async () => {
-            const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-            const abs =
-              path.isAbsolute(message.path) || !ws
-                ? message.path
-                : path.join(ws, message.path);
+            const abs = absPathOf(message.path);
             const doc = await vscode.workspace.openTextDocument(
               vscode.Uri.file(abs),
             );
@@ -261,6 +257,55 @@ export class AppHost implements vscode.Disposable {
               `Could not open ${message.path}: ${err instanceof Error ? err.message : String(err)}`,
             );
           });
+        }
+        // Composer paste/drop: snapshot a non-image data-URI attachment to
+        // disk now, so the chip is click-to-open and the prompt can carry a
+        // file:// url instead of the base64 payload. Best effort — on any
+        // failure no reply comes and the chip keeps its data URI.
+        if (
+          message.type === "save-attachment" &&
+          typeof message.uri === "string" &&
+          typeof message.name === "string" &&
+          typeof message.sessionId === "string"
+        ) {
+          void (async () => {
+            try {
+              const ws = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
+              if (!ws) return;
+              const file = await saveAttachment(
+                ws,
+                message.sessionId,
+                message.uri,
+                message.name,
+                typeof message.mime === "string" ? message.mime : "",
+              );
+              if (file)
+                this._post({
+                  type: "attachment-saved",
+                  sessionId: message.sessionId,
+                  from: message.uri,
+                  path: vscode.Uri.file(file).toString(true),
+                });
+            } catch (err) {
+              log.error("attach snapshot failed:", err);
+            }
+          })();
+        }
+        // An attachment chip's open: hand the file to the OS default tool
+        // for its extension (PDFs, media — anything not opened as text).
+        if (message.type === "open-external" && typeof message.path === "string") {
+          vscode.env.openExternal(vscode.Uri.file(absPathOf(message.path))).then(
+            (opened) => {
+              if (!opened)
+                vscode.window.showErrorMessage(
+                  `Could not open ${message.path}.`,
+                );
+            },
+            (err: unknown) =>
+              vscode.window.showErrorMessage(
+                `Could not open ${message.path}: ${err instanceof Error ? err.message : String(err)}`,
+              ),
+          );
         }
         // A fetched URL opens in the system browser.
         if (message.type === "open-url" && typeof message.url === "string") {
@@ -742,6 +787,14 @@ function escapeAttr(s: string): string {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll('"', "&quot;");
+}
+
+// A chat file target: "file://…" uris (attachment chips) decode to their
+// platform path, anything else resolves against the first workspace folder.
+function absPathOf(p: string): string {
+  if (p.startsWith("file:")) return vscode.Uri.parse(p).fsPath;
+  const ws = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
+  return path.isAbsolute(p) || !ws ? p : path.join(ws, p);
 }
 
 // Same rule as sniffsText in the webview (src/webview/app/api.ts) — the

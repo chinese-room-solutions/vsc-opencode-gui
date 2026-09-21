@@ -29,12 +29,18 @@ test("the sent attachment chip reuses the full cap the composer's × gives up", 
   await openSession(page, rig.url);
   // The seeded attachment's name is longer than the shared 178px name cap,
   // so both the sent chip and a pending one fill their caps exactly.
-  const chip = page.locator(".msg.user .msg-files .file-chip:not(.chip-img)");
+  // (Two "+"-picked file:// chips share the row — scope by name.)
+  const chip = page.locator(
+    ".msg.user .msg-files .file-chip:not(.chip-img)",
+    { hasText: "DT DevOps" },
+  );
   await expect(chip).toHaveCount(1);
   await expect(chip.locator(".chip-ext")).toHaveText("PDF");
   await expect(chip.locator(".chip-name")).toHaveText(
     "DT DevOps - Software Engineer Nomination Form.pdf",
   );
+  // The pasted data-URI chip has no path and stays inert.
+  await expect(chip).not.toHaveClass(/chip-open/);
   const m = await chip.evaluate((el) => {
     const name = el.querySelector(".chip-name");
     const ext = el.querySelector(".chip-ext");

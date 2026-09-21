@@ -109,6 +109,10 @@ const stubFor = (nonce, serverUrl) =>
   `window.postMessage({ type: "api-result", id: m.id, ok: false }, "*");` +
   `}` +
   `})();` +
+  `} else if (m && m.type === "save-attachment") {` +
+  // The rig has no disk: answer the snapshot with a fake path so the chip
+  // swap (data: -> file://) runs in the rig like it does against the host.
+  `window.postMessage({ type: "attachment-saved", sessionId: m.sessionId, from: m.uri, path: "file:///repo/.opencode/attachments/" + m.sessionId + "/1-" + m.name }, "*");` +
   `} else {` +
   `console.log("[host-msg]", JSON.stringify(m));` +
   `}` +

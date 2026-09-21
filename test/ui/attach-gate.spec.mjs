@@ -116,3 +116,75 @@ test("a file over the relay cap is refused and points at the + picker", async ({
   );
   expect(watched.errors).toEqual([]);
 });
+
+// The rig's acquireVsCodeApi stand-in logs non-api host messages to the
+// console as "[host-msg] {json}" — the observable side of a chip click.
+const hostMsgs = (page) => {
+  const seen = [];
+  page.on("console", (m) => {
+    const t = m.text();
+    if (t.startsWith("[host-msg]")) seen.push(JSON.parse(t.slice(10)));
+  });
+  return seen;
+};
+
+test("a sent text attachment chip opens in the editor", async ({ page, rig }) => {
+  const watched = watchPage(page);
+  const msgs = hostMsgs(page);
+  await openSession(page, rig.url);
+  const chip = page.locator(".msg.user .msg-files .file-chip", { hasText: "picked-config.json" });
+  await expect(chip).toHaveCount(1);
+  await expect(chip).toHaveClass(/chip-open/);
+  await chip.click();
+  await expect
+    .poll(() => msgs)
+    .toContainEqual({ type: "open-file", path: "file:///repo/picks/config.json" });
+  expect(watched.errors).toEqual([]);
+});
+
+test("a sent pdf attachment chip opens with the system tool", async ({ page, rig }) => {
+  const watched = watchPage(page);
+  const msgs = hostMsgs(page);
+  await openSession(page, rig.url);
+  const chip = page.locator(".msg.user .msg-files .file-chip", { hasText: "picked-handbook.pdf" });
+  await expect(chip).toHaveCount(1);
+  await chip.click();
+  await expect
+    .poll(() => msgs)
+    .toContainEqual({ type: "open-external", path: "file:///repo/picks/handbook.pdf" });
+  expect(watched.errors).toEqual([]);
+});
+
+test("a pasted text file becomes a click-to-open chip via its disk snapshot", async ({ page, rig }) => {
+  const watched = watchPage(page);
+  const msgs = hostMsgs(page);
+  await openSession(page, rig.url);
+  const notes = Array.from(new TextEncoder().encode("pasted notes\n"));
+  await dropBytes(page, notes, "min.txt");
+  const chip = page.locator(".composer-files .file-chip", { hasText: "min.txt" });
+  // The host's snapshot reply swaps the data URI for a file path, which
+  // turns the chip click-to-open.
+  await expect(chip).toHaveClass(/chip-open/);
+  await chip.click();
+  await expect
+    .poll(() => msgs.find((x) => x.type === "open-file")?.path)
+    .toContain("min.txt");
+  expect(watched.errors).toEqual([]);
+});
+
+test("a pasted image keeps its data URI and opens the lightbox instead", async ({ page, rig }) => {
+  const watched = watchPage(page);
+  await openSession(page, rig.url);
+  await page.evaluate(() => {
+    const dt = new DataTransfer();
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    dt.items.add(new File([Uint8Array.from(atob(png), (c) => c.charCodeAt(0))], "dot.png", { type: "image/png" }));
+    window.dispatchEvent(new DragEvent("dragover", { dataTransfer: dt, bubbles: true, cancelable: true }));
+    window.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }));
+  });
+  const chip = page.locator(".composer-files .file-chip.chip-img");
+  await expect(chip).toHaveCount(1);
+  await chip.click();
+  await expect(page.locator(".img-preview")).toBeVisible();
+  expect(watched.errors).toEqual([]);
+});

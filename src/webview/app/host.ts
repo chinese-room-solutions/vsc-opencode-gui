@@ -18,6 +18,11 @@ export function openFile(path: string, line?: string, endLine?: string): void {
   postToHost({ type: "open-file", path, line, endLine });
 }
 
+// Hand a file to the OS default tool for its extension.
+export function openExternal(path: string): void {
+  postToHost({ type: "open-external", path });
+}
+
 // Open a URL in the system browser (webfetch tool rows link their target).
 export function openUrl(url: string): void {
   postToHost({ type: "open-url", url });

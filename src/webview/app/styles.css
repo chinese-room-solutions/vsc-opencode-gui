@@ -1462,6 +1462,16 @@ body {
   color: var(--oc-text-2);
 }
 
+/* Chips holding an on-disk path (the + picker's file:// picks) open on
+   click — text in the editor, anything else with the system tool. */
+.file-chip.chip-open {
+  cursor: pointer;
+}
+
+.file-chip.chip-open:hover {
+  border-color: var(--vscode-focusBorder);
+}
+
 .chip-name {
   overflow: hidden;
   text-overflow: ellipsis;
