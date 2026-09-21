@@ -82,16 +82,55 @@ const CODE_TAIL = [
 const seedRows = [];
 for (let i = 1; i <= SEED_TURNS; i++) {
   const cu = T0 + (i - 1) * 8_000;
-  // The last turn's prompt ends in an @-mention (with its durable file part)
-  // so the rig can exercise mention pills in the sent message.
+  // Turn 11's prompt ends in a directory @-mention (x-directory part) so
+  // the rig can exercise dir pills — they open with the OS tool, not the
+  // editor. The last turn's prompt ends in a file @-mention (with its
+  // durable file part) for the regular pills.
   const userText =
     `Question ${i}: ${filler(i * 3, 1)}` +
-    (i === SEED_TURNS ? " Tune @src/retry.ts please" : "");
+    (i === SEED_TURNS ? " Tune @src/retry.ts please" : "") +
+    (i === SEED_TURNS - 1 ? " Browse @docs/ too" : "") +
+    // Turn 9's prompt mentions an image the server inlined as a data:
+    // part without a source — resourcedParts must re-derive the pill.
+    (i === SEED_TURNS - 2 ? " Shot @picks/5.png here" : "");
   seedRows.push({
     id: `msg_u${i}`,
     type: "user",
     time: { created: cu, completed: cu + 200 },
     text: userText,
+    ...(i === SEED_TURNS - 2
+      ? {
+          content: [
+            {
+              type: "file",
+              id: `pt_u${i}img`,
+              mime: "image/jpeg",
+              url: "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEA",
+            },
+          ],
+        }
+      : {}),
+    ...(i === SEED_TURNS - 1
+      ? {
+          content: [
+            {
+              type: "file",
+              id: `pt_u${i}d`,
+              mime: "application/x-directory",
+              url: "file:///repo/docs/",
+              source: {
+                type: "file",
+                path: "/repo/docs/",
+                text: {
+                  value: "@docs/",
+                  start: userText.indexOf("@docs/"),
+                  end: userText.indexOf("@docs/") + 6,
+                },
+              },
+            },
+          ],
+        }
+      : {}),
     ...(i === SEED_TURNS
       ? {
           content: [
@@ -261,6 +300,11 @@ const sessionRow = {
   model: { id: "fake-model", providerID: "fake" },
 };
 const flatSession = ({ ...sessionRow, directory });
+
+// /find/file seeds — the @-menu's autocomplete and the composer's chip
+// verification both hit the endpoint. Case-insensitive substring match,
+// like a fuzzy finder; directories keep the platform trailing "/".
+const FIND_FILES = ["picks/config.json", "docs/", "src/retry.ts", "README.md", "package.json"];
 
 // --- SSE plumbing ---
 const v2Clients = new Set();
@@ -653,7 +697,11 @@ const server = http.createServer(async (req, res) => {
     if (path === "/project/current") { json(res, 200, { id: "prj_1", worktree: directory }); return; }
     if (path === "/permission") { json(res, 200, []); return; }
     if (path === "/question") { json(res, 200, []); return; }
-    if (path === "/find/file") { json(res, 200, []); return; }
+    if (path === "/find/file") {
+      const q = (url.searchParams.get("query") ?? "").toLowerCase();
+      json(res, 200, FIND_FILES.filter((f) => f.toLowerCase().includes(q)));
+      return;
+    }
     let m;
     if ((m = path.match(/^\/api\/session\/([^/]+)\/message$/))) {
       // v2 page: {data}, newest first; short page proves the transcript complete.

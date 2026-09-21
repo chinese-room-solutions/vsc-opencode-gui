@@ -1,6 +1,12 @@
 import "./setup.test";
 import { strict as assert } from "node:assert";
-import { atTrigger, parseMentions, pillifyOwnText } from "./mentions";
+import {
+  atTrigger,
+  mentionTokens,
+  parseMentions,
+  pillifyOwnText,
+  resourcedParts,
+} from "./mentions";
 
 describe("mentions", () => {
   describe("atTrigger", () => {
@@ -95,6 +101,76 @@ describe("mentions", () => {
     });
   });
 
+  describe("mentionTokens", () => {
+    type Mention = {
+      type: string;
+      url?: string;
+      mime?: string;
+      name?: string;
+      source?: {
+        path?: string;
+        value?: string;
+        text?: { value: string; start: number; end: number };
+      };
+    };
+    const parse = (text: string, base: string, agents: string[]) =>
+      parseMentions(text, base, agents) as unknown as Mention[];
+
+    // Scanner/parser parity: the composer's chips are the send path's parts
+    // — file/dir tokens map 1:1 (in order, incl. source ranges and urls).
+    it("file/dir tokens map 1:1 to parseMentions' file parts", () => {
+      const agents = ["reviewer"];
+      const texts = [
+        "see @src/a.ts and @docs/ plus @a.go#10-30, then @reviewer @nope @x.ts.",
+        "one @a.ts two @a.ts dup, abs @C:\\other\\x.ts home @~/z.ts",
+        "@a.ts#7 @a.ts#7-9 @a.ts",
+      ];
+      for (const text of texts) {
+        const toks = mentionTokens(text, "C:\\w\\repo", agents);
+        const parts = parse(text, "C:\\w\\repo", agents).filter(
+          (p) => p.type === "file",
+        );
+        const fd = toks.filter((t) => t.kind !== "agent");
+        assert.equal(fd.length, parts.length, text);
+        fd.forEach((t, i) => {
+          const p = parts[i];
+          assert.equal(t.value, p.source?.text?.value, text);
+          assert.equal(t.start, p.source?.text?.start, text);
+          assert.equal(t.end, p.source?.text?.end, text);
+          assert.equal(text.slice(t.start, t.end), t.value, text);
+          assert.equal(t.path, p.source?.path, text);
+          assert.equal(t.url, p.url, text);
+          assert.equal(
+            t.kind === "dir" ? "application/x-directory" : "text/plain",
+            p.mime,
+            text,
+          );
+        });
+      }
+    });
+    it("agent tokens are their own kind, excluded from chips", () => {
+      const toks = mentionTokens("run @reviewer now", "/r", ["reviewer"]);
+      assert.equal(toks.length, 1);
+      assert.equal(toks[0].kind, "agent");
+      assert.equal(toks[0].name, "reviewer");
+      assert.equal(toks[0].path, undefined);
+      assert.equal(toks[0].url, undefined);
+    });
+    it("splits kinds, ranges and resolved paths per token", () => {
+      const [dir, file] = mentionTokens("x @docs/ y @a.go#10-20", "/r", []);
+      assert.equal(dir.kind, "dir");
+      assert.equal(dir.rel, "docs/");
+      assert.equal(dir.path, "/r/docs/");
+      assert.equal(file.kind, "file");
+      assert.equal(file.rel, "a.go");
+      assert.equal(file.path, "/r/a.go");
+      assert.equal(file.line, "10");
+      assert.equal(file.endLine, "20");
+      assert.equal(file.range, "?start=10&end=20");
+      assert.equal(file.value, "@a.go#10-20");
+    });
+  });
+
   describe("pillifyOwnText", () => {
     const mention = (value: string, start: number, url = "file:///r/a.ts") => ({
       type: "file",
@@ -122,6 +198,40 @@ describe("mentions", () => {
       ] as never);
       assert.match(out, /data-line="10" data-endLine="30"/);
     });
+    it("carries the part index for inlined image pills", () => {
+      const out = pillifyOwnText([
+        { type: "text", text: "see @5.png ok" } as never,
+        {
+          type: "file",
+          url: "data:image/jpeg;base64,AAAA",
+          source: {
+            type: "file",
+            path: "/r/5.png",
+            text: { value: "@5.png", start: 4, end: 10 },
+          },
+        },
+      ] as never);
+      assert.match(out, /data-img-idx="1"/);
+    });
+    it("flags directory pills so clicks take the openExternal branch", () => {
+      const out = pillifyOwnText([
+        { type: "text", text: "in @docs/ ok" } as never,
+        {
+          type: "file",
+          url: "file:///r/docs/",
+          mime: "application/x-directory",
+          source: {
+            type: "file",
+            path: "/r/docs/",
+            text: { value: "@docs/", start: 3, end: 9 },
+          },
+        },
+      ] as never);
+      assert.equal(
+        out,
+        'in <span class="file-ref mention-pill" data-path="/r/docs/" data-dir="1">@docs/</span> ok',
+      );
+    });
     it("passes text through untouched without mention parts", () => {
       const out = pillifyOwnText([
         { type: "text", text: "plain @words only" } as never,
@@ -141,6 +251,102 @@ describe("mentions", () => {
         mention("@a.ts", 4),
       ] as never);
       assert.equal(out, "edited text");
+    });
+  });
+
+  describe("resourcedParts", () => {
+    it("re-sources a sourceless data: part whose filename matches a token", () => {
+      const out = resourcedParts(
+        [
+          { type: "text", text: "see @5.png ok" } as never,
+          {
+            type: "file",
+            url: "data:image/png;base64,AAAA",
+            mime: "image/png",
+            filename: "5.png",
+          } as never,
+        ],
+        "/r",
+        [],
+      );
+      const f = out[1] as unknown as {
+        source: { path: string; text: { value: string; start: number } };
+      };
+      assert.equal(f.source.path, "/r/5.png");
+      assert.equal(f.source.text.value, "@5.png");
+      assert.equal(f.source.text.start, 4);
+      // And the re-derived source pillifies.
+      assert.match(
+        pillifyOwnText(out as never),
+        /class="file-ref mention-pill" data-path="\/r\/5\.png"/,
+      );
+    });
+    it("leaves unmatched filenames and already-sourced parts alone", () => {
+      const sourced = {
+        type: "file",
+        url: "file:///r/a.ts",
+        source: {
+          type: "file",
+          path: "/r/a.ts",
+          text: { value: "@a.ts", start: 4, end: 9 },
+        },
+      };
+      const loose = {
+        type: "file",
+        url: "data:image/png;base64,AAAA",
+        mime: "image/png",
+        filename: "other.png",
+      };
+      const parts = [
+        { type: "text", text: "see @a.ts ok" } as never,
+        sourced,
+        loose,
+      ] as never;
+      assert.equal(resourcedParts(parts, "/r", []), parts);
+    });
+    it("re-sources a filename-less inlined part by order (the server strips both)", () => {
+      const out = resourcedParts(
+        [
+          { type: "text", text: "see @shot.png ok" } as never,
+          {
+            type: "file",
+            url: "data:image/jpeg;base64,AAAA",
+            mime: "image/jpeg",
+          } as never,
+        ],
+        "/r",
+        [],
+      );
+      const f = out[1] as unknown as {
+        source: { path: string; text: { value: string } };
+      };
+      // Even a misleading token extension pairs — the part is the only
+      // candidate for the only unmatched token.
+      assert.equal(f.source.text.value, "@shot.png");
+      assert.equal(f.source.path, "/r/shot.png");
+    });
+    it("does not hand one token to two parts", () => {
+      const out = resourcedParts(
+        [
+          { type: "text", text: "one @5.png only" } as never,
+          {
+            type: "file",
+            url: "data:image/png;base64,AAAA",
+            mime: "image/png",
+            filename: "5.png",
+          } as never,
+          {
+            type: "file",
+            url: "data:image/png;base64,BBBB",
+            mime: "image/png",
+            filename: "5.png",
+          } as never,
+        ],
+        "/r",
+        [],
+      );
+      assert.ok((out[1] as never as { source?: unknown }).source);
+      assert.ok(!(out[2] as never as { source?: unknown }).source);
     });
   });
 });

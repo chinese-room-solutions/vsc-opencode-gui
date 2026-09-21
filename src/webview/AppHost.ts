@@ -241,16 +241,21 @@ export class AppHost implements vscode.Disposable {
         if (message.type === "open-file" && typeof message.path === "string") {
           const open = async () => {
             const abs = absPathOf(message.path);
-            const doc = await vscode.workspace.openTextDocument(
-              vscode.Uri.file(abs),
-            );
-            const line = Math.max(0, (parseInt(message.line, 10) || 1) - 1);
-            const endLine = message.endLine
-              ? Math.max(0, (parseInt(message.endLine, 10) || 1) - 1)
-              : line;
-            await vscode.window.showTextDocument(doc, {
-              selection: new vscode.Range(line, 0, endLine, 0),
-            });
+            const uri = vscode.Uri.file(abs);
+            try {
+              const doc = await vscode.workspace.openTextDocument(uri);
+              const line = Math.max(0, (parseInt(message.line, 10) || 1) - 1);
+              const endLine = message.endLine
+                ? Math.max(0, (parseInt(message.endLine, 10) || 1) - 1)
+                : line;
+              await vscode.window.showTextDocument(doc, {
+                selection: new vscode.Range(line, 0, endLine, 0),
+              });
+            } catch {
+              // Binaries (images, pdfs) can't be text documents — VS Code's
+              // own editor for the type is the right destination.
+              await vscode.commands.executeCommand("vscode.open", uri);
+            }
           };
           open().catch(async (err) => {
             await vscode.window.showErrorMessage(

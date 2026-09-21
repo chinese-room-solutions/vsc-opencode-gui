@@ -40,7 +40,10 @@ HTTP/SSE.
   text files in the editor, anything else with the system's tool for its
   type. Dragging files in from the OS needs Shift held - without it VS Code
   itself claims the drop and opens the file as an editor.
-
+- **@-mentions are inline chips** - `@path` tokens in the composer render as
+  chips while you type (with `#line`-range support) and turn clickable once
+  the file finder vouches for the path: files open in the editor,
+  directories with the system's tool. Sent messages keep the same pills.
 - **Context & cost ring** - live context-window fill, click for the cost and
   token breakdown.
 - **Remote-ready** - over SSH, dev containers, WSL, or Codespaces the

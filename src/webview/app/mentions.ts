@@ -1,10 +1,11 @@
 // @-mentions, the official app's text dialect. Typing "@" (line start or
 // after whitespace) opens a file finder; selection inserts plain "@path"
 // text — the textarea keeps plain text (drafts, history sweep and edits all
-// stay string-shaped), and parsing happens once, at send, on the final
-// immutable text: every mention token becomes a structured part (file/agent)
-// whose source range points back into it, and the text itself stays inline
-// so the model sees the mention where the user wrote it.
+// stay string-shaped; the composer renders chips from a mirror layer over
+// it), and parsing happens once, at send, on the final immutable text:
+// every mention token becomes a structured part (file/agent) whose source
+// range points back into it, and the text itself stays inline so the model
+// sees the mention where the user wrote it.
 import { isText, type FilePart, type Part, type PromptPart } from "./api";
 
 // The live token before the caret: "@" preceded by start/whitespace, query
@@ -32,19 +33,31 @@ const escMd = (s: string) =>
 // parsed from, so substitution runs per part, ends first, and only where
 // the slice still matches the token.
 export function pillifyOwnText(parts: Part[]): string {
+  // Any sourced file part is a mention — file:// as sent, or a data: url
+  // the server inlined (resourcedParts re-attaches its source).
   const isMention = (p: Part): p is FilePart => {
     const f = p as FilePart;
-    return f.type === "file" && !!f.url?.startsWith("file://") && !!f.source;
+    return f.type === "file" && !!f.source;
   };
-  const pills = parts.filter(isMention).map((p) => {
-    const q = /[?&]start=(\d+)(?:&end=(\d+))?/.exec(p.url!);
-    return {
-      path: p.source!.path,
-      ...p.source!.text,
-      line: q?.[1],
-      endLine: q?.[2],
-    };
-  });
+  const pills = parts
+    .map((p, idx) => ({ p: p as FilePart, idx }))
+    .filter(({ p }) => isMention(p))
+    .map(({ p, idx }) => {
+      const q = /[?&]start=(\d+)(?:&end=(\d+))?/.exec(p.url!);
+      return {
+        path: p.source!.path,
+        ...p.source!.text,
+        line: q?.[1],
+        endLine: q?.[2],
+        // openFile on a directory fails host-side — the pill flags it so the
+        // click delegation can hand it to openExternal instead.
+        dir: p.mime === "application/x-directory",
+        // An inlined image the server stripped the source from: the pill
+        // carries its part index so clicks/hovers can reach the bytes for
+        // the lightbox and the hover preview (no file:// to open).
+        imgIdx: p.url?.startsWith("data:image/") ? idx : undefined,
+      };
+    });
   return parts
     .filter(isText)
     .filter((p) => !p.synthetic)
@@ -57,6 +70,8 @@ export function pillifyOwnText(parts: Part[]): string {
       for (const d of hits) {
         const attrs =
           ` class="file-ref mention-pill" data-path="${escMd(d.path)}"` +
+          (d.imgIdx !== undefined ? ` data-img-idx="${d.imgIdx}"` : "") +
+          (d.dir ? ` data-dir="1"` : "") +
           (d.line ? ` data-line="${d.line}"` : "") +
           (d.endLine ? ` data-endLine="${d.endLine}"` : "");
         text =
@@ -85,8 +100,9 @@ function fileUrl(abs: string): string {
 }
 
 // Join a finder result (relative) or a typed path (may be absolute) onto the
-// session's directory.
-function resolve(base: string, rel: string): string {
+// session's directory. Shared by the parser and the composer's chip
+// verification, which compares finder rows against resolved token paths.
+export function resolve(base: string, rel: string): string {
   if (/^([A-Za-z]:[\\/]|\\\\|\/\/|\/)/.test(rel)) return rel.replace(/\\/g, "/");
   return `${base.replace(/[\\/]+$/, "")}/${rel.replace(/\\/g, "/")}`;
 }
@@ -97,17 +113,37 @@ const TOKEN = /(^|[\s([{"'])@(\S+)/g;
 // Punctuation that reads as sentence structure, not path.
 const TRAILING = /[.,!?;:)}\]"']+$/;
 
-// Lift every mention in `text` into structured parts. `agentNames` are the
-// mentionable agents (non-primary); a token exactly naming one is an agent
-// mention, anything else a file path (with optional #line / #start-end
-// range, the TUI's syntax — the server turns it into a ranged Read).
-// File parts dedupe by url; directories (trailing "/") list instead of read.
-export function parseMentions(
+// One mention lifted out of the text. The composer's live chip layer and
+// the send-time parser share this scan, so the chip being typed and the
+// part it becomes at send can never disagree.
+export interface MentionToken {
+  // "@token" exactly as it sits in the text (TRAILING punctuation stripped).
+  value: string;
+  start: number; // index of the "@"
+  end: number;
+  kind: "file" | "dir" | "agent";
+  // Agent tokens name the agent; file/dir tokens carry the range-stripped
+  // path as typed, its resolved absolute form, and its file:// url.
+  name?: string;
+  rel?: string;
+  path?: string;
+  url?: string;
+  range?: string;
+  line?: string;
+  endLine?: string;
+}
+
+// Scan `text` into mention tokens: agent tokens name a mentionable agent,
+// path-shaped tokens become file/dir tokens (with optional #line /
+// #start-end range, the TUI's syntax — the server turns it into a ranged
+// Read). File tokens dedupe by url; directories (trailing "/") list
+// instead of read.
+export function mentionTokens(
   text: string,
   base: string,
   agentNames: string[],
-): PromptPart[] {
-  const parts: PromptPart[] = [];
+): MentionToken[] {
+  const out: MentionToken[] = [];
   const seen = new Set<string>();
   for (const m of text.matchAll(TOKEN)) {
     const token = m[2].replace(TRAILING, "");
@@ -115,10 +151,12 @@ export function parseMentions(
     const start = m.index + m[1].length;
     const end = start + token.length + 1;
     if (agentNames.includes(token)) {
-      parts.push({
-        type: "agent",
+      out.push({
+        value: text.slice(start, end),
+        start,
+        end,
+        kind: "agent",
         name: token,
-        source: { value: text.slice(start, end), start, end },
       });
       continue;
     }
@@ -127,25 +165,148 @@ export function parseMentions(
     if (!/[/.#~\\]/.test(token)) continue;
     let path = token;
     let range = "";
+    let line: string | undefined;
+    let endLine: string | undefined;
     const lr = /^(.*)#(\d+)(?:-(\d+))?$/.exec(token);
     if (lr) {
       path = lr[1];
+      line = lr[2];
+      endLine = lr[3];
       range = lr[3] ? `?start=${lr[2]}&end=${lr[3]}` : `?start=${lr[2]}`;
     }
     const abs = resolve(base, path);
     const url = `file://${fileUrl(abs)}${range}`;
     if (seen.has(url)) continue;
     seen.add(url);
-    parts.push({
-      type: "file",
-      mime: /[\\/]$/.test(path) ? "application/x-directory" : "text/plain",
+    out.push({
+      value: text.slice(start, end),
+      start,
+      end,
+      kind: /[\\/]$/.test(path) ? "dir" : "file",
+      rel: path,
+      path: abs,
       url,
-      source: {
-        type: "file",
-        path: abs,
-        text: { value: text.slice(start, end), start, end },
-      },
+      range,
+      line,
+      endLine,
     });
   }
-  return parts;
+  return out;
+}
+
+// The server inlines image mentions as data: parts, dropping both the
+// source range and the filename that pillifies them — re-derive it at
+// render. Pass 1 pairs a part's filename with a token of the same
+// basename; pass 2 zips the filename-less parts (server-inlined mentions —
+// real pastes keep their filenames) with the still-unmatched tokens in
+// order. Parts that already carry a source claim their token first.
+export function resourcedParts(
+  parts: Part[],
+  base: string,
+  agentNames: string[],
+): Part[] {
+  const toks = tokensByTextPart(parts, base, agentNames);
+  if (toks.length === 0) return parts;
+  const claimed = new Set(
+    parts
+      .filter(
+        (p) =>
+          (p as FilePart).type === "file" && (p as FilePart).source,
+      )
+      .map((p) => (p as FilePart).source!.text.value),
+  );
+  const free = (t: (typeof toks)[number]) => !claimed.has(t.value);
+  const attach = (
+    f: FilePart,
+    t: (typeof toks)[number],
+  ): Part => {
+    claimed.add(t.value);
+    return {
+      ...f,
+      source: {
+        type: "file" as const,
+        path: t.path!,
+        text: { value: t.value, start: t.start, end: t.end },
+      },
+    };
+  };
+  const basename = (s: string) => s.split(/[\\/]/).pop()!.toLowerCase();
+  let changed = false;
+  let out = parts.map((p) => {
+    const f = p as FilePart;
+    if (f.type !== "file" || f.source || !f.filename) return p;
+    const t = toks.find(
+      (tok) => free(tok) && basename(tok.rel!) === basename(f.filename!),
+    );
+    if (!t) return p;
+    changed = true;
+    return attach(f, t);
+  });
+  // Pass 2: filename-less sourceless parts (the server-inlined mentions)
+  // pair with unmatched tokens in order.
+  const anon = out.filter(
+    (p): p is FilePart =>
+      (p as FilePart).type === "file" &&
+      !(p as FilePart).source &&
+      !(p as FilePart).filename,
+  );
+  if (anon.length > 0) {
+    out = out.map((p) => {
+      const f = p as FilePart;
+      if (f.type !== "file" || f.source || f.filename) return p;
+      const idx = anon.indexOf(f);
+      const t = toks.filter(free)[idx];
+      if (!t) return p;
+      changed = true;
+      return attach(f, t);
+    });
+  }
+  return changed ? out : parts;
+}
+
+// Mention tokens per text part, carrying the part index — pillifyOwnText
+// slices ranges against each part's own text, so re-derived sources must
+// be part-local too.
+function tokensByTextPart(
+  parts: Part[],
+  base: string,
+  agentNames: string[],
+): (MentionToken & { partIndex: number })[] {
+  const toks: (MentionToken & { partIndex: number })[] = [];
+  parts.forEach((p, i) => {
+    if (!isText(p) || p.synthetic || !p.text) return;
+    for (const t of mentionTokens(p.text, base, agentNames)) {
+      if (t.kind !== "agent") toks.push({ ...t, partIndex: i });
+    }
+  });
+  return toks;
+}
+
+// Lift every mention in `text` into structured parts — the token scan with
+// the part shapes the prompt endpoint speaks. File parts dedupe by url;
+// directories (trailing "/") list instead of read.
+export function parseMentions(
+  text: string,
+  base: string,
+  agentNames: string[],
+): PromptPart[] {
+  return mentionTokens(text, base, agentNames).map((t) =>
+    t.kind === "agent"
+      ? {
+          type: "agent",
+          name: t.name!,
+          source: { value: t.value, start: t.start, end: t.end },
+        }
+      : {
+          type: "file",
+          mime:
+            t.kind === "dir" ? "application/x-directory" : "text/plain",
+          url: t.url!,
+          source: {
+            type: "file",
+            path: t.path!,
+            text: { value: t.value, start: t.start, end: t.end },
+          },
+        },
+  );
 }

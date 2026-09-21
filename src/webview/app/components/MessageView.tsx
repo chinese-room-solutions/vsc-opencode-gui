@@ -3,7 +3,9 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/ho
 import type { ComponentChildren } from "preact";
 import type { ChatMessage } from "../store";
 import {
+  agents,
   charsPerToken,
+  currentDir,
   fmtDur,
   insertComposerText,
   modelLabel,
@@ -11,9 +13,10 @@ import {
   resolveFileRef,
   revertSession,
   sessionStatus,
+  sessions,
 } from "../store";
 import { extOf, isText, isTool, tokensTotal, attachMime, type FilePart, type Part, type TextPart, type ToolPart } from "../api";
-import { pillifyOwnText } from "../mentions";
+import { pillifyOwnText, resourcedParts } from "../mentions";
 import { enhanceBlockquotes, enhanceCodeBlocks, enhanceInlineCode, renderMarkdown, tagFileRefs } from "../markdown";
 import { openFile, openExternal } from "../host";
 import {
@@ -99,6 +102,29 @@ export function StatusStats(props: { start?: number; gen: number }) {
 const STREAM_PARSE_MS = 250;
 const STREAM_RAW_LIMIT = 131_072;
 
+// One floating image preview for pill hovers — created lazily, reused,
+// never interactive.
+let hoverImg: HTMLImageElement | undefined;
+function showHoverImg(src: string, x: number, y: number) {
+  if (!hoverImg) {
+    hoverImg = document.createElement("img");
+    hoverImg.className = "hover-img";
+    hoverImg.alt = "";
+    document.body.appendChild(hoverImg);
+  }
+  hoverImg.src = src;
+  hoverImg.style.left = `${Math.min(x + 14, window.innerWidth - 216)}px`;
+  // Above the cursor when there's room; otherwise flip below so the
+  // preview never leaves the viewport.
+  const above = y > 170;
+  hoverImg.style.top = `${above ? y - 14 : y + 14}px`;
+  hoverImg.style.transform = above ? "translateY(-100%)" : "none";
+  hoverImg.style.display = "block";
+}
+function hideHoverImg() {
+  if (hoverImg) hoverImg.style.display = "none";
+}
+
 // Rendered markdown: sanitize first, then tag file-ref code spans/links so
 // one delegated click handler can open them host-side.
 function Markdown(props: {
@@ -112,6 +138,9 @@ function Markdown(props: {
   streaming?: boolean;
   // Lets a parent measure the rendered box (user-text clamp).
   innerRef?: (el: HTMLDivElement | null) => void;
+  // data: image urls by part index — pills carrying data-img-idx preview
+  // on hover and open the lightbox instead of the editor.
+  imgByIdx?: (string | undefined)[];
 }) {
   const streaming = props.streaming === true;
   const raw = streaming && props.text.length > STREAM_RAW_LIMIT;
@@ -157,6 +186,11 @@ function Markdown(props: {
       </div>
     );
   }
+  const imgOf = (t: HTMLElement | null): string | undefined => {
+    const i = t?.dataset.imgIdx;
+    if (i === undefined || !props.imgByIdx) return undefined;
+    return props.imgByIdx[Number(i)];
+  };
   return (
     <div
       ref={setEl}
@@ -164,13 +198,39 @@ function Markdown(props: {
       dangerouslySetInnerHTML={{ __html: html }}
       onClick={(e) => {
         const t = (e.target as HTMLElement).closest<HTMLElement>(".file-ref");
-        if (!t?.dataset.path) return;
+        if (!t) return;
+        const img = imgOf(t);
+        if (img) {
+          // An inlined image mention: the bytes are on the part, not on
+          // disk at a file:// path — preview them, don't open the editor.
+          e.preventDefault();
+          openLightbox({
+            uri: img,
+            name: t.textContent?.replace(/^@/, "") ?? "image",
+          });
+          return;
+        }
+        if (!t.dataset.path) return;
         e.preventDefault();
         const target = t.dataset.path;
         const { line, endLine } = t.dataset;
         // resolveFileRef is total — it opens the input itself when nothing
-        // matches, so there is no rejection path to handle.
-        void resolveFileRef(target).then((p) => openFile(p, line, endLine));
+        // matches, so there is no rejection path to handle. Directory
+        // mentions carry data-dir: openTextDocument fails on them, so they
+        // go to the OS tool instead of the editor.
+        void resolveFileRef(target).then((p) => {
+          if (t.dataset.dir) openExternal(p);
+          else openFile(p, line, endLine);
+        });
+      }}
+      onMouseOver={(e) => {
+        const t = (e.target as HTMLElement).closest<HTMLElement>(".file-ref");
+        const img = imgOf(t);
+        if (img) showHoverImg(img, e.clientX, e.clientY);
+      }}
+      onMouseOut={(e) => {
+        const t = (e.target as HTMLElement).closest<HTMLElement>(".file-ref");
+        if (t?.dataset.imgIdx !== undefined) hideHoverImg();
       }}
     />
   );
@@ -266,6 +326,8 @@ function ClampedText(props: {
   // highlight.js paint, host tokenize on settle).
   tokenize?: boolean;
   foot?: ComponentChildren;
+  // Forwarded to Markdown: inlined-image urls by part index.
+  imgByIdx?: (string | undefined)[];
 }) {
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
@@ -319,6 +381,7 @@ function ClampedText(props: {
           text={props.text}
           innerRef={(el) => (boxRef.current = el)}
           tokenize={props.tokenize}
+          imgByIdx={props.imgByIdx}
           class={
             expanded
               ? `${props.base} expanded`
@@ -707,13 +770,24 @@ function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
     const sid = parts[0]?.sessionID;
     const pending = info.id.startsWith("pending:");
     const command = info.id.startsWith("cmd:");
-    const files = parts.filter((p): p is FilePart => {
+    // The server can strip mention sources (images come back as inlined
+    // data: parts) — re-derive them so pills stay put in the text.
+    const view = resourcedParts(
+      parts,
+      (sessions.value.find((s) => s.id === sid)?.location?.directory ||
+        currentDir.value ||
+        "") as string,
+      agents.value
+        .filter((a) => !a.hidden && a.mode !== "primary")
+        .map((a) => a.name),
+    );
+    const files = view.filter((p): p is FilePart => {
       if (p.type !== "file") return false;
       const f = p as FilePart;
-      // data: = pasted attachment. file:// without a source range = a
-      // "+"-picked file; file:// WITH source is an @-mention, pillified
-      // into the text instead.
-      if (f.url?.startsWith("data:")) return true;
+      // data: = pasted attachment (unless it's a re-sourced mention pill).
+      // file:// without a source range = a "+"-picked file; file:// WITH
+      // source is an @-mention, pillified into the text instead.
+      if (f.url?.startsWith("data:")) return !f.source;
       return !!f.url?.startsWith("file:") && !f.source;
     });
     const peer = peerMessage(parts);
@@ -751,7 +825,13 @@ function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
           </div>
         )}
         <ClampedText
-          text={pillifyOwnText(parts)}
+          text={pillifyOwnText(view)}
+          imgByIdx={view.map((p) =>
+            (p as FilePart).type === "file" &&
+            (p as FilePart).url?.startsWith("data:image/")
+              ? (p as FilePart).url
+              : undefined,
+          )}
           base="markdown msg-text user-text"
           foot={
             !pending &&

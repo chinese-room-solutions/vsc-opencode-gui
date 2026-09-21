@@ -1376,14 +1376,30 @@ body {
   z-index: 10;
 }
 
+/* The textarea and its mirror: the textarea owns the text (draft, caret,
+   selection, IME) but paints it transparent; the mirror paints the same
+   text with @-mention chips and rides on top, transparent to the pointer
+   except its clickable chips. Both must compute the exact same metrics —
+   font, line-height, zero padding/border, pre-wrap + break-word — so the
+   visible mirror glyphs land under (on) the invisible textarea glyphs and
+   the caret stays honest. The mirror reserves a scrollbar gutter like the
+   textarea (overflow-y: auto) so long drafts wrap identically in both. */
+
+.composer-input {
+  position: relative;
+}
+
 .composer textarea {
+  display: block;
+  width: 100%;
   min-height: 26px;
   max-height: 40vh;
   resize: none;
   padding: 0;
   border: none;
   background: none;
-  color: var(--oc-text);
+  color: transparent;
+  caret-color: var(--vscode-editor-foreground);
   font: inherit;
   line-height: 1.45;
   outline: none;
@@ -1391,6 +1407,40 @@ body {
 
 .composer textarea::placeholder {
   color: var(--oc-text-2);
+}
+
+/* While an IME composition is in flight the mirror lags the value (the
+   composing string is not in it yet) — the textarea shows its own text
+   until the composition commits. */
+.composer-input.composing textarea {
+  color: var(--oc-text);
+}
+
+.composer-input.composing .composer-mirror {
+  visibility: hidden;
+}
+
+.composer-mirror {
+  position: absolute;
+  /* The box starts 5px above and beside the textarea so the chips'
+     painted frame (spread box-shadows reach past the first line's top and
+     the advance box's sides) survives the mirror's own overflow clip; the
+     padding puts the text back at the textarea's lines. Layout-neutral:
+     the mirror is absolutely positioned and scrolls in lockstep (see
+     syncScroll). */
+  left: -5px;
+  right: -5px;
+  top: -5px;
+  bottom: 0;
+  z-index: 1;
+  overflow: hidden auto;
+  pointer-events: none;
+  color: var(--oc-text);
+  font: inherit;
+  line-height: 1.45;
+  padding: 5px 5px 0;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
 }
 
 /* Attached-file chips between the textarea and the composer bar. */
@@ -1435,7 +1485,7 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   vertical-align: bottom;
-  padding: 0 8px;
+  padding: 2px 4px;
   font-size: 12px;
   line-height: 18px;
   color: var(--oc-text-2);
@@ -1448,6 +1498,68 @@ body {
 .mention-pill:hover {
   color: var(--oc-text);
   border-color: var(--vscode-focusBorder);
+}
+
+/* Cursor-anchored preview for hovering an inlined-image pill. */
+.hover-img {
+  position: fixed;
+  z-index: 90;
+  display: none;
+  max-width: 200px;
+  max-height: 140px;
+  border: 1px solid var(--oc-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  background: var(--vscode-input-background);
+  pointer-events: none;
+}
+
+/* A mention chip in the composer's mirror: the same family (colors, radius,
+   hover) but paint-only — real padding or a border would widen the chip
+   past the raw text it replaces and desync the mirror from the textarea's
+   caret, so the chip family's padding + border are painted as spread
+   box-shadows. Inside padding and outside air share the typed space's
+   width (the frame cannot create advance), so the body is capped at 3px:
+   3px body + 1px ring leaves ~1.5px air after a single space; a second
+   space buys more. Spread paints outside the layout box, so the advance
+   stays truthful. */
+.mention-chip {
+  border-radius: 4px;
+  background: var(--vscode-input-background);
+  box-shadow:
+    0 0 0 3px var(--vscode-input-background),
+    0 0 0 4px var(--oc-border);
+  color: var(--oc-text-2);
+  box-decoration-break: clone;
+}
+
+/* The finder vouched for the path — the chip opens it (text in the editor,
+   directories and non-text with the system tool). */
+.mention-chip.chip-open {
+  pointer-events: auto;
+  cursor: pointer;
+  color: var(--oc-text);
+}
+
+.mention-chip.chip-open:hover {
+  box-shadow:
+    0 0 0 3px var(--vscode-input-background),
+    0 0 0 4px var(--vscode-focusBorder);
+}
+
+/* The selection band is painted by the textarea below the mirror — a
+   selected chip paints only its body spread in the selection color and
+   leaves the core transparent, so the band itself is the core: one layer
+   of the (possibly translucent) selection color everywhere, no brighter
+   double-painted core. */
+.composer textarea::selection {
+  background: var(--vscode-editor-selectionBackground, #add6ff);
+  color: var(--vscode-editor-selectionForeground, inherit);
+}
+
+.mention-chip.sel {
+  background: transparent;
+  box-shadow: 0 0 0 3px var(--vscode-editor-selectionBackground, #add6ff);
 }
 
 .chip-ext {

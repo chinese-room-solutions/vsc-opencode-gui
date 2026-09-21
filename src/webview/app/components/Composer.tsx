@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "preact/hooks";
 import type { JSX } from "preact";
 import { attachAllowed, attachMime, extOf, findFiles, isText, sniffsText, type SessionStatus } from "../api";
 import { postToHost, openFile, openExternal } from "../host";
-import { atTrigger } from "../mentions";
+import { atTrigger, mentionTokens, resolve, type MentionToken } from "../mentions";
 import {
   addComposerFiles,
   agents,
@@ -155,6 +155,7 @@ async function attachFiles(
 // delivers it as the next turn the moment the current one ends.
 export function Composer(props: { sessionId?: string; status?: SessionStatus }) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  const mirrorRef = useRef<HTMLDivElement>(null);
   const draftKey = props.sessionId ?? "draft";
   // Attachment chips are this composer's own — a global list would follow
   // you into every tab you switch to.
@@ -163,11 +164,46 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
   // The send button mirrors the input: while a turn runs, an empty field
   // offers Stop, any text swaps it for Send — a busy session queues the
   // message into the running turn, so sending stays one click away.
+  const [typed, setTyped] = useState<{ key: string; text: string }>(() => ({
+    key: draftKey,
+    text: getDraft(draftKey),
+  }));
+  // The mirror's text: the keyed state while it belongs to this draft, the
+  // restored draft itself for the one render after a session switch (the
+  // restore effect syncs the state right after).
+  const text = typed.key === draftKey ? typed.text : getDraft(draftKey);
   const [hasText, setHasText] = useState(
     () => getDraft(draftKey).trim().length > 0,
   );
-  const syncText = (el: HTMLTextAreaElement) =>
+  // The mirror renders every value change (the textarea itself paints
+  // transparent text); IME compositions show the textarea's own paint until
+  // they commit. The native selection band lives in the textarea's layer
+  // below the mirror, so selected chips repaint themselves in the same
+  // selection color to keep the band unbroken.
+  const [composing, setComposing] = useState(false);
+  const [sel, setSel] = useState<[number, number] | null>(null);
+  // Re-read the textarea's selection. The "select" event only fires for
+  // range-making changes — collapsing a selection by a plain click (caret
+  // set) or Shift+Arrow down to zero never fires it, so every interaction
+  // path that can change the selection re-syncs from the element itself.
+  const syncSel = (el: HTMLTextAreaElement) =>
+    setSel(
+      el.selectionStart === el.selectionEnd
+        ? null
+        : [el.selectionStart, el.selectionEnd],
+    );
+  const syncText = (el: HTMLTextAreaElement) => {
+    setTyped({ key: draftKey, text: el.value });
     setHasText(el.value.trim().length > 0);
+    // Selection state must follow programmatic value changes too (send
+    // clears the field, drafts restore) — the textarea's own "select" event
+    // never fires for those, and a stale range would leave chips lit.
+    setSel(
+      el.selectionStart === el.selectionEnd
+        ? null
+        : [el.selectionStart, el.selectionEnd],
+    );
+  };
   // Open while the text is a bare "/query" — closed once a space (args)
   // follows. `slashIndex` is the highlighted match.
   const [slashQuery, setSlashQuery] = useState<string | undefined>();
@@ -299,6 +335,144 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
             path: p,
           })),
         ];
+
+  // The composer's live mention chips: the same token scan the send path
+  // turns into parts (base and agent names match postPrompt), so what the
+  // user sees materialize is exactly what the prompt will carry. Agent
+  // tokens stay plain text — they mention, they don't link.
+  const base =
+    (props.sessionId
+      ? sessions.value.find((s) => s.id === props.sessionId)?.location
+          ?.directory
+      : undefined) ||
+    currentDir.value ||
+    "";
+  const chips = mentionTokens(
+    text,
+    base,
+    agents.value
+      .filter((a) => !a.hidden && a.mode !== "primary")
+      .map((a) => a.name),
+  ).filter((t) => t.kind !== "agent");
+
+  // A chip opens only once the server's file finder vouches that its
+  // resolved path exists — the same endpoint the @-menu searches, queried
+  // with the token's typed path and compared resolved-to-resolved
+  // (directory rows keep their trailing "/"). Verdicts cache per path for
+  // the component's life; the check rides a debounce behind the typing and
+  // runs one path at a time.
+  const [verified, setVerified] = useState<ReadonlySet<string>>(new Set());
+  const findCache = useRef(new Map<string, boolean>());
+  useEffect(() => {
+    const pending = [
+      ...new Set(
+        chips.filter((t) => !findCache.current.has(t.path!)).map((t) => t.path!),
+      ),
+    ];
+    if (pending.length === 0) return;
+    const dir = base || undefined;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        const norm = (p: string) => p.replace(/[\\/]+$/, "");
+        for (const p of pending) {
+          if (findCache.current.has(p)) continue;
+          const token = chips.find((t) => t.path === p);
+          let ok = false;
+          try {
+            const rows = await findFiles(token?.rel ?? p, dir);
+            ok = rows.some((r) => norm(resolve(base, r)) === norm(p));
+          } catch {
+            // offline/failed query: not vouched for — the chip stays inert
+          }
+          findCache.current.set(p, ok);
+          if (ok) setVerified((prev) => new Set(prev).add(p));
+        }
+      })();
+    }, 200);
+    return () => window.clearTimeout(timer);
+    // `chips` is derived from text+base+agents; text/base drive the re-run.
+  }, [text, base]);
+
+  // Open a verified chip: text files in the editor (with the #line range),
+  // directories and anything not text with the OS tool for its type.
+  const openChip = (t: MentionToken) => {
+    const name = t.rel!.split(/[\\/]/).pop() ?? "";
+    if (t.kind === "dir" || attachMime(name, "") !== "text/plain") {
+      openExternal(t.path!);
+      return;
+    }
+    openFile(t.path!, t.line, t.endLine);
+  };
+
+  // The mirror paints the text the textarea renders transparent; it must
+  // track the textarea's scroll or long drafts drift apart. The mirror box
+  // rides 5px above and beside the textarea (chip-frame headroom), so its
+  // scroll leads by the same offsets.
+  const syncScroll = (el: HTMLTextAreaElement) => {
+    const m = mirrorRef.current;
+    if (m) {
+      m.scrollTop = el.scrollTop + 5;
+      m.scrollLeft = el.scrollLeft + 5;
+    }
+  };
+  useEffect(() => {
+    const el = ref.current;
+    if (el) syncScroll(el);
+  }, [text]);
+
+  // The textarea's blur never fires when focus leaves the webview iframe
+  // itself (VS Code chrome, another editor tab) — the iframe's window blur
+  // does, and it must drop the selection tint and the caret-riding mention
+  // menu or both stick until the next keystroke.
+  useEffect(() => {
+    const off = () => {
+      setSel(null);
+      setAtQuery(undefined);
+    };
+    window.addEventListener("blur", off);
+    return () => window.removeEventListener("blur", off);
+  }, []);
+
+  // The tint's single source of truth: document selectionchange fires for
+  // every selection move in the textarea — click-collapses fire no "select"
+  // event at all, and drag-selects can skip the per-element handlers, so
+  // nothing less than this tracks the real selection.
+  useEffect(() => {
+    const onChange = () => {
+      const el = ref.current;
+      if (el && document.activeElement === el) syncSel(el);
+    };
+    document.addEventListener("selectionchange", onChange);
+    return () => document.removeEventListener("selectionchange", onChange);
+  }, []);
+
+  const mirrorSegments = (() => {
+    const out: JSX.Element[] = [];
+    let pos = 0;
+    for (const t of chips) {
+      if (t.start > pos)
+        out.push(<span key={pos}>{text.slice(pos, t.start)}</span>);
+      const open = verified.has(t.path!);
+      const chosen = !!sel && t.start < sel[1] && t.end > sel[0];
+      out.push(
+        <span
+          key={t.start}
+          class={
+            `mention-chip${open ? " chip-open" : ""}${chosen ? " sel" : ""}`
+          }
+          data-path={t.path}
+          title={open ? `${t.path} (click to open)` : t.path}
+          onClick={open ? () => openChip(t) : undefined}
+        >
+          {t.value}
+        </span>,
+      );
+      pos = t.end;
+    }
+    if (pos < text.length)
+      out.push(<span key={`end:${pos}`}>{text.slice(pos)}</span>);
+    return out;
+  })();
 
   // Arrow-walking the menus scrolls the highlighted row into view — the
   // list clips at max-height and nothing else moves it as the walk wraps.
@@ -732,33 +906,50 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
             )}
           </div>
         )}
-        <textarea
-          ref={ref}
-          rows={1}
-          autoFocus={!props.sessionId}
-          placeholder="Ask anything, / for commands, @ for context..."
-          onInput={(e) => {
-            resize(e.currentTarget);
-            syncText(e.currentTarget);
-            putDraft(draftKey, e.currentTarget.value);
-            const m = /^\/\S*$/.exec(e.currentTarget.value);
-            setSlashQuery(m ? m[0].slice(1) : undefined);
-            setSlashIndex(0);
-            setAtQuery(
-              atTrigger(
-                e.currentTarget.value,
-                e.currentTarget.selectionStart ?? e.currentTarget.value.length,
-              ),
-            );
-            setAtIndex(0);
-          }}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-          // Leaving the editor closes the mention menu (the slash menu is
-          // input-driven only; the mention menu would otherwise survive a
-          // click-away with a stale caret).
-          onBlur={() => setAtQuery(undefined)}
-        />
+        <div class={composing ? "composer-input composing" : "composer-input"}>
+          {/* The chip layer over the textarea: pointer-transparent except
+              its verified chips, metric-identical to the text below (see
+              the styles) so the caret and selection stay truthful. */}
+          <div class="composer-mirror" ref={mirrorRef} aria-hidden="true">
+            {mirrorSegments}
+          </div>
+          <textarea
+            ref={ref}
+            rows={1}
+            autoFocus={!props.sessionId}
+            spellcheck={false}
+            placeholder="Ask anything, / for commands, @ for context..."
+            onInput={(e) => {
+              resize(e.currentTarget);
+              syncText(e.currentTarget);
+              putDraft(draftKey, e.currentTarget.value);
+              const m = /^\/\S*$/.exec(e.currentTarget.value);
+              setSlashQuery(m ? m[0].slice(1) : undefined);
+              setSlashIndex(0);
+              setAtQuery(
+                atTrigger(
+                  e.currentTarget.value,
+                  e.currentTarget.selectionStart ?? e.currentTarget.value.length,
+                ),
+              );
+              setAtIndex(0);
+            }}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            onScroll={(e) => syncScroll(e.currentTarget)}
+            onCompositionStart={() => setComposing(true)}
+            onCompositionEnd={() => setComposing(false)}
+            // Leaving the editor closes the mention menu (the slash menu is
+            // input-driven only; the mention menu would otherwise survive a
+            // click-away with a stale caret) and drops the selection tint —
+            // the textarea keeps its selection through blur without firing
+            // "select", so the chips would stay lit.
+            onBlur={() => {
+              setAtQuery(undefined);
+              setSel(null);
+            }}
+          />
+        </div>
         <div class="composer-bar">
           <button
             type="button"
