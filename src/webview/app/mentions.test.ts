@@ -1,6 +1,6 @@
 import "./setup.test";
 import { strict as assert } from "node:assert";
-import { atTrigger, parseMentions } from "./mentions";
+import { atTrigger, parseMentions, pillifyOwnText } from "./mentions";
 
 describe("mentions", () => {
   describe("atTrigger", () => {
@@ -92,6 +92,55 @@ describe("mentions", () => {
       assert.equal(parse("look in @src/", "/r", []).length, 1);
       assert.equal(parse("home @~/x.ts", "/r", []).length, 1);
       assert.equal(parse("run @reviewer on it", "/r", ["reviewer"]).length, 1);
+    });
+  });
+
+  describe("pillifyOwnText", () => {
+    const mention = (value: string, start: number, url = "file:///r/a.ts") => ({
+      type: "file",
+      url,
+      source: {
+        type: "file",
+        path: "/r/a.ts",
+        text: { value, start, end: start + value.length },
+      },
+    });
+    it("lifts a mention into a file-ref pill, text around kept", () => {
+      const out = pillifyOwnText([
+        { type: "text", text: "see @a.ts ok" } as never,
+        mention("@a.ts", 4),
+      ] as never);
+      assert.equal(
+        out,
+        'see <span class="file-ref mention-pill" data-path="/r/a.ts">@a.ts</span> ok',
+      );
+    });
+    it("carries the line range from the url query", () => {
+      const out = pillifyOwnText([
+        { type: "text", text: "x @a.go#10-30" } as never,
+        mention("@a.go", 2, "file:///r/a.go?start=10&end=30"),
+      ] as never);
+      assert.match(out, /data-line="10" data-endLine="30"/);
+    });
+    it("passes text through untouched without mention parts", () => {
+      const out = pillifyOwnText([
+        { type: "text", text: "plain @words only" } as never,
+      ] as never);
+      assert.equal(out, "plain @words only");
+    });
+    it("markdown-escapes the token so snake_case survives marked", () => {
+      const out = pillifyOwnText([
+        { type: "text", text: "see @my_file.ts" } as never,
+        mention("@my_file.ts", 4, "file:///r/my_file.ts"),
+      ] as never);
+      assert.match(out, />@my\\_file\.ts<\/span>$/);
+    });
+    it("skips ranges whose slice no longer matches the token", () => {
+      const out = pillifyOwnText([
+        { type: "text", text: "edited text" } as never,
+        mention("@a.ts", 4),
+      ] as never);
+      assert.equal(out, "edited text");
     });
   });
 });

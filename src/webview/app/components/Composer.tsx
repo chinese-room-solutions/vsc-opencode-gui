@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "preact/hooks";
 import type { JSX } from "preact";
-import { attachMime, findFiles, isText, type SessionStatus } from "../api";
+import { attachMime, extOf, findFiles, isText, type SessionStatus } from "../api";
 import { postToHost } from "../host";
 import { atTrigger } from "../mentions";
 import {
@@ -643,7 +643,8 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
                   </button>
                 </span>
               ) : (
-                <span class="file-chip" key={`${f.name}:${i}`}>
+                <span class="file-chip" key={`${f.name}:${i}`} title={f.name}>
+                  <span class="chip-ext">{extOf(f.name).toUpperCase()}</span>
                   <span class="chip-name">{f.name}</span>
                   <button
                     type="button"

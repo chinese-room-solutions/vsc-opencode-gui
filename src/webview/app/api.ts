@@ -398,6 +398,11 @@ export interface FilePart extends PartBase {
   mime?: string;
   url?: string;
   filename?: string;
+  source?: {
+    type: "file";
+    path: string;
+    text: { value: string; start: number; end: number };
+  };
 }
 
 // `type` stays open (step-start, file, agent, ...) so unseen kinds degrade
@@ -596,6 +601,16 @@ export async function fetchMessages(
               type: "text",
               text: clampPartText(`${r.id}:text`, r.text ?? ""),
             },
+            // Durable @-mention attachments ride the row's content (the live
+            // path speaks parts directly); keep them so pills survive reload.
+            ...(r.content ?? [])
+              .filter((c) => (c as { type?: string }).type === "file")
+              .map((c, i) => ({
+                ...c,
+                id: c.id ?? `${r.id}:f${i}`,
+                messageID: r.id,
+                sessionID: id,
+              })),
           ]
         : (r.content ?? []).map((c, i) => ({
             ...c,
@@ -806,7 +821,7 @@ export async function createSession(
 // model rides along explicitly — prompt_async's own default resolution can
 // land on a model the account can't run (observed: zai-coding-plan
 // glm-5.3-highspeed → 429). A file part carries mime/url/filename.
-function extOf(name: string): string {
+export function extOf(name: string): string {
   const i = name.lastIndexOf(".");
   return i > 0 ? name.slice(i + 1).toLowerCase() : "";
 }

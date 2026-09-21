@@ -82,11 +82,46 @@ const CODE_TAIL = [
 const seedRows = [];
 for (let i = 1; i <= SEED_TURNS; i++) {
   const cu = T0 + (i - 1) * 8_000;
+  // The last turn's prompt ends in an @-mention (with its durable file part)
+  // so the rig can exercise mention pills in the sent message.
+  const userText =
+    `Question ${i}: ${filler(i * 3, 1)}` +
+    (i === SEED_TURNS ? " Tune @src/retry.ts please" : "");
   seedRows.push({
     id: `msg_u${i}`,
     type: "user",
     time: { created: cu, completed: cu + 200 },
-    text: `Question ${i}: ${filler(i * 3, 1)}`,
+    text: userText,
+    ...(i === SEED_TURNS
+      ? {
+          content: [
+            {
+              type: "file",
+              id: `pt_u${i}m`,
+              mime: "text/plain",
+              url: "file:///repo/src/retry.ts",
+              source: {
+                type: "file",
+                path: "/repo/src/retry.ts",
+                text: {
+                  value: "@src/retry.ts",
+                  start: userText.indexOf("@src/retry.ts"),
+                  end: userText.indexOf("@src/retry.ts") + 13,
+                },
+              },
+            },
+            {
+              // A long-named attachment: the message chip row exercises the
+              // cap shared with the composer's pending chip.
+              type: "file",
+              id: `pt_u${i}f`,
+              mime: "application/pdf",
+              filename: "DT DevOps - Software Engineer Nomination Form.pdf",
+              url: "data:application/pdf;base64,ZmFrZQ==",
+            },
+          ],
+        }
+      : {}),
   });
   const ca = cu + 1_000;
   // The last turn leads with settled tool calls so the rig can exercise

@@ -1412,13 +1412,54 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  max-width: 260px;
-  padding: 2px 4px 2px 10px;
+  max-width: 200px;
+  padding: 2px 4px;
   font-size: 12px;
+  /* The row's content height is the 18px × button; an explicit line box of
+     the same height centers the name's ink against it (default metrics put
+     it high). */
+  line-height: 18px;
   color: var(--oc-text-2);
   background: var(--vscode-input-background);
   border: 1px solid var(--oc-border);
   border-radius: 6px;
+}
+
+/* An @-mention lifted out of a sent prompt: the same chip family, inline in
+   the text, click opens the file (the shared .file-ref delegation). The cap
+   keeps a long path from blowing the line — the hover title carries it. */
+.mention-pill {
+  display: inline-block;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  padding: 0 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--oc-text-2);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--oc-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.mention-pill:hover {
+  color: var(--oc-text);
+  border-color: var(--vscode-focusBorder);
+}
+
+.chip-ext {
+  flex: none;
+  padding: 0 4px;
+  border: 1px solid var(--oc-border);
+  border-radius: 3px;
+  font-size: 10px;
+  line-height: 14px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--oc-text-2);
 }
 
 .chip-name {
@@ -1429,6 +1470,9 @@ body {
 
 .chip-x {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 18px;
   height: 18px;
   padding: 0;
@@ -1454,10 +1498,14 @@ body {
   background: none;
 }
 
+/* Every attachment thumbnail crops to one text-chip tall (24px border-box:
+   22px picture + hairlines) — composer row and sent pill alike — so an
+   image never thickens the strip it rides in. */
 .chip-img img {
   display: block;
   width: 48px;
-  height: 48px;
+  height: 24px;
+  box-sizing: border-box;
   object-fit: cover;
   border: 1px solid var(--oc-border);
   border-radius: 6px;
@@ -2381,10 +2429,10 @@ body {
 
 /* User pill: recessed fill, hairline border, dark text. */
 
-/* Attachment chips riding a pill (Claude Code's): square thumbnails for
-   images (the composer's .chip-img look; name and size live on the hover
-   title), name alone for other files. The row sits above the text, outside
-   the clamp, so the pill's words never fold under a thumbnail. */
+/* Attachment chips riding a pill (Claude Code's): the composer's .chip-img
+   look — image thumbnails crop to the slim rectangle; name and size live on
+   the hover title — name alone for other files. The row sits above the
+   text, outside the clamp, so the pill's words never fold under a chip. */
 .msg-files {
   display: flex;
   flex-wrap: wrap;

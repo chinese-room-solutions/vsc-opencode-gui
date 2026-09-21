@@ -12,7 +12,8 @@ import {
   revertSession,
   sessionStatus,
 } from "../store";
-import { isText, isTool, tokensTotal, type FilePart, type Part, type TextPart, type ToolPart } from "../api";
+import { extOf, isText, isTool, tokensTotal, type FilePart, type Part, type TextPart, type ToolPart } from "../api";
+import { pillifyOwnText } from "../mentions";
 import { enhanceBlockquotes, enhanceCodeBlocks, enhanceInlineCode, renderMarkdown, tagFileRefs } from "../markdown";
 import { openFile } from "../host";
 import {
@@ -398,10 +399,10 @@ function peerMessage(parts: Part[]): {
   return { text, from, title };
 }
 
-// Attachment chips above a user pill's text (Claude Code's): images a square
-// thumbnail — name and pixel size move to the hover title — other files
+// Attachment chips above a user pill's text (Claude Code's): images a slim
+// thumbnail crop — name and pixel size move to the hover title — other files
 // their name; an image click opens the lightbox. Data-URI parts only —
-// @-mentions already show inline as "@path" in the text.
+// @-mentions pillify inline via pillifyOwnText instead.
 function AttachChip(props: { p: FilePart }) {
   const [dims, setDims] = useState<{ w: number; h: number } | undefined>();
   const f = props.p;
@@ -409,7 +410,8 @@ function AttachChip(props: { p: FilePart }) {
   const name = f.filename?.split(/[\\/]/).pop() || "file";
   if (!f.url?.startsWith("data:image/"))
     return (
-      <span class="file-chip">
+      <span class="file-chip" title={name}>
+        <span class="chip-ext">{extOf(name).toUpperCase()}</span>
         <span class="chip-name">{name}</span>
       </span>
     );
@@ -729,7 +731,7 @@ function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
           </div>
         )}
         <ClampedText
-          text={ownText(parts)}
+          text={pillifyOwnText(parts)}
           base="markdown msg-text user-text"
           foot={
             !pending &&
