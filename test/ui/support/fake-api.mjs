@@ -47,6 +47,38 @@ function filler(seed, paragraphs) {
 
 // --- seeded transcript: 12 user/assistant turns, several paragraphs each ---
 const T0 = Date.now() - SEED_TURNS * 60_000;
+
+// Code-block copy fixture: appended to turn 6's reply. A short fence (in
+// place for modifier+click), a tall fence (button-only, over the 10-line
+// small-block cap), a fenced block inside a list, and an inline span.
+const CODE_TAIL = [
+  "Plain fence:",
+  "",
+  "```ts",
+  "const a = 1;",
+  "const b = 2;",
+  "console.log(a + b);",
+  "```",
+  "",
+  "Tall fence:",
+  "",
+  "```js",
+  ...Array.from({ length: 14 }, (_, i) => `// line ${i + 1} of the tall block`),
+  "```",
+  "",
+  "In a list:",
+  "",
+  "- step one",
+  "- run it:",
+  "",
+  "  ```sh",
+  "  npm run compile",
+  "  npm test",
+  "  ```",
+  "",
+  "And an `inlineSpan(42)` in prose.",
+].join("\n");
+
 const seedRows = [];
 for (let i = 1; i <= SEED_TURNS; i++) {
   const cu = T0 + (i - 1) * 8_000;
@@ -130,7 +162,11 @@ for (let i = 1; i <= SEED_TURNS; i++) {
     tokens: { input: 100 * i, output: 400 * i, reasoning: 0, cache: { read: 0, write: 0 }, total: 500 * i },
     content: [
       ...tools,
-      { type: "text", id: `pt_a${i}`, text: filler(i * 11, 6) },
+      {
+        type: "text",
+        id: `pt_a${i}`,
+        text: i === 6 ? `${filler(i * 11, 6)}\n\n${CODE_TAIL}` : filler(i * 11, 6),
+      },
     ],
   });
 }

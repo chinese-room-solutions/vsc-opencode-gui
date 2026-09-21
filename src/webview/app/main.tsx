@@ -2,6 +2,7 @@ import { render } from "preact";
 import { App } from "./App";
 import { ErrorBoundary, showCrashCard } from "./components/ErrorBoundary";
 import { captureApi, postToHost } from "./host";
+import { initTranscriptCopy } from "./markdown";
 import { restoreRoute } from "./router";
 import { hostMessage, init, popover, setPopover } from "./store";
 import "./styles.css";
@@ -9,6 +10,7 @@ import "./styles.css";
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
 
 captureApi(acquireVsCodeApi());
+initTranscriptCopy();
 
 const root = document.getElementById("app");
 if (root)

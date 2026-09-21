@@ -205,6 +205,49 @@ export function enhanceCodeBlocks(root: HTMLElement, tokenize = true): void {
   }
 }
 
+// Transcript selection copies are rewritten as clean plain text plus a
+// structural HTML flavor. Chromium's default HTML payload bakes every
+// element's computed styles into the fragment — theme colors, the code
+// block's background dump — and rich paste targets inherit them or choke
+// on the nesting: colored prose, gray code slabs. The rewrite keeps the
+// structure (paragraphs, pre, code, lists, links) and drops every style
+// and class, so the paste takes the target's own formatting: formatting
+// only, never colors. Editables (composer) keep the native behavior.
+const COPY_STRIP = "style, script, button, svg, .code-copy";
+
+export function initTranscriptCopy(): void {
+  document.addEventListener("copy", (e: ClipboardEvent) => {
+    const sel = document.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+    const range = sel.getRangeAt(0);
+    const scope = (n: Node | null): Element | null => {
+      const el = n instanceof Element ? n : n?.parentElement ?? null;
+      return el?.closest(".msgs") ?? null;
+    };
+    const start = scope(range.startContainer);
+    if (!start || start !== scope(range.endContainer)) return;
+    // A range inside a code block clones bare token spans — no pre, so
+    // targets that flow text would collapse the newlines again. Wrap the
+    // fragment in the block's own pre (attribute-free) in that case.
+    const common =
+      range.commonAncestorContainer instanceof Element
+        ? range.commonAncestorContainer
+        : range.commonAncestorContainer.parentElement;
+    const pre = common?.closest("pre");
+    const box = pre?.cloneNode(false) as HTMLElement | null ?? document.createElement("div");
+    box.appendChild(range.cloneContents());
+    box.querySelectorAll(COPY_STRIP).forEach((el) => el.remove());
+    for (const el of [box, ...box.querySelectorAll("*")]) {
+      for (const attr of [...el.attributes]) {
+        if (attr.name !== "href") el.removeAttribute(attr.name);
+      }
+    }
+    e.preventDefault();
+    e.clipboardData?.setData("text/plain", sel.toString());
+    e.clipboardData?.setData("text/html", pre ? box.outerHTML : box.innerHTML);
+  });
+}
+
 // Copy affordance for blockquotes: the same control as fenced blocks,
 // revealed on hover at the block's top right; copies the quoted text.
 export function enhanceBlockquotes(root: HTMLElement): void {
