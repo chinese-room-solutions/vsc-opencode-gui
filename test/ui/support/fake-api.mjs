@@ -150,6 +150,31 @@ for (let i = 1; i <= SEED_TURNS; i++) {
               time: { start: ca + 6_900, end: ca + 8_400 },
             },
           },
+          {
+            type: "tool",
+            id: "pt_task1",
+            name: "task",
+            state: {
+              status: "completed",
+              input: { description: "Check the retry paths", subagent_type: "general" },
+              output: "done",
+              time: { start: ca + 8_600, end: ca + 9_400 },
+            },
+          },
+          {
+            type: "tool",
+            id: "pt_task2",
+            name: "task",
+            state: {
+              status: "completed",
+              input: {
+                description: "Explore the attribution retry paths",
+                subagent_type: "oc-model-ai-gateway-fireworks-glm-5-3-flash",
+              },
+              output: "done",
+              time: { start: ca + 9_600, end: ca + 10_400 },
+            },
+          },
         ]
       : [];
   seedRows.push({
