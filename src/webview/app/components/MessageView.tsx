@@ -525,6 +525,9 @@ function ThinkingBlock(props: {
   p: TextPart;
   live: boolean;
   closed?: boolean;
+  // Settle stamp for a closed segment the endpoint never end-stamped:
+  // its successor's start, when the thinking demonstrably stopped.
+  endedAt?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [, setTick] = useState(0);
@@ -536,26 +539,26 @@ function ThinkingBlock(props: {
     return () => window.clearInterval(iv);
   }, [props.live]);
   const t = props.p.time;
+  const end = t?.end ?? props.endedAt;
   // The end stamp alone doesn't close the window: the endpoint ends
   // reasoning segments mid-thought and reopens the part, so settling
-  // needs a successor part (tool call, answer text) or the turn going
-  // quiet — otherwise the label flashes "Thought" between segments.
-  const over = !props.live || (t?.end !== undefined && props.closed === true);
+  // needs a successor part (tool call, answer text, next segment) or the
+  // turn going quiet — otherwise the label flashes "Thought" between
+  // segments.
+  const over = !props.live || (end !== undefined && props.closed === true);
   // While unsettled the clock runs on: an end stamp between segments
   // would freeze a timer that is still telling the truth.
   const secs = t?.start
     ? Math.max(
         1,
-        Math.round(
-          ((over ? t.end ?? Date.now() : Date.now()) - t.start) / 1000,
-        ),
+        Math.round(((over ? end ?? Date.now() : Date.now()) - t.start) / 1000),
       )
     : undefined;
   // "for Ns" needs a closed reasoning — a stop mid-thought leaves the
-  // part without an end stamp, and a duration to Date.now() would claim
-  // thinking that never happened.
+  // part without an end stamp and without a successor, and a duration to
+  // Date.now() would claim thinking that never happened.
   const label = over
-    ? `Thought${t?.end !== undefined && secs ? ` for ${fmtDur(secs)}` : ""}`
+    ? `Thought${end !== undefined && secs ? ` for ${fmtDur(secs)}` : ""}`
     : ["Thinking...", secs ? fmtDur(secs) : ""].filter(Boolean).join(" · ");
   // The thinking action's own state-dot: it pulses while the reasoning
   // streams and settles with the "Thought" label.
@@ -739,12 +742,24 @@ function ExploreGroup(props: { parts: ToolPart[] }) {
 }
 
 // One assistant part rendered on its own — the fold applies only to runs.
-function PartRow(props: { part: Part; live: boolean; closed?: boolean }) {
+function PartRow(props: {
+  part: Part;
+  live: boolean;
+  closed?: boolean;
+  endedAt?: number;
+}) {
   const p = props.part;
   if (isTool(p)) return <ToolCard part={p} live={props.live} />;
   if (!isText(p) || !p.text) return null;
   if (p.type === "reasoning")
-    return <ThinkingBlock p={p} live={props.live} closed={props.closed} />;
+    return (
+      <ThinkingBlock
+        p={p}
+        live={props.live}
+        closed={props.closed}
+        endedAt={props.endedAt}
+      />
+    );
   return (
     <Markdown
       text={p.text ?? ""}
@@ -908,16 +923,27 @@ function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
     }
   }
   // A reasoning part is proven closed only by a successor part (a tool
-  // call, answer text) landing after it — the reasoning block's settle
-  // signal, since its end stamp also fires between thinking segments.
-  const closed = new Set(
-    parts.flatMap((p, i) =>
-      isText(p) && p.type === "reasoning" &&
-      parts.slice(i + 1).some((q) => isTool(q) || (isText(q) && q.text))
-        ? [p.id]
-        : [],
-    ),
-  );
+  // call, answer text, or the next thinking segment) landing after it —
+  // the reasoning block's settle signal, since its end stamp also fires
+  // between thinking segments. A segment the endpoint never end-stamped
+  // (GLM starts the next part without closing the last) settles at the
+  // successor's start: that is when the thinking demonstrably stopped.
+  const closedAt = new Map<string, number | undefined>();
+  parts.forEach((p, i) => {
+    if (!(isText(p) && p.type === "reasoning")) return;
+    const succ = parts
+      .slice(i + 1)
+      .find((q) => isTool(q) || (isText(q) && q.text));
+    if (succ)
+      closedAt.set(
+        p.id,
+        isTool(succ)
+          ? succ.state?.time?.start
+          : isText(succ)
+            ? succ.time?.start
+            : undefined,
+      );
+  });
   return (
     <div class={`msg assistant dot-${dotState(props.m, live)}`}>
       {showsDot && !showPhase && !hasReasoning && (
@@ -951,7 +977,8 @@ function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
             key={c.key}
             part={part}
             live={live}
-            closed={closed.has(part.id)}
+            closed={closedAt.has(part.id)}
+            endedAt={closedAt.get(part.id)}
           />
         );
       })}
