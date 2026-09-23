@@ -262,14 +262,23 @@ describe("api", () => {
   });
 
   describe("fetchSessions", () => {
-    it("unwraps the {data, cursor} envelope", async () => {
+    it("keeps the cursor on a full page", async () => {
+      onApi(() => ({
+        data: Array.from({ length: 50 }, (_, i) => ({ id: `s${i}` })),
+        cursor: { next: "cur1" },
+      }));
+      const page = await fetchSessions();
+      assert.equal(page!.sessions.length, 50);
+      assert.equal(page!.next, "cur1");
+    });
+    it("drops the cursor on a short page (list complete)", async () => {
       onApi(() => ({
         data: [{ id: "s1" }, { id: "s2" }],
         cursor: { next: "cur1" },
       }));
       const page = await fetchSessions();
       assert.deepEqual(page!.sessions.map((s) => s.id), ["s1", "s2"]);
-      assert.equal(page!.next, "cur1");
+      assert.equal(page!.next, undefined);
     });
     it("fails (undefined) when the relay reports failure", async () => {
       onApi(() => API_FAIL);

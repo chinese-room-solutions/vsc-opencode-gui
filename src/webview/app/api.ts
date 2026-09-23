@@ -130,17 +130,27 @@ export interface SessionPage {
   next?: string;
 }
 
+// The session page size we ask for. The endpoint reports a cursor on every
+// non-empty page, even the last — a page shorter than the limit is the
+// list-complete signal (same rule as fetchMessages).
+const SESSION_PAGE = 50;
+
 // GET /api/session — newest first, paginated ({data, cursor} envelope).
 export async function fetchSessions(
   cursor?: string,
 ): Promise<SessionPage | undefined> {
-  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+  const params = new URLSearchParams({ limit: String(SESSION_PAGE) });
+  if (cursor) params.set("cursor", cursor);
   const body = await getJson<{
     data?: Session[];
     cursor?: { next?: string };
-  }>(`/api/session${query}`);
+  }>(`/api/session?${params}`);
   if (!body) return undefined;
-  return { sessions: body.data ?? [], next: body.cursor?.next };
+  const rows = body.data ?? [];
+  return {
+    sessions: rows,
+    next: rows.length < SESSION_PAGE ? undefined : body.cursor?.next,
+  };
 }
 
 // GET /session/status — the sessionID → status map.

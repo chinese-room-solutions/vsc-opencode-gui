@@ -1,4 +1,4 @@
-import { useRef, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import type { Session } from "../api";
 import { postToHost } from "../host";
 import { RenameInput } from "../components/RenameInput";
@@ -130,6 +130,15 @@ export function Home() {
     else groups.push({ label, rows: [s] });
   }
 
+  // A page can hold nothing listable (sub-agent and blank sessions never
+  // show; a project filter hides the rest), while the project's real
+  // sessions sit pages deep. Walk older pages while nothing is visible;
+  // the walk stops at the first visible row or an exhausted cursor, and a
+  // failed fetch leaves the button below as the manual retry.
+  useEffect(() => {
+    if (rows.length === 0 && sessionsNext.value) void loadMoreSessions();
+  }, [rows.length, sessionsNext.value]);
+
   return (
     <div class="home">
       {/* Session-scoped errors render in their session; a for-less error
@@ -179,11 +188,13 @@ export function Home() {
             <div class="empty">Loading sessions…</div>
           ) : groups.length === 0 ? (
             <div class="empty">
-              {q
-                ? `No sessions match “${query.trim()}”.`
-                : filter
-                  ? `No sessions in ${projectDisplayName(filter)} yet.`
-                  : "No sessions yet. Start one above — it shows up under this folder."}
+              {sessionsNext.value
+                ? "Loading older sessions…"
+                : q
+                  ? `No sessions match “${query.trim()}”.`
+                  : filter
+                    ? `No sessions in ${projectDisplayName(filter)} yet.`
+                    : "No sessions yet. Start one above — it shows up under this folder."}
             </div>
           ) : (
             groups.map((g, i) => (
@@ -203,7 +214,7 @@ export function Home() {
               </section>
             ))
           )}
-          {sessionsNext.value && groups.length > 0 && (
+          {sessionsNext.value && (
             <button class="load-older" onClick={() => void loadMoreSessions()}>
               Load older sessions
             </button>
