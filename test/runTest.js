@@ -15,17 +15,16 @@ delete process.env.ELECTRON_RUN_AS_NODE;
 
 const portFile = path.join(os.tmpdir(), "oc-test-server-port");
 
-// Workspace under test — any local folder works; override with
-// OC_TEST_WORKSPACE on another machine. pathToFileURL for absolute paths:
+// Workspace under test — a throwaway folder per run (the spawned server
+// may write state into it); override with OC_TEST_WORKSPACE to aim the
+// suite at a real project. pathToFileURL for the absolute path:
 // concatenating onto "file:///" turns a POSIX path into file:////…, which
 // VS Code fails to open — the window then has no folder and the suite dies
 // on workspaceFolders[0].
-const workspaceDir = (
-  process.env.OC_TEST_WORKSPACE || "D:/workspace/oc-rig-ws"
-).replace(/\\/g, "/");
-const workspaceUri = /^\/|^[A-Za-z]:/.test(workspaceDir)
-  ? pathToFileURL(workspaceDir).href
-  : `file:///${workspaceDir}`;
+const workspaceDir = process.env.OC_TEST_WORKSPACE
+  ? process.env.OC_TEST_WORKSPACE.replace(/\\/g, "/")
+  : fs.mkdtempSync(path.join(os.tmpdir(), "oc-test-ws-"));
+const workspaceUri = pathToFileURL(workspaceDir).href;
 
 async function main() {
   if (!fs.existsSync(workspaceDir)) {
