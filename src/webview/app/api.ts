@@ -32,12 +32,7 @@ export function setDialect(d: Dialect): void {
 const route = (v1: string, v2: string): string =>
   serverDialect === "v2" ? v2 : v1;
 
-// File attachments ride v1 prompt parts; the v2 prompt body is {text} only
-// and no attachment support could be verified in the official client's
-// bundle — the composer gates attaching off instead of faking it.
-export function attachmentsEnabled(): boolean {
-  return serverDialect !== "v2";
-}
+
 
 // Row of GET /api/session.
 export interface Session {
@@ -1210,6 +1205,50 @@ export function attachmentParts(
   }));
 }
 
+// v2 attachment shapes: {start, end, text} pointing back at the mention.
+interface V2Mention {
+  start: number;
+  end: number;
+  text: string;
+}
+
+// The v2 prompt/command body's file/agent lists, mapped from our parts:
+// an attachment (data: URI or snapshotted file:// URL) is {uri, name}; a
+// mention additionally carries the range of its "@path" text. Mime is not
+// sent — the server sniffs the payload (PromptInput.FileAttachment).
+function v2PromptBody(
+  parts: PromptPart[],
+  text: string,
+): { text: string; files?: unknown[]; agents?: unknown[] } {
+  const files: unknown[] = [];
+  const agents: unknown[] = [];
+  for (const p of parts) {
+    if (p.type === "file") {
+      const m = p.source?.text;
+      const mention: V2Mention | undefined = m
+        ? { start: m.start, end: m.end, text: m.value }
+        : undefined;
+      files.push({
+        uri: p.url,
+        ...(mention ? { mention } : {}),
+        ...(!mention && p.filename ? { name: p.filename } : {}),
+      });
+    } else if (p.type === "agent" && p.source) {
+      agents.push({
+        name: p.name,
+        mention: { start: p.source.start, end: p.source.end, text: p.source.value },
+      });
+    } else if (p.type === "agent") {
+      agents.push({ name: p.name });
+    }
+  }
+  return {
+    text,
+    ...(files.length > 0 ? { files } : {}),
+    ...(agents.length > 0 ? { agents } : {}),
+  };
+}
+
 // The prompt POST's reply on v2: the admitted user message row. v1 has no
 // equivalent (the row streams back as message.updated).
 export interface PromptUserRow {
@@ -1224,11 +1263,12 @@ export async function promptSession(
   agent?: string,
   model?: ModelSelection,
 ): Promise<{ ok: boolean; error?: string; user?: PromptUserRow }> {
-  // v2: the prompt body is {text} — the captured turn verified nothing
-  // else, so per-turn agent/model rides the session-scoped switch routes
-  // instead (both wire-verified). Callers only pass a selection that
-  // differs from the session row, keeping the switches (each writes a
-  // bookkeeping message row server-side) off the steady state.
+  // v2: per-turn agent/model rides the session-scoped switch routes (both
+  // wire-verified). Callers only pass a selection that differs from the
+  // session row, keeping the switches (each writes a bookkeeping message
+  // row server-side) off the steady state. The prompt body is PromptInput
+  // — {text, files, agents} — mapped from our parts below; the schema is
+  // additionalProperties:false, so nothing else may ride along.
   if (serverDialect === "v2") {
     if (agent)
       await sendJson("POST", `/api/session/${id}/agent`, { agent });
@@ -1244,9 +1284,10 @@ export async function promptSession(
       .filter((p): p is { type: "text"; text: string } => p.type === "text")
       .map((p) => p.text)
       .join("");
+    const body = v2PromptBody(parts, text);
     const res = await sendJson<{
       data?: { id?: string; time?: { created?: number }; payload?: { text?: string } };
-    }>("POST", `/api/session/${id}/prompt`, { text });
+    }>("POST", `/api/session/${id}/prompt`, body);
     const row = res.ok ? res.data?.data : undefined;
     return {
       ok: res.ok === true,
@@ -1346,19 +1387,30 @@ export async function switchSessionModel(
 // the server resolves a bare command under the default agent with no
 // variant and rewrites the session row from the turn (prompt.ts
 // createUserMessage) — resetting Plan to Build and the effort to default.
-// A command's own agent/model config still wins server-side. (v2 keeps
-// the route; the body shape is unverified there.)
+// A command's own agent/model config still wins server-side. v2's body is
+// {name, text} only (PromptInput, additionalProperties:false): no
+// per-command agent/model — the command's own config decides there.
 export async function runCommand(
   id: string,
   command: string,
   args: string,
   sel?: { agent: string; model?: ModelSelection },
 ): Promise<boolean> {
+  if (serverDialect === "v2") {
+    return (
+      (await sendJson(
+        "POST",
+        `/api/session/${id}/command`,
+        { name: command, text: args },
+        300_000,
+      ))?.ok === true
+    );
+  }
   const model = sel?.model;
   return (
     (await sendJson(
       "POST",
-      route(`/session/${id}/command`, `/api/session/${id}/command`),
+      `/session/${id}/command`,
       {
         command,
         arguments: args,

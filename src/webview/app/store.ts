@@ -4,7 +4,6 @@ import {
   attachmentParts,
   attachAllowed,
   attachMime,
-  attachmentsEnabled,
   createSession,
   compactSession,
   deleteSession as deleteSessionApi,
@@ -2718,10 +2717,6 @@ export async function sendPrompt(
 ): Promise<void> {
   const body = text.trim();
   if (!body) return;
-  if (files.length > 0 && !attachmentsEnabled()) {
-    setSendError("Attachments are not supported by this server (opencode v2).");
-    return;
-  }
   let id: string;
   if (target === "draft") {
     const { session, error } = await createSession(titleFrom(body), {

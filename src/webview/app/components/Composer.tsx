@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "preact/hooks";
 import type { JSX } from "preact";
-import { attachAllowed, attachMime, attachmentsEnabled, extOf, findFiles, isText, sniffsText, type SessionStatus } from "../api";
+import { attachAllowed, attachMime, extOf, findFiles, isText, sniffsText, type SessionStatus } from "../api";
 import { postToHost, openFile, openExternal } from "../host";
 import { atTrigger, mentionTokens, resolve, type MentionToken } from "../mentions";
 import {
@@ -82,16 +82,6 @@ async function attachFiles(
   sessionId: string | undefined,
   files: Iterable<File>,
 ): Promise<void> {
-  // v2's prompt body is {text} with no verified attachment support —
-  // refuse paste/drop up front instead of silently dropping the bytes.
-  if (!attachmentsEnabled()) {
-    const n = [...files].length;
-    if (n > 0)
-      setSendError(
-        `Attachments are not supported by this server (opencode v2).`,
-      );
-    return;
-  }
   const key = sessionId ?? "draft";
   const input = attachInputs(sessionId);
   const added: { uri: string; name: string }[] = [];
@@ -961,17 +951,15 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
           />
         </div>
         <div class="composer-bar">
-          {attachmentsEnabled() ? (
-            <button
-              type="button"
-              class="comp-add"
-              title="Attach file"
-              aria-label="Attach file"
-              onClick={() => postToHost({ type: "attach-file" })}
-            >
-              <PlusIcon />
-            </button>
-          ) : null}
+          <button
+            type="button"
+            class="comp-add"
+            title="Attach file"
+            aria-label="Attach file"
+            onClick={() => postToHost({ type: "attach-file" })}
+          >
+            <PlusIcon />
+          </button>
           <ModelPicker id={props.sessionId} />
           <VariantPicker id={props.sessionId} />
           <AgentPicker id={props.sessionId} />

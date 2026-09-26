@@ -10,11 +10,9 @@ import {
   settle,
 } from "./setup.test";
 import {
-  attachmentsEnabled,
   compactSession,
   createSession,
   deleteSession,
-  dialect,
   fetchAgents,
   fetchCommands,
   fetchConfig,
@@ -29,6 +27,7 @@ import {
   promptSession,
   renameSession,
   revertSession,
+  runCommand,
   setDialect,
 } from "./api";
 import { translateV2Event } from "./v2events";
@@ -211,7 +210,7 @@ describe("v2 route/body/envelope translation", () => {
     });
   });
 
-  it("promptSession folds multiple text parts into one {text}", async () => {
+  it("promptSession folds multiple text parts into one {text} plus agents", async () => {
     onApi((call) =>
       call.path === "/api/session/ses_1/prompt" ? {} : undefined,
     );
@@ -222,6 +221,52 @@ describe("v2 route/body/envelope translation", () => {
     ]);
     assert.deepEqual(callsFor("/api/session/ses_1/prompt")[0].body, {
       text: "ab",
+      agents: [{ name: "x" }],
+    });
+  });
+
+  it("promptSession maps attachments and mentions into files", async () => {
+    onApi((call) =>
+      call.path === "/api/session/ses_1/prompt" ? {} : undefined,
+    );
+    await promptSession("ses_1", [
+      { type: "text", text: "look" },
+      // Pasted image: data-URI attachment with a filename.
+      {
+        type: "file",
+        mime: "image/png",
+        url: "data:image/png;base64,AAA",
+        filename: "shot.png",
+      },
+      // Snapshotted text attachment: file:// URL, still a plain attachment.
+      {
+        type: "file",
+        mime: "text/plain",
+        url: "file:///w/repo/.opencode/attach/notes.txt",
+        filename: "notes.txt",
+      },
+      // @-mention: file:// URL plus the source range of the "@path" text.
+      {
+        type: "file",
+        mime: "text/plain",
+        url: "file:///w/repo/src/store.ts?start=12&end=14",
+        source: {
+          type: "file",
+          path: "/w/repo/src/store.ts",
+          text: { value: "@src/store.ts#12-14", start: 5, end: 23 },
+        },
+      },
+    ]);
+    assert.deepEqual(callsFor("/api/session/ses_1/prompt")[0].body, {
+      text: "look",
+      files: [
+        { uri: "data:image/png;base64,AAA", name: "shot.png" },
+        { uri: "file:///w/repo/.opencode/attach/notes.txt", name: "notes.txt" },
+        {
+          uri: "file:///w/repo/src/store.ts?start=12&end=14",
+          mention: { start: 5, end: 23, text: "@src/store.ts#12-14" },
+        },
+      ],
     });
   });
 
@@ -405,9 +450,23 @@ describe("v2 route/body/envelope translation", () => {
     assert.match(callsFor("/api/session")[0].path, /limit=400/);
   });
 
-  it("attachments are gated off", () => {
-    assert.equal(attachmentsEnabled(), false);
-    assert.equal(dialect(), "v2");
+  it("runCommand posts {name, text} on v2", async () => {
+    onApi((call) =>
+      call.method === "POST" && call.path === "/api/session/ses_1/command"
+        ? {}
+        : undefined,
+    );
+    assert.equal(
+      await runCommand("ses_1", "start", "fix the bug", {
+        agent: "build",
+        model: { providerID: "p", id: "m" },
+      }),
+      true,
+    );
+    assert.deepEqual(callsFor("/api/session/ses_1/command")[0].body, {
+      name: "start",
+      text: "fix the bug",
+    });
   });
 });
 

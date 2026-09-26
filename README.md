@@ -88,9 +88,8 @@ Requires the [opencode CLI](https://opencode.ai/) where the workspace runs
 Both server generations are supported: opencode 1.x (`opencode-ai`, 1.16+) and
 opencode 2.x (`@opencode/cli`). The extension detects the server's dialect at
 boot and speaks the matching routes. On 2.x the server is password-protected
-by default; the extension generates that password itself (attachments in the
-composer are a 1.x feature — the 2.x prompt API has no verified attachment
-support yet).
+by default; the extension generates that password itself. Attachments and
+slash commands ride each generation's own prompt/command body.
 
 > ℹ️ On server start, the `oc-attachments` skill is installed into your
 > opencode config dir (`~/.config/opencode/skills/`) so every session gets
