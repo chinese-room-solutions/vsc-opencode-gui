@@ -20,10 +20,18 @@ const portFile = path.join(os.tmpdir(), "oc-test-server-port");
 // suite at a real project. pathToFileURL for the absolute path:
 // concatenating onto "file:///" turns a POSIX path into file:////…, which
 // VS Code fails to open — the window then has no folder and the suite dies
-// on workspaceFolders[0].
+// on workspaceFolders[0]. The temp dir is git-initialized: the
+// server-attach test proves ownership through /project/current's
+// worktree, and a non-repo folder answers the "global" project — no
+// manager would ever attach.
+const makeWorkspace = () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-test-ws-"));
+  spawnSync("git", ["-C", dir, "init", "-q"], { encoding: "utf8" });
+  return dir;
+};
 const workspaceDir = process.env.OC_TEST_WORKSPACE
   ? process.env.OC_TEST_WORKSPACE.replace(/\\/g, "/")
-  : fs.mkdtempSync(path.join(os.tmpdir(), "oc-test-ws-"));
+  : makeWorkspace();
 const workspaceUri = pathToFileURL(workspaceDir).href;
 
 async function main() {
