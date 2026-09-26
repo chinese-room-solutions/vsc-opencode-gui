@@ -246,10 +246,12 @@ function inputRecord(list?: string[]): ModelInput | undefined {
 export async function fetchProviders(): Promise<Providers | undefined> {
   if (serverDialect !== "v2")
     return getJson<Providers>("/provider");
-  const [providers, models, def] = await Promise.all([
+  const [providers, models, config] = await Promise.all([
     getJson<{ data?: { id?: string; name?: string }[] }>("/api/provider"),
     getJson<{ data?: V2ModelRow[] }>("/api/model"),
-    getJson<{ data?: V2ModelRow }>("/api/model/default"),
+    getJson<
+      { info?: { model?: { providerID?: string; model?: string } } }[]
+    >("/api/config"),
   ]);
   if (!models) return undefined;
   const all: Providers["all"] = [];
@@ -275,25 +277,45 @@ export async function fetchProviders(): Promise<Providers | undefined> {
       },
     };
   }
-  const connected = (providers?.data ?? [])
-    .map((r) => r.id)
-    .filter((id): id is string => !!id);
-  // No credentials listed: at least the default model's provider is
-  // demonstrably runnable (v2 ships a public default).
-  const fallback = def?.data?.providerID;
+  // "Connected" on v2: the /api/model catalog is availability-filtered
+  // server-side (public models, configured providers, discovered local
+  // servers — a fresh isolated server shows only what it can actually
+  // run), so every provider it lists is pickable. /api/provider rows and
+  // the config default's provider are unioned in for completeness (rows
+  // without catalog models render no group either way).
+  const connected = [
+    ...new Set(
+      [
+        ...all.map((p) => p.id),
+        ...(providers?.data ?? [])
+          .map((r) => r.id)
+          .filter((id): id is string => !!id),
+        v2ConfigDefaultModel(config)?.providerID,
+      ].filter((id): id is string => !!id),
+    ),
+  ];
   return {
     all,
     default: {},
-    connected:
-      connected.length > 0 ? connected : fallback ? [fallback] : [],
+    connected,
   };
+}
+
+// v2's /api/config is an array of source documents; the first doc with an
+// info.model block is the user's configured default (the /api/model/default
+// route answers the built-in public default instead, which no one picked).
+function v2ConfigDefaultModel(
+  docs: { info?: { model?: { providerID?: string; model?: string } } }[] | undefined,
+): { providerID?: string; model?: string } | undefined {
+  for (const d of docs ?? [])
+    if (d?.info?.model?.providerID) return d.info.model;
+  return undefined;
 }
 
 // GET /config — the default model ("providerID/modelID", so a draft with no
 // explicit pick can show what a prompt would run on) and the user's provider
 // blocks (the ids the model picker may list). v2 has no merged config: the
-// default comes from /api/model/default and provider narrowing is skipped
-// (the config route serves source documents, not the merge).
+// default comes from the config source docs' model block.
 export interface ServerConfig {
   model?: string;
   provider?: Record<string, unknown>;
@@ -301,12 +323,13 @@ export interface ServerConfig {
 
 export async function fetchConfig(): Promise<ServerConfig | undefined> {
   if (serverDialect === "v2") {
-    const def = await getJson<{ data?: { providerID?: string; id?: string } }>(
-      "/api/model/default",
-    );
-    const pid = def?.data?.providerID;
-    const mid = def?.data?.id;
-    return pid && mid ? { model: `${pid}/${mid}` } : {};
+    const docs = await getJson<
+      { info?: { model?: { providerID?: string; model?: string } } }[]
+    >("/api/config");
+    const model = v2ConfigDefaultModel(docs);
+    return model?.providerID && model.model
+      ? { model: `${model.providerID}/${model.model}` }
+      : {};
   }
   return getJson<ServerConfig>("/config");
 }

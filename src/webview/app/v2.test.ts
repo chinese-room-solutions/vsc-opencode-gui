@@ -240,7 +240,7 @@ describe("v2 route/body/envelope translation", () => {
     });
   });
 
-  it("fetchProviders assembles provider+model+default into the v1 shape", async () => {
+  it("fetchProviders assembles provider+model+config into the v1 shape", async () => {
     onApi((call) => {
       if (call.path === "/api/provider")
         return { data: [{ id: "opencode", name: "OpenCode" }] };
@@ -257,14 +257,16 @@ describe("v2 route/body/envelope translation", () => {
             { id: "m2", providerID: "other" },
           ],
         };
-      if (call.path === "/api/model/default")
-        return { data: { id: "m1", providerID: "opencode" } };
+      if (call.path === "/api/config")
+        return [{ info: { model: { providerID: "opencode", model: "m1" } } }];
       return undefined;
     });
     const providers = await fetchProviders();
     assert.equal(providers?.all.length, 2);
     const oc = providers?.all.find((p) => p.id === "opencode");
-    assert.deepEqual(providers?.connected, ["opencode"]);
+    // Catalog providers are connected outright (v2 filters availability
+    // server-side); /api/provider rows and the config default union in.
+    assert.deepEqual(providers?.connected, ["opencode", "other"]);
     assert.deepEqual(oc?.models.m1.variants, { low: {}, high: {} });
     assert.deepEqual(oc?.models.m1.capabilities?.input, {
       text: true,
@@ -274,22 +276,29 @@ describe("v2 route/body/envelope translation", () => {
     assert.equal(providers?.all[1].models.m2?.name, "m2");
   });
 
-  it("fetchProviders falls back to the default model's provider when none are listed", async () => {
+  it("fetchProviders lights catalog providers when /api/provider is empty", async () => {
     onApi((call) => {
       if (call.path === "/api/provider") return { data: [] };
       if (call.path === "/api/model")
-        return { data: [{ id: "m1", providerID: "opencode" }] };
-      if (call.path === "/api/model/default")
-        return { data: { id: "m1", providerID: "opencode" } };
+        return { data: [{ id: "m1", providerID: "zai-coding-plan" }] };
+      if (call.path === "/api/config")
+        return [
+          { info: { model: { providerID: "zai-coding-plan", model: "glm-5.3" } } },
+        ];
       return undefined;
     });
-    assert.deepEqual((await fetchProviders())?.connected, ["opencode"]);
+    assert.deepEqual((await fetchProviders())?.connected, [
+      "zai-coding-plan",
+    ]);
   });
 
-  it("fetchConfig derives the default model from /api/model/default", async () => {
+  it("fetchConfig derives the default model from the config source docs", async () => {
     onApi((call) =>
-      call.path === "/api/model/default"
-        ? { data: { providerID: "p", id: "m" } }
+      call.path === "/api/config"
+        ? [
+            { info: {} },
+            { info: { model: { providerID: "p", model: "m" } } },
+          ]
         : undefined,
     );
     assert.deepEqual(await fetchConfig(), { model: "p/m" });

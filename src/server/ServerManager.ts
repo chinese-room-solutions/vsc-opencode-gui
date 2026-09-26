@@ -661,15 +661,20 @@ export class ServerManager {
   // provider whose env var exists as connected, so one API key lights up
   // several lookalike storefronts the user never configured. The Manage
   // Models quick pick and syncModelAgents both consume this. On v2 the
-  // catalog is assembled from /api/provider (connected rows — no models)
-  // plus the flat /api/model catalog (no `limit` param: the route returns
-  // an empty list when handed one).
+  // catalog is assembled from /api/model (flat, no `limit` param: the
+  // route returns an empty list when handed one); "connected" is
+  // /api/provider's rows (often empty — it does not track credentials
+  // reliably) UNION the config default's provider, mirroring the webview
+  // picker's assembly.
   async providerCatalog(): Promise<ProviderResponse | undefined> {
     await this.ready;
     if (this._dialect === "v2") {
-      const [providers, models] = await Promise.all([
+      const [providers, models, config] = await Promise.all([
         this._request<{ data?: { id?: string }[] }>("GET", "/api/provider"),
         this._request<{ data?: V2ModelRow[] }>("GET", "/api/model"),
+        this._request<
+          { info?: { model?: { providerID?: string } } }[]
+        >("GET", "/api/config"),
       ]);
       if (!providers && !models) return undefined;
       const all: ProviderInfo[] = [];
@@ -687,10 +692,21 @@ export class ServerManager {
           capabilities: { toolcall: m.capabilities?.tools === true },
         };
       }
+      const configDefault = (config ?? []).find(
+        (d) => d?.info?.model?.providerID,
+      )?.info?.model;
       return {
-        connected: (providers?.data ?? [])
-          .map((r) => r.id)
-          .filter((id): id is string => !!id),
+        connected: [
+          ...new Set(
+            [
+              ...all.map((p) => p.id),
+              ...(providers?.data ?? [])
+                .map((r) => r.id)
+                .filter((id): id is string => !!id),
+              configDefault?.providerID,
+            ].filter((id): id is string => !!id),
+          ),
+        ],
         all,
       };
     }
