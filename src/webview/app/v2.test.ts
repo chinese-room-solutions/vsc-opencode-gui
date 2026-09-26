@@ -21,10 +21,16 @@ import {
   fetchProviders,
   fetchSession,
   fetchSessionStatus,
+  fetchSessionQuestions,
+  fetchPendingPermissions,
   fetchProjects,
   findFiles,
   interruptSession,
+  isBashTool,
+  isTool,
+  isTaskTool,
   promptSession,
+  replyPermission,
   renameSession,
   revertSession,
   runCommand,
@@ -416,18 +422,21 @@ describe("v2 route/body/envelope translation", () => {
     assert.equal(projects?.[0].worktree, "C:\\w\\repo");
   });
 
-  it("revertSession posts {messageID} and answers with the refetched row", async () => {
+  it("revertSession stages and commits, answering with the refetched row", async () => {
     onApi((call) => {
-      if (call.method === "POST" && call.path === "/api/session/ses_1/revert")
+      if (call.method === "POST" && call.path === "/api/session/ses_1/revert/stage")
+        return {};
+      if (call.method === "POST" && call.path === "/api/session/ses_1/revert/commit")
         return {};
       if (call.path === "/api/session/ses_1")
         return { data: sessRow("ses_1", { revert: { messageID: "m1" } }) };
       return undefined;
     });
     const row = await revertSession("ses_1", "m1");
-    assert.deepEqual(callsFor("/api/session/ses_1/revert")[0].body, {
+    assert.deepEqual(callsFor("/api/session/ses_1/revert/stage")[0].body, {
       messageID: "m1",
     });
+    assert.equal(callsFor("/api/session/ses_1/revert/commit").length, 1);
     assert.deepEqual(row?.revert, { messageID: "m1" });
   });
 
@@ -555,6 +564,111 @@ describe("v2 transcript normalization (fetchMessages)", () => {
     );
     const text = assistant.parts.find((p) => p.type === "text");
     assert.equal((text as { text?: string } | undefined)?.text, "Hi!");
+  });
+
+  it("normalizes v2 tool stamps: {created,ran,completed} time, streaming status", async () => {
+    onApi((call) =>
+      call.path.startsWith("/api/session/ses_1/message")
+        ? {
+            data: [
+              {
+                id: "msg_a",
+                time: { created: 1, completed: 5 },
+                type: "assistant",
+                content: [
+                  {
+                    type: "tool",
+                    id: "cal_1",
+                    name: "shell",
+                    state: {
+                      status: "streaming",
+                      input: JSON.stringify({ command: "ls" }),
+                      time: { created: 2, ran: 3, completed: 4 },
+                    },
+                  },
+                ],
+              },
+              {
+                id: "msg_u",
+                time: { created: 0 },
+                type: "user",
+                payload: { text: "go" },
+              },
+            ],
+            cursor: { next: null },
+          }
+        : undefined,
+    );
+    const page = await fetchMessages("ses_1");
+    const assistantRow = page?.messages.find((m) => m.info.role === "assistant");
+    const tool = assistantRow?.parts[0]!;
+    assert.ok(isTool(tool));
+    assert.equal(tool.tool, "shell");
+    assert.equal(tool.state?.status, "running");
+    assert.deepEqual(tool.state?.input, { command: "ls" });
+    assert.deepEqual(tool.state?.time, { start: 3, end: 4 });
+    assert.ok(isBashTool(tool.tool));
+  });
+
+  it("asks: v2 permission replies send {decision}; asks list via /api/permission/request; questions are forms", async () => {
+    onApi((call) => {
+      if (call.method === "POST" && call.path === "/api/session/ses_1/permission/per_1/reply")
+        return {};
+      if (call.path === "/api/permission/request")
+        return {
+          data: [
+            { id: "per_1", sessionID: "ses_1", action: "bash", resources: ["ls"], save: [] },
+          ],
+        };
+      if (call.path === "/api/session/ses_1/form")
+        return {
+          data: [
+            {
+              id: "frm_1",
+              title: "Proceed?",
+              fields: [{ name: "go", label: "Go", options: [{ label: "Yes" }] }],
+            },
+          ],
+        };
+      return undefined;
+    });
+    assert.equal(
+      await replyPermission("ses_1", "per_1", "once"),
+      true,
+    );
+    assert.deepEqual(callsFor("/api/session/ses_1/permission/per_1/reply")[0].body, {
+      decision: "once",
+    });
+    const pending = await fetchPendingPermissions();
+    assert.equal(pending?.[0].id, "per_1");
+    assert.equal(pending?.[0].action, "bash");
+    const questions = await fetchSessionQuestions("ses_1");
+    const row = questions?.rows[0];
+    assert.equal(row?.id, "frm_1");
+    assert.equal(row?.v1, false);
+    assert.deepEqual(row?.formFieldNames, ["go"]);
+    assert.equal(row?.questions[0].question, "Proceed?");
+    assert.equal(row?.questions[0].options?.[0].label, "Yes");
+    assert.equal(isTaskTool("subagent"), true);
+    assert.equal(isTaskTool("task"), true);
+    assert.equal(isTaskTool("bash"), false);
+  });
+
+  it("fetchSessionStatus reads the active row's id; fetchAgents keeps display labels", async () => {
+    onApi((call) => {
+      if (call.path === "/api/session/active")
+        return { data: { id: "ses_busy", title: "running" } };
+      if (call.path === "/api/agent")
+        return {
+          data: [{ id: "build", name: "Build", mode: "primary", hidden: false }],
+        };
+      return undefined;
+    });
+    const status = await fetchSessionStatus();
+    assert.deepEqual(status, { ses_busy: { type: "busy" } });
+    const agents = await fetchAgents();
+    assert.equal(agents?.[0].name, "build");
+    assert.equal(agents?.[0].label, "Build");
   });
 });
 
@@ -700,9 +814,126 @@ describe("v2 SSE → pipeline translation", () => {
       "msg_a:0",
     );
     // Catalog/bookkeeping frames ride through untouched (the store
-    // ignores what it does not know — e.g. session.usage.updated).
-    const usage = ev("session.usage.updated", { sessionID: "s", cost: 0 });
-    assert.deepEqual(translateV2Event(usage), [usage]);
+    // ignores what it does not know — e.g. session.instructions.updated).
+    const misc = ev("session.instructions.updated", { sessionID: "s" });
+    assert.deepEqual(translateV2Event(misc), [misc]);
+  });
+
+  it("maps session facts: permissions, forms, creation, usage, retry", () => {
+    // session.permissions {sessionID, permissions[]} → one ask per row.
+    assert.deepEqual(
+      translateV2Event(
+        ev("session.permissions", {
+          sessionID: "s",
+          permissions: [
+            {
+              id: "per_1",
+              action: "bash",
+              resources: ["rm -rf /"],
+              save: ["bash"],
+              source: { type: "tool", messageID: "m", callID: "c" },
+            },
+          ],
+        }),
+      ),
+      [
+        {
+          id: "evt_x",
+          type: "permission.v2.asked",
+          data: {
+            id: "per_1",
+            sessionID: "s",
+            action: "bash",
+            resources: ["rm -rf /"],
+            save: ["bash"],
+            source: { type: "tool", messageID: "m", callID: "c" },
+          },
+        },
+      ],
+    );
+    // form.created {sessionID, form} → the v1 question shape.
+    const asked = translateV2Event(
+      ev("form.created", {
+        sessionID: "s",
+        form: {
+          id: "frm_1",
+          sessionID: "s",
+          title: "Continue?",
+          fields: [
+            { name: "choice", label: "Choice", options: [{ label: "Yes" }, { label: "No" }] },
+          ],
+        },
+      }),
+    );
+    assert.equal(asked.length, 1);
+    assert.equal(asked[0].type, "question.v2.asked");
+    const q = asked[0].data as {
+      id?: string;
+      formFieldNames?: string[];
+      questions?: { question?: string; options?: { label: string }[]; custom?: boolean }[];
+    };
+    assert.equal(q.id, "frm_1");
+    assert.deepEqual(q.formFieldNames, ["choice"]);
+    assert.equal(q.questions?.[0].question, "Continue?");
+    assert.deepEqual(q.questions?.[0].options, [{ label: "Yes" }, { label: "No" }]);
+    assert.equal(q.questions?.[0].custom, false);
+    // settle events
+    assert.deepEqual(
+      translateV2Event(ev("form.replied", { sessionID: "s", id: "frm_1" })),
+      [
+        {
+          id: "evt_x",
+          type: "question.v2.replied",
+          data: { requestID: "frm_1", sessionID: "s" },
+        },
+      ],
+    );
+    assert.deepEqual(
+      translateV2Event(ev("form.cancelled", { sessionID: "s", id: "frm_1" })),
+      [
+        {
+          id: "evt_x",
+          type: "question.v2.rejected",
+          data: { requestID: "frm_1", sessionID: "s" },
+        },
+      ],
+    );
+    // session.created → a renderable default row.
+    const created = translateV2Event(
+      ev("session.created", { sessionID: "s2", title: "T", parentID: "s1" }),
+    );
+    assert.equal(created[0].type, "session.updated");
+    const info = (created[0].data as { info: Record<string, unknown> }).info;
+    assert.equal(info.id, "s2");
+    assert.equal(info.title, "T");
+    assert.equal(info.parentID, "s1");
+    assert.equal(info.cost, 0);
+    // usage → partial row merge
+    const usage = translateV2Event(
+      ev("session.usage.updated", {
+        sessionID: "s",
+        cost: 1.5,
+        tokens: { input: 10, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+      }),
+    );
+    assert.equal(usage[0].type, "session.updated");
+    assert.equal(
+      ((usage[0].data as { info: { cost?: number } }).info).cost,
+      1.5,
+    );
+    // retry.scheduled → v1 retry status
+    const retry = translateV2Event(
+      ev("session.retry.scheduled", {
+        sessionID: "s",
+        attempt: 2,
+        at: 1234,
+        error: { message: "rate limited" },
+      }),
+    );
+    assert.deepEqual(retry[0].data, {
+      sessionID: "s",
+      status: { type: "retry", attempt: 2, message: "rate limited", next: 1234 },
+    });
   });
 
   it("frames without a sessionID or coordinates translate to nothing", () => {

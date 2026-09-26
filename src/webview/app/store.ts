@@ -1323,7 +1323,28 @@ function applyEvent(event: ServerEvent): void {
     // unbind the tab's project color.
     case "session.created":
     case "session.updated":
-      if (data.info) upsertSession(normalizeSession(data.info));
+      if (data.info) {
+        const info = data.info as Session & { directory?: string };
+        // Partial rows (the v2 event translation maps facts — usage,
+        // creation — onto session.updated) merge into the stored row; a
+        // full row upserts. Merging keeps a fact-only info (no title,
+        // no location) from blanking the row the list stored.
+        if (
+          typeof info.id === "string" &&
+          sessions.value.some((s) => s.id === info.id) &&
+          (info.title === undefined || info.location === undefined)
+        ) {
+          patchSession(info.id, (s) => ({
+            ...s,
+            ...(info.title !== undefined ? { title: info.title } : {}),
+            ...(info.cost !== undefined ? { cost: info.cost } : {}),
+            ...(info.tokens !== undefined ? { tokens: info.tokens } : {}),
+            ...(info.time?.updated !== undefined
+              ? { time: { ...s.time, updated: info.time.updated } }
+              : {}),
+          }));
+        } else upsertSession(normalizeSession(info));
+      }
       break;
     // The v1 stream's authoritative busy/idle (v1 turns have no step events
     // to derive from; the v2 fallback below stays for v2-prompted sessions).
@@ -3097,7 +3118,10 @@ export async function answerQuestion(
   answers: string[][],
   v1 = false,
 ): Promise<void> {
-  const done = replyQuestion(sessionID, id, answers, v1);
+  const formFieldNames = pendingQuestions.value.find(
+    (q) => q.id === id && q.v1 !== true,
+  )?.formFieldNames;
+  const done = replyQuestion(sessionID, id, answers, v1, formFieldNames);
   markSettled(settledQuestions, id);
   pendingQuestions.value = pendingQuestions.value.filter((q) => q.id !== id);
   if (!(await done)) {

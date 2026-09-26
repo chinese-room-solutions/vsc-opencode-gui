@@ -189,26 +189,26 @@ export async function fetchSessions(
 }
 
 // GET /session/status (v1: the sessionID → status map). v2 serves the
-// ACTIVE session only, at /api/session/active: {data:{}} when idle. The
-// running shape is unverified live (probing it needs a model turn); the
-// defensible reads are a `sessionID` field or map keys shaped like session
-// ids — either marks that session busy. Streaming truth comes from the
-// event translation either way (see v2events.ts).
+// ACTIVE session only, at /api/session/active: {data:{}} when idle, the
+// running session's full row (its `id`) when busy. Streaming truth comes
+// from the event translation either way (see v2events.ts).
 export async function fetchSessionStatus(): Promise<
   Record<string, SessionStatus> | undefined
 > {
   if (serverDialect === "v2") {
     const body = await getJson<{
-      data?: Record<string, unknown> | null;
+      data?:
+        | Record<string, unknown>
+        | { id?: string; sessionID?: string }
+        | null;
     }>("/api/session/active");
     const active = body?.data;
     if (!active || typeof active !== "object") return undefined;
     const map: Record<string, SessionStatus> = {};
-    const sid = (active as { sessionID?: unknown }).sessionID;
-    if (typeof sid === "string") map[sid] = { type: "busy" };
-    else
-      for (const key of Object.keys(active))
-        if (key.startsWith("ses_")) map[key] = { type: "busy" };
+    const sid =
+      (active as { sessionID?: unknown }).sessionID ??
+      (active as { id?: unknown }).id;
+    if (typeof sid === "string" && sid) map[sid] = { type: "busy" };
     return map;
   }
   return getJson<Record<string, SessionStatus>>("/session/status");
@@ -216,14 +216,15 @@ export async function fetchSessionStatus(): Promise<
 
 // Row of GET /api/model (v2): flat catalog entry. `capabilities.input`
 // lists modalities as strings (v1 speaks a boolean record); `variants` is
-// an array of {id, settings} (v1 keys a record by id). `limit`/context
-// window size is not part of the row — the ring falls back to 200k.
+// an array of {id, settings} (v1 keys a record by id); `limit` carries the
+// context/output window sizes.
 interface V2ModelRow {
   id?: string;
   providerID?: string;
   name?: string;
   capabilities?: { tools?: boolean; input?: string[]; output?: string[] };
   variants?: { id?: string }[];
+  limit?: { context?: number; output?: number };
 }
 
 // ["text","image"] → {text:true, image:true}
@@ -267,6 +268,9 @@ export async function fetchProviders(): Promise<Providers | undefined> {
           .filter((id): id is string => !!id)
           .map((id) => [id, {}]),
       ),
+      ...(m.limit?.context !== undefined
+        ? { limit: { context: m.limit.context } }
+        : {}),
       capabilities: {
         input: inputRecord(m.capabilities?.input),
       },
@@ -329,13 +333,14 @@ export async function fetchConfig(): Promise<ServerConfig | undefined> {
   return getJson<ServerConfig>("/config");
 }
 
-// GET /agent — flat array; the key is `name` (v1: the id-ish name). Only
+// GET /agent — flat array; v2 rows carry the id ("build") the switch
+// endpoint wants and the display name ("Build"); `name` below stays the
+// switch key (v1: the id-ish name), `label` the display copy. Only
 // mode:"primary" agents take the composer's turn; hidden ones (compaction,
-// summary, title) are bookkeeping. v2 rows carry the display name in
-// `name` ("Build") and the id in `id` ("build") — the switch endpoint
-// wants the id, so v2 maps name → id.
+// summary, title) are bookkeeping.
 export interface Agent {
   name: string;
+  label?: string;
   description?: string;
   mode: "primary" | "subagent" | "all";
   hidden?: boolean;
@@ -357,6 +362,9 @@ export async function fetchAgents(): Promise<Agent[] | undefined> {
       .filter((r) => r.id || r.name)
       .map((r) => ({
         name: r.id ?? r.name ?? "",
+        ...(r.name && r.name !== (r.id ?? r.name)
+          ? { label: r.name }
+          : {}),
         description: r.description,
         mode: r.mode ?? "primary",
         hidden: r.hidden,
@@ -433,12 +441,24 @@ export async function fetchSessionPermissions(
   return body?.data;
 }
 
-// GET /permission — the v1 pipeline's pending asks, across all sessions (the
-// v2 route above never lists them). Asks made while the page was closed are
-// recovered from here.
+// Pending asks, both dialects: v2 GETs /api/permission/request ({data}
+// envelope, same row shape the session.permissions event carries); v1
+// GETs the global /permission list. Asks made while the page was closed
+// are recovered from here.
 export async function fetchPendingPermissions(): Promise<
   PermissionRequest[] | undefined
 > {
+  if (serverDialect === "v2") {
+    const body = await getJson<
+      { data?: (PermissionRequest & { sessionID?: string })[] } | PermissionRequest[]
+    >("/api/permission/request");
+    const rows = Array.isArray(body)
+      ? body
+      : Array.isArray((body as { data?: PermissionRequest[] })?.data)
+        ? (body as { data: PermissionRequest[] }).data
+        : undefined;
+    return rows ? rows.map((r) => normalizePermission(r as PermissionRequest, false)) : undefined;
+  }
   const body = await getJson<
     (PermissionRequest & { permission?: string; patterns?: string[]; always?: string[] })[]
   >("/permission");
@@ -462,15 +482,23 @@ export interface QuestionRequest {
   questions: QuestionInfo[];
   // Which pipeline holds the ask — it decides the reply route. A v1 turn's
   // question tool lists only on the global GET /question and answers on the
-  // global /question/{id}/reply; a v2 ask lists on /api/session/{id}/question
-  // and answers on the /api route. The other route 404s (QuestionNotFoundError).
+  // global /question/{id}/reply; a v2 ask is a FORM (lists on
+  // /api/session/{id}/form, answers on /api/session/{id}/form/{id}/reply
+  // with {answer}). The other route 404s (QuestionNotFoundError).
   v1?: boolean;
+  // A v2 form ask: per-field names, in question order — a multi-field
+  // reply keys its answer object by them (single-field answers go as the
+  // scalar).
+  formFieldNames?: string[];
 }
 
-// Pending questions for one session, both pipelines merged: the v2
-// per-session route plus the global /question list (v1 asks; the /api route
-// returns [] for them — wire-verified 1.18.25). The /api copy wins on an id
-// collision, so a v2 ask that shows up in both keeps the v2 reply route.
+// Pending questions for one session, both pipelines merged: v2 asks are
+// FORMS (GET /api/session/{id}/form, {data} envelope — the /question
+// routes are gone); v1 asks list on the global /question (the /api route
+// returns [] for them — wire-verified 1.18.25). A form row maps onto the
+// v1 question shape the dock renders; the form flag routes its reply to
+// the form endpoints. The /api copy wins on an id collision, so a v2 ask
+// that shows up in both keeps the v2 reply route.
 // Which of the two lists actually loaded rides along: a refresh may only
 // retire an ask its own pipeline's list confirmed absent.
 export interface SessionQuestions {
@@ -482,13 +510,24 @@ export async function fetchSessionQuestions(
   id: string,
 ): Promise<SessionQuestions | undefined> {
   const [v2, global] = await Promise.all([
-    getJson<{ data?: QuestionRequest[] }>(`/api/session/${id}/question`),
+    serverDialect === "v2"
+      ? getJson<{ data?: unknown[] }>(`/api/session/${id}/form`)
+      : getJson<{ data?: QuestionRequest[] }>(`/api/session/${id}/question`),
     getJson<QuestionRequest[]>("/question"),
   ]);
   if (v2 === undefined && global === undefined) return undefined;
-  const v2Rows = (v2?.data ?? []).map((q) => ({ ...q, v1: false }));
+  const v2Rows =
+    serverDialect === "v2"
+      ? ((Array.isArray((v2 as { data?: unknown[] })?.data)
+          ? (v2 as { data: unknown[] }).data
+          : []) as Record<string, unknown>[])
+          .map((f) => formToQuestion(f, id))
+          .filter((q): q is QuestionRequest => !!q)
+      : ((Array.isArray(v2?.data) ? v2?.data : []) as QuestionRequest[]).map(
+          (q) => ({ ...q, v1: false }),
+        );
   const seen = new Set(v2Rows.map((q) => q.id));
-  const v1Rows = (global ?? [])
+  const v1Rows = (Array.isArray(global) ? global : [])
     .filter((q) => q.sessionID === id && !seen.has(q.id))
     .map((q) => ({ ...q, v1: true }));
   return {
@@ -496,6 +535,73 @@ export async function fetchSessionQuestions(
     v2Loaded: v2 !== undefined,
     globalLoaded: global !== undefined,
   };
+}
+
+// v2 form row → v1 QuestionRequest. Field shape is only partially known
+// (Form.Field: name/label/type/options); option-like fields list their
+// options, everything else offers the free-text row. Field names ride
+// along so a multi-field reply can key its answer object.
+export function formToQuestion(
+  raw: Record<string, unknown>,
+  sessionID: string,
+): QuestionRequest | undefined {
+  const id = typeof raw.id === "string" ? raw.id : undefined;
+  if (!id) return undefined;
+  const title = typeof raw.title === "string" ? raw.title : "";
+  const fields = (Array.isArray(raw.fields) ? raw.fields : []).filter(
+    (f): f is Record<string, unknown> =>
+      typeof f === "object" && f !== null,
+  );
+  const names = fields.map((f, i) =>
+    typeof f.name === "string" ? f.name : `field${i}`,
+  );
+  const questions: QuestionInfo[] =
+    fields.length === 0
+      ? [{ question: title, header: "", options: [], custom: true }]
+      : fields.map((f, i) => {
+          const label =
+            typeof f.label === "string"
+              ? f.label
+              : typeof f.name === "string"
+                ? f.name
+                : `Field ${i + 1}`;
+          const options = Array.isArray(f.options)
+            ? (f.options as Record<string, unknown>[])
+                .map((o) =>
+                  typeof o === "string"
+                    ? { label: o }
+                    : typeof o?.label === "string"
+                      ? {
+                          label: o.label,
+                          ...(typeof o.description === "string"
+                            ? { description: o.description }
+                            : {}),
+                        }
+                      : typeof o?.value === "string" ||
+                          typeof o?.value === "number"
+                        ? { label: String(o.value) }
+                        : undefined,
+                )
+                .filter(
+                  (o): o is { label: string; description?: string } => !!o,
+                )
+            : [];
+          return {
+            question:
+              fields.length > 1
+                ? `${title} — ${label}`
+                : title || label,
+            header: label,
+            options,
+            multiple: f.multiple === true,
+            // Free-text row: explicit on the field, or the only offering
+            // of an option-less (input) field.
+            custom:
+              f.custom === true ||
+              (options.length === 0 && f.custom !== false),
+          };
+        });
+  return { id, sessionID, questions, formFieldNames: names, v1: false };
 }
 
 // Chat message. Only the fields the UI reads; the server sends more.
@@ -613,11 +719,21 @@ export const isText = (p: Part): p is TextPart =>
   p.type === "text" || p.type === "reasoning";
 export const isTool = (p: Part): p is ToolPart => p.type === "tool";
 
-// Tool ids arrive as schema names ("bash"); the row shows the friendly label.
-// Only the ids whose capitalization wouldn't read right on its own — read,
-// glob, grep, edit, write, list, skill, question, task label themselves.
+// Tool ids arrive as schema names; the row shows the friendly label. v2
+// renamed some tools while accepting the v1 names in places — the shell
+// tool can arrive as bash/shell/execute, the subagent spawner as
+// task/subagent — so the matchers below go through the alias sets.
+export const isBashTool = (tool: string): boolean =>
+  tool === "bash" || tool === "shell" || tool === "execute";
+export const isTaskTool = (tool: string): boolean =>
+  tool === "task" || tool === "subagent";
+
 const TOOL_NAMES: Record<string, string> = {
   bash: "Shell",
+  shell: "Shell",
+  execute: "Shell",
+  task: "Task",
+  subagent: "Task",
   apply_patch: "Patch",
   webfetch: "Fetch",
   websearch: "Web Search",
@@ -863,6 +979,34 @@ export async function fetchMessages(
       if (typeof p.state.error === "object" && p.state.error !== null) {
         p.state = { ...p.state, error: stringifyError(p.state.error) };
       }
+      // v2 stamps tool runs {created, ran, completed}; the live dialect
+      // (and ToolState) speaks {start, end}. A mid-stream reload's
+      // "streaming" status is a still-writing input — reads as running.
+      const t = p.state.time as
+        | {
+            created?: number;
+            ran?: number;
+            completed?: number;
+            start?: number;
+            end?: number;
+          }
+        | undefined;
+      if (
+        t &&
+        (t.created !== undefined ||
+          t.ran !== undefined ||
+          t.completed !== undefined)
+      ) {
+        p.state = {
+          ...p.state,
+          time: {
+            start: t.start ?? t.ran ?? t.created,
+            end: t.end ?? t.completed,
+          },
+        };
+      }
+      if ((p.state.status as string) === "streaming")
+        p.state = { ...p.state, status: "running" };
       p.state = clampToolState(p.id, p.state);
     }
     const info: Message = {
@@ -1446,8 +1590,9 @@ export async function compactSession(
   );
 }
 
-// POST /api/session/{sid}/permission/{id}/reply — `always` only when the
-// request offers it (save non-empty); `message` rides a reject.
+// POST /api/session/{sid}/permission/{id}/reply — SDK body is
+// {decision, message} ("once" | "always" | "reject"); `always` only when
+// the request offers it (save non-empty).
 export async function replyPermission(
   sessionID: string,
   id: string,
@@ -1459,7 +1604,7 @@ export async function replyPermission(
       await sendJson(
         "POST",
         `/api/session/${sessionID}/permission/${id}/reply`,
-        { reply, message },
+        { decision: reply, ...(message !== undefined ? { message } : {}) },
       )
     )?.ok === true
   );
@@ -1478,32 +1623,48 @@ export async function replyPermissionV1(
   );
 }
 
-// POST .../question/{id}/reply — one label array per question, in order.
-// The pipeline split runs through the reply too: a v1 ask answers on the
-// global /question/{id}/reply, a v2 ask on /api/session/{sid}/question/{id}/reply
-// — the wrong route 404s (QuestionNotFoundError).
+// POST .../reply — one label array per question, in order. The pipeline
+// split runs through the reply too: a v1 ask answers on the global
+// /question/{id}/reply; a v2 ask is a form — /api/session/{sid}/form/{id}/reply
+// with {answer} (the scalar for a single-field form, an object keyed by
+// field name for more).
 export async function replyQuestion(
   sessionID: string,
   id: string,
   answers: string[][],
   v1 = false,
+  formFieldNames?: string[],
 ): Promise<boolean> {
-  const path = v1
-    ? `/question/${id}/reply`
-    : `/api/session/${sessionID}/question/${id}/reply`;
-  return (await sendJson("POST", path, { answers }))?.ok === true;
+  if (!v1) {
+    const answer =
+      formFieldNames && formFieldNames.length > 1
+        ? Object.fromEntries(
+            formFieldNames.map((n, i) => [n, answers[i]?.[0] ?? ""]),
+          )
+        : (answers[0]?.[0] ?? "");
+    return (
+      (await sendJson("POST", `/api/session/${sessionID}/form/${id}/reply`, {
+        answer,
+      }))?.ok === true
+    );
+  }
+  return (
+    (await sendJson("POST", `/question/${id}/reply`, { answers }))?.ok === true
+  );
 }
 
-// POST .../question/{id}/reject — bodyless, same pipeline split.
+// POST .../reject — bodyless on v1; a v2 form ask cancels via DELETE.
 export async function rejectQuestion(
   sessionID: string,
   id: string,
   v1 = false,
 ): Promise<boolean> {
-  const path = v1
-    ? `/question/${id}/reject`
-    : `/api/session/${sessionID}/question/${id}/reject`;
-  return (await sendJson("POST", path))?.ok === true;
+  if (!v1)
+    return (
+      (await sendJson("DELETE", `/api/session/${sessionID}/form/${id}`))?.ok ===
+      true
+    );
+  return (await sendJson("POST", `/question/${id}/reject`))?.ok === true;
 }
 
 // `?directory=<worktree>` scopes a session write to its project. Verified
@@ -1545,23 +1706,24 @@ export async function deleteSession(
   );
 }
 
-// POST /session/{id}/revert — rewind to before the given user message: it,
-// its reply, and everything after fold out of the transcript (v1
-// session.revert — the store prompt_async writes; unrevert would restore).
-// Replies the updated session row carrying the revert marker. v2 keeps the
-// route but its body/reply are unverified ({} 404s); a 204-with-no-row is
-// answered by refetching the row so the caller sees server truth either
-// way.
+// POST /session/{id}/revert (v1) / v2's two-step: POST /revert/stage
+// {messageID, files?} marks the cut, POST /revert/commit applies it (the
+// bare POST /revert 404s on v2 — wire-verified). Rewind semantics: the
+// message, its reply, and everything after fold out of the transcript.
+// v1 replies the updated session row carrying the revert marker; v2
+// commits with 204, so the row is refetched either way.
 export async function revertSession(
   id: string,
   messageID: string,
   directory?: string,
 ): Promise<Session | undefined> {
   if (serverDialect === "v2") {
-    const res = await sendJson("POST", `/api/session/${id}/revert`, {
+    const staged = await sendJson("POST", `/api/session/${id}/revert/stage`, {
       messageID,
     });
-    if (!res?.ok) return undefined;
+    if (!staged?.ok) return undefined;
+    const committed = await sendJson("POST", `/api/session/${id}/revert/commit`);
+    if (!committed?.ok) return undefined;
     return fetchSession(id);
   }
   const res = await sendJson<Session & { directory?: string }>(

@@ -7,6 +7,7 @@
 // ahead of the queue; unknown events pass through (the store ignores what
 // it doesn't know).
 import type { ServerEvent } from "./events";
+import { formToQuestion } from "./api";
 
 // v2 addresses a part as (assistantMessageID, ordinal); the durable fetch
 // names content elements `${row.id}:${index}` — the same shape, so a
@@ -37,12 +38,27 @@ interface V2Data {
   messageID?: string;
   content?: unknown;
   reason?: string;
+  // session.permissions
+  permissions?: unknown;
+  // form.created
+  form?: {
+    id?: string;
+    sessionID?: string;
+    title?: string;
+    fields?: unknown[];
+  };
+  // session.retry.scheduled
+  attempt?: number;
+  at?: number;
   [key: string]: unknown;
 }
 
 export function translateV2Event(event: ServerEvent): ServerEvent[] {
   const d = (event.data ?? {}) as V2Data;
   const sid = d.sessionID;
+  // v2 frames carry a top-level `created` (ms); the shared ServerEvent
+  // type doesn't declare it — read it softly.
+  const at = (event as { created?: number }).created;
   // One synthesized pipeline event; `id` keeps the wire id for tracing.
   const synth = (type: string, data: Record<string, unknown>): ServerEvent => ({
     id: event.id,
@@ -240,6 +256,102 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
         }),
       );
     }
+    // --- asks: permissions and forms dock like the v1 pipeline's ---
+    // session.permissions {sessionID, permissions[]} — each row is an ask;
+    // the store's permission.v2.asked case normalizes and docks it.
+    case "session.permissions": {
+      if (!Array.isArray(d.permissions)) return [];
+      return (d.permissions as V2Data[])
+        .filter((r) => typeof r?.id === "string")
+        .map((r) =>
+          synth("permission.v2.asked", {
+            id: r.id,
+            sessionID: r.sessionID ?? sid,
+            action: r.action,
+            resources: r.resources ?? [],
+            save: r.save ?? [],
+            source: r.source,
+          }),
+        );
+    }
+    // form.created {sessionID, form:{id, title, fields}} — v2's question
+    // channel, mapped onto the v1 question shape the dock renders.
+    case "form.created": {
+      const f = d.form;
+      const q =
+        f && typeof f === "object"
+          ? formToQuestion(
+              f as unknown as Record<string, unknown>,
+              f.sessionID ?? sid ?? "",
+            )
+          : undefined;
+      return q
+        ? [synth("question.v2.asked", q as unknown as Record<string, unknown>)]
+        : [];
+    }
+    case "form.replied":
+      return sid && d.id
+        ? [synth("question.v2.replied", { requestID: d.id, sessionID: sid })]
+        : [];
+    case "form.cancelled":
+      return sid && d.id
+        ? [synth("question.v2.rejected", { requestID: d.id, sessionID: sid })]
+        : [];
+    // --- session rows: v1 sends full rows (session.updated {info}); v2
+    // sends facts. The store merges partial info, so each fact maps to a
+    // partial-row session.updated. ---
+    case "session.created":
+      // {sessionID, title, slug, projectID, location...} — no time/cost;
+      // defaults keep the row renderable until the next full refresh.
+      return sid
+        ? [
+            synth("session.updated", {
+              info: {
+                id: sid,
+                title: d.title ?? "",
+                time: { created: at ?? Date.now(), updated: at ?? Date.now() },
+                cost: 0,
+                tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                location: d.location,
+                ...(d.parentID ? { parentID: d.parentID } : {}),
+              },
+            }),
+          ]
+        : [];
+    case "session.usage.updated":
+      // {sessionID, cost, tokens} — the running sum (v1 parity: the v1 row
+      // refresh).
+      return sid
+        ? [
+            synth("session.updated", {
+              info: {
+                id: sid,
+                ...(d.cost !== undefined ? { cost: d.cost } : {}),
+                ...(d.tokens !== undefined ? { tokens: d.tokens } : {}),
+                time: { updated: at },
+              },
+            }),
+          ]
+        : [];
+    case "session.retry.scheduled":
+      // {sessionID, attempt, at, error} — v1 surfaces retries as a
+      // session.status {type:"retry"}.
+      return sid
+        ? [
+            synth("session.status", {
+              sessionID: sid,
+              status: {
+                type: "retry",
+                attempt: typeof d.attempt === "number" ? d.attempt : 1,
+                message:
+                  typeof d.error === "string"
+                    ? d.error
+                    : ((d.error as { message?: string })?.message ?? "Retrying"),
+                next: d.at,
+              },
+            }),
+          ]
+        : [];
     // session.renamed {sessionID, title} and session.deleted {sessionID}
     // pass through — small store cases handle them (v1 surfaces the same
     // facts through full-row events v2 never sends).
