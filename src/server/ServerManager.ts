@@ -1,11 +1,13 @@
 import * as vscode from "vscode";
+import * as crypto from "crypto";
 import { ChildProcess, spawn, execFile as execFileCb } from "child_process";
 import { promisify } from "util";
 import * as path from "path";
 import * as os from "os";
 import * as fs from "fs";
 import { ChatHub } from "../webview/ChatHub";
-import { serverAuthHeaders } from "./serverAuth";
+import { serverAuthHeaders, setSpawnedServerPassword } from "./serverAuth";
+import { detectDialect, type Dialect } from "./dialect";
 import { log } from "../log";
 
 const execFile = promisify(execFileCb);
@@ -44,6 +46,15 @@ interface ProviderInfo {
 interface ProviderResponse {
   connected: string[];
   all: ProviderInfo[];
+}
+
+// Row of GET /api/model (v2): flat catalog entry. `capabilities.tools` is
+// the v2 spelling of v1's capabilities.toolcall; `input` lists modalities.
+interface V2ModelRow {
+  id: string;
+  providerID: string;
+  name?: string;
+  capabilities?: { tools?: boolean; input?: string[]; output?: string[] };
 }
 
 // Slash commands the extension adds to every spawned server, injected via
@@ -253,6 +264,9 @@ export class ServerManager {
   private _leaseTimer: NodeJS.Timeout | undefined;
   private _leaseCtx: vscode.ExtensionContext | undefined;
   private _markReady!: () => void;
+  // Dialect of the attached server (probe-based, works for spawn and
+  // attach); undefined until detected.
+  private _dialect: Dialect | undefined;
   // Set by the owner: called when the server dies unexpectedly AFTER a
   // successful boot (crash, OOM kill). The owner decides whether to respawn.
   onUnexpectedExit: (() => void) | undefined;
@@ -275,6 +289,10 @@ export class ServerManager {
       return;
     }
 
+    // A fresh start may attach to someone else's server — drop any
+    // password a previous spawn of ours registered.
+    setSpawnedServerPassword(undefined);
+
     // Persist the port so we can reuse it next time (preserves webview
     // localStorage, which is tied to the origin).
     void context.globalState.update("opencode.serverPort", port);
@@ -285,14 +303,20 @@ export class ServerManager {
     // Attach to a booted server: everything (API relaying and the event
     // pump) goes through the extension host, so one local base url covers
     // it — the webview gets the same url only as its ready flag.
-    const attach = (serverUrl: string) => {
+    const attach = async (serverUrl: string) => {
       // The host runs where the server runs (extensionKind: workspace), so
       // localhost is always correct — and it is all anyone needs now: the
       // webview origin is opaque, so the server's CORS blocked every direct
       // call; AppHost relays for it instead.
       const parsed = new URL(serverUrl);
       this._apiBaseUrl = `http://localhost:${parsed.port}`;
-      log.info(`server attached on port ${parsed.port}`);
+      this._dialect = await detectDialect(
+        this._apiBaseUrl,
+        serverAuthHeaders(),
+      );
+      log.info(
+        `server attached on port ${parsed.port} (dialect ${this._dialect})`,
+      );
       this._markReady();
       this.ensureProjectColor(this._apiBaseUrl).catch((err) =>
         log.warn("project color assignment failed:", err),
@@ -308,7 +332,7 @@ export class ServerManager {
     const existingUrl = `http://localhost:${port}`;
     if (await this.isServerAlive(existingUrl)) {
       if (await this.servesWorkspace(existingUrl, cwd)) {
-        attach(existingUrl);
+        await attach(existingUrl);
         return;
       }
       // Foreign server owns the stored port — spawn ours on a fresh one.
@@ -318,6 +342,34 @@ export class ServerManager {
 
     try {
       const opencodeCommand = opencodePath.trim() || "opencode";
+
+      // shell:true concatenates file+args unquoted — a configured path with
+      // spaces must carry its own quotes for cmd.exe.
+      const commandLine =
+        process.platform === "win32" && /\s/.test(opencodeCommand)
+          ? `"${opencodeCommand}"`
+          : opencodeCommand;
+
+      // v2 serves are password-protected BY DEFAULT; v1 only when the env
+      // already says so. Sniff the CLI version once so a spawned v2 child
+      // gets a password we generate (v1 spawns stay open exactly as
+      // before — other windows and clients attach to them without it).
+      // Version strings: v1 prints bare "1.18.30", v2 "opencode v2.0.18".
+      let spawnPassword: string | undefined;
+      try {
+        const ver = await execFile(commandLine, ["--version"], {
+          timeout: 5000,
+          // Same resolution rule as the serve spawn below.
+          shell: process.platform === "win32",
+        });
+        if (/^opencode\s+v?2\./m.test(`${ver.stdout}${ver.stderr}`))
+          spawnPassword = crypto.randomBytes(24).toString("hex");
+      } catch {
+        // Unversioned binary: assume v1 (a misdetected v2 child prints a
+        // password we never learn and every call 401s — but a binary whose
+        // --version fails won't serve either).
+      }
+      setSpawnedServerPassword(spawnPassword);
 
       // A pre-boot exit is nearly always the port (opencode exits 1 with
       // "ServeError" when the bind fails), not the install. Keep the child's
@@ -330,13 +382,6 @@ export class ServerManager {
           args.push("--mdns");
         }
 
-        // shell:true concatenates file+args unquoted — a configured path with
-        // spaces must carry its own quotes for cmd.exe.
-        const commandLine =
-          process.platform === "win32" && /\s/.test(opencodeCommand)
-            ? `"${opencodeCommand}"`
-            : opencodeCommand;
-
         this.serverProcess = spawn(commandLine, args, {
           cwd,
           // Windows: bare "opencode" won't resolve to opencode.cmd without a
@@ -347,6 +392,9 @@ export class ServerManager {
           env: {
             ...process.env,
             OPENCODE_CALLER: "vscode",
+            ...(spawnPassword
+              ? { OPENCODE_SERVER_PASSWORD: spawnPassword }
+              : {}),
             OPENCODE_CONFIG_CONTENT: withGuiConfig(
               process.env.OPENCODE_CONFIG_CONTENT,
             ),
@@ -363,7 +411,7 @@ export class ServerManager {
           resolved = true;
           if (this.bootTimer) clearTimeout(this.bootTimer);
           this.bootTimer = undefined;
-          attach(url);
+          void attach(url);
         };
 
         // Parse stdout/stderr for the server URL, and keep the tail for the
@@ -465,6 +513,7 @@ export class ServerManager {
     this.disposed = true;
     if (this.bootTimer) clearTimeout(this.bootTimer);
     this.bootTimer = undefined;
+    setSpawnedServerPassword(undefined);
 
     // Kill-by-port only when this manager spawned the server, or no other
     // live window still leases it (another window may have attached to ours).
@@ -583,12 +632,26 @@ export class ServerManager {
   // GET /session — all sessions for the server's project.
   async listSessions(): Promise<SessionSummary[] | undefined> {
     await this.ready;
+    if (this._dialect === "v2") {
+      const page = await this._request<{ data?: SessionSummary[] }>(
+        "GET",
+        "/api/session?limit=400",
+      );
+      return page?.data;
+    }
     return this._request<SessionSummary[]>("GET", "/session");
   }
 
   // GET /session/{id}/diff — the session's file changes as unified patches.
   async sessionDiff(id: string): Promise<SessionFileDiff[] | undefined> {
     await this.ready;
+    if (this._dialect === "v2") {
+      const page = await this._request<{ data?: SessionFileDiff[] }>(
+        "GET",
+        `/api/session/${id}/diff`,
+      );
+      return page?.data;
+    }
     return this._request<SessionFileDiff[]>("GET", `/session/${id}/diff`);
   }
 
@@ -597,9 +660,40 @@ export class ServerManager {
   // blocks plus the default model's provider): /provider marks every catalog
   // provider whose env var exists as connected, so one API key lights up
   // several lookalike storefronts the user never configured. The Manage
-  // Models quick pick and syncModelAgents both consume this.
+  // Models quick pick and syncModelAgents both consume this. On v2 the
+  // catalog is assembled from /api/provider (connected rows — no models)
+  // plus the flat /api/model catalog (no `limit` param: the route returns
+  // an empty list when handed one).
   async providerCatalog(): Promise<ProviderResponse | undefined> {
     await this.ready;
+    if (this._dialect === "v2") {
+      const [providers, models] = await Promise.all([
+        this._request<{ data?: { id?: string }[] }>("GET", "/api/provider"),
+        this._request<{ data?: V2ModelRow[] }>("GET", "/api/model"),
+      ]);
+      if (!providers && !models) return undefined;
+      const all: ProviderInfo[] = [];
+      const byId = new Map<string, ProviderInfo>();
+      for (const m of models?.data ?? []) {
+        if (!m?.id || !m.providerID) continue;
+        let provider = byId.get(m.providerID);
+        if (!provider) {
+          provider = { id: m.providerID, models: {} };
+          byId.set(m.providerID, provider);
+          all.push(provider);
+        }
+        provider.models[m.id] = {
+          name: m.name ?? m.id,
+          capabilities: { toolcall: m.capabilities?.tools === true },
+        };
+      }
+      return {
+        connected: (providers?.data ?? [])
+          .map((r) => r.id)
+          .filter((id): id is string => !!id),
+        all,
+      };
+    }
     const [catalog, config] = await Promise.all([
       this._request<ProviderResponse>("GET", "/provider"),
       this._request<{ model?: string; provider?: Record<string, unknown> }>(
@@ -749,7 +843,10 @@ export class ServerManager {
   // its current project's worktree (or a sandbox of it). A server running
   // outside any git repo reports the "global" project (worktree "/") and
   // never matches — safer to spawn fresh than attach to the wrong thing.
+  // v2 has no /project/current: match the folder against the /api/project
+  // list's `canonical` (same normWorktree fold).
   private async servesWorkspace(baseUrl: string, cwd: string): Promise<boolean> {
+    const target = normWorktree(cwd);
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 1000);
@@ -758,15 +855,39 @@ export class ServerManager {
         headers: serverAuthHeaders(),
       });
       clearTimeout(timeout);
-      if (!res.ok) return false;
-      const project = (await res.json()) as {
-        worktree?: string;
-        sandboxes?: string[];
-      };
-      const target = normWorktree(cwd);
-      if (project.worktree && normWorktree(project.worktree) === target)
-        return true;
-      return (project.sandboxes ?? []).some((s) => normWorktree(s) === target);
+      // v1-only routes answer GET with 200 + SPA HTML on v2 — only a JSON
+      // reply is /project/current.
+      if (
+        res.ok &&
+        (res.headers.get("content-type") ?? "").includes("application/json")
+      ) {
+        const project = (await res.json()) as {
+          worktree?: string;
+          sandboxes?: string[];
+        };
+        if (project.worktree && normWorktree(project.worktree) === target)
+          return true;
+        return (project.sandboxes ?? []).some((s) => normWorktree(s) === target);
+      }
+      const list = await fetch(`${baseUrl}/api/project`, {
+        signal: AbortSignal.timeout(2000),
+        headers: serverAuthHeaders(),
+      });
+      if (
+        list.ok &&
+        (list.headers.get("content-type") ?? "").includes("application/json")
+      ) {
+        const projects = (await list.json()) as {
+          canonical?: string;
+          sandboxes?: string[];
+        }[];
+        return (projects ?? []).some(
+          (p) =>
+            (p.canonical && normWorktree(p.canonical) === target) ||
+            (p.sandboxes ?? []).some((s) => normWorktree(s) === target),
+        );
+      }
+      return false;
     } catch {
       return false;
     }
@@ -774,14 +895,20 @@ export class ServerManager {
 
   // Give the server's current project a random avatar color if it has none.
   // No-ops for the global (folderless) project and for projects the user
-  // already colored.
+  // already colored. v2 has no /project/current (the SPA fallback answers
+  // 200 + HTML) and its project PATCH is unverified — no-op there.
   private async ensureProjectColor(baseUrl: string): Promise<void> {
+    if (this._dialect === "v2") return;
     const signal = () => AbortSignal.timeout(10_000);
     const res = await fetch(`${baseUrl}/project/current`, {
       signal: signal(),
       headers: serverAuthHeaders(),
     });
-    if (!res.ok) return;
+    if (
+      !res.ok ||
+      !(res.headers.get("content-type") ?? "").includes("application/json")
+    )
+      return;
     const project = (await res.json()) as { id?: string; worktree?: string };
     if (!project.id || project.id === "global" || !project.worktree) return;
     // /project/current is cached at server boot; the list reflects PATCHes.
@@ -806,8 +933,12 @@ export class ServerManager {
   }
 
   // Quick health check to see if a server from a previous session is still
-  // alive. GET /api/health; a 200 HTML body (the SPA fallback for unknown
-  // paths) is not a healthy opencode server.
+  // alive. GET /api/health (v1); a v2 server 404s it, so fall back to an
+  // authed session list probe — 2xx proves a v1 or v2 server, and 401 still
+  // proves an opencode v2 is behind the port (it is password-protected by
+  // default; a foreign one without our password is alive but unattachable,
+  // which servesWorkspace then rejects). A 200 HTML body (the SPA fallback
+  // for unknown paths) is not a healthy opencode server.
   private async isServerAlive(url: string): Promise<boolean> {
     try {
       const controller = new AbortController();
@@ -817,9 +948,18 @@ export class ServerManager {
         headers: serverAuthHeaders(),
       });
       clearTimeout(timeout);
-      if (!res.ok) return false;
-      const body = (await res.json()) as { healthy?: boolean };
-      return body.healthy === true;
+      if (res.ok) {
+        const body = (await res.json()) as { healthy?: boolean };
+        return body.healthy === true;
+      }
+      if (res.status === 404) {
+        const probe = await fetch(`${url}/api/session?limit=1`, {
+          signal: AbortSignal.timeout(1000),
+          headers: serverAuthHeaders(),
+        });
+        return probe.status === 401 || probe.ok;
+      }
+      return false;
     } catch {
       return false;
     }

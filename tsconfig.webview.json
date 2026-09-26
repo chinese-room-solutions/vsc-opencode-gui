@@ -9,5 +9,8 @@
     "jsxImportSource": "preact",
     "lib": ["DOM", "DOM.Iterable", "ES2022"]
   },
-  "include": ["src/webview/app"]
+  // src/server/dialect.ts is dialect-detection CORE (pure, no host
+  // imports) shared with the webview unit tests; everything else under
+  // src/server is host-only.
+  "include": ["src/webview/app", "src/server/dialect.ts"]
 }

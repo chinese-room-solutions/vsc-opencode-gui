@@ -4,9 +4,11 @@ import {
   attachmentParts,
   attachAllowed,
   attachMime,
+  attachmentsEnabled,
   createSession,
   compactSession,
   deleteSession as deleteSessionApi,
+  dialect,
   fetchAgents,
   fetchCommands,
   fetchConfig,
@@ -35,6 +37,7 @@ import {
   replyPermissionV1,
   replyQuestion,
   runCommand,
+  setDialect,
   switchSessionAgent,
   switchSessionModel,
   type Agent,
@@ -62,6 +65,7 @@ import {
   tokensTotal,
 } from "./api";
 import { connectEvents, type ServerEvent } from "./events";
+import { translateV2Event } from "./v2events";
 import { postToHost } from "./host";
 import { parseMentions } from "./mentions";
 import { setCopyModifier } from "./markdown";
@@ -495,7 +499,11 @@ async function refreshBase(): Promise<void> {
     for (const s of page.sessions) guardVariant(s.id, s.model);
     sessionsNext.value = page.next;
   }
-  if (providerList) providers.value = curateProviders(providerList, config);
+  if (providerList)
+    providers.value =
+      dialect() === "v2"
+        ? providerList
+        : curateProviders(providerList, config);
   if (agentList) agents.value = agentList;
   if (commandList) commands.value = commandList;
   if (projectList) projects.value = projectList;
@@ -721,7 +729,7 @@ export async function renameProject(
     setSendError("That project is not in the server's project list.");
     return false;
   }
-  if (!(await renameProjectApi(row.id, name, row.worktree))) {
+  if (!(await renameProjectApi(row.id, name))) {
     setSendError("The rename was rejected by the server.");
     return false;
   }
@@ -1276,6 +1284,8 @@ function applyEvent(event: ServerEvent): void {
     timestamp?: number;
     cost?: number;
     tokens?: MessageTokens;
+    // session.renamed carries the server's new title.
+    title?: string;
     // permission.v2.asked / question.v2.asked carry the request itself; the
     // replied/rejected events carry {requestID, reply, ...}.
     id?: string;
@@ -1407,6 +1417,19 @@ function applyEvent(event: ServerEvent): void {
         patchSession(data.sessionID, (s) => ({ ...s, model: data.model }));
         guardVariant(data.sessionID, data.model);
       }
+      break;
+    // v2 surfaces these facts as dedicated events (v1 sends full rows).
+    // Renamed: the server's auto-title after a turn — patch in place or
+    // Home keeps the old title until the next full refresh.
+    case "session.renamed":
+      if (data.sessionID && typeof data.title === "string") {
+        patchSession(data.sessionID, (s) => ({ ...s, title: data.title! }));
+      }
+      break;
+    // Deleted elsewhere (another window, the TUI): drop every local trace
+    // of the row, the tab included.
+    case "session.deleted":
+      if (data.sessionID) dropSessionLocal(data.sessionID);
       break;
     case "permission.v2.asked":
       // The TUI's permission bell: live asks ring once — a repeated event
@@ -2045,7 +2068,13 @@ export function init(): void {
   // reports the webview visible again (resyncFromServer).
   let sawDrop = false;
   disconnectEvents = connectEvents({
-    onEvent: queueEvent,
+    // v2 servers speak their own event family — rewritten into the
+    // pipeline's dialect before anything queues (see v2events.ts).
+    onEvent: (event) => {
+      if (dialect() === "v2")
+        for (const e of translateV2Event(event)) queueEvent(e);
+      else queueEvent(event);
+    },
     onState: (state) => {
       if (state === "offline" || state === "connecting") {
         sawDrop = true;
@@ -2261,10 +2290,22 @@ export function hostMessage(msg: unknown) {
     peers?: unknown;
     from?: string;
     sessionId?: string;
+    dialect?: string;
   };
   // The webview became visible again: events streamed while VS Code had
   // it suspended were lost — pull truth.
   if (m.type === "resync") {
+    resyncFromServer();
+  }
+  // A dialect that arrived after the page booted (probe finished late, or
+  // the host re-detected): adopt it and re-pull everything — routes and
+  // envelopes change with it.
+  if (
+    m.type === "dialect" &&
+    (m.dialect === "v1" || m.dialect === "v2") &&
+    m.dialect !== dialect()
+  ) {
+    setDialect(m.dialect);
     resyncFromServer();
   }
   if (m.type === "insert-text" && typeof m.text === "string") {
@@ -2677,6 +2718,10 @@ export async function sendPrompt(
 ): Promise<void> {
   const body = text.trim();
   if (!body) return;
+  if (files.length > 0 && !attachmentsEnabled()) {
+    setSendError("Attachments are not supported by this server (opencode v2).");
+    return;
+  }
   let id: string;
   if (target === "draft") {
     const { session, error } = await createSession(titleFrom(body), {
@@ -2746,16 +2791,54 @@ async function postPrompt(
     ),
   ];
   const sel = currentSelection(id);
-  const sent = await promptSession(id, parts, sel.agent, sel.model);
+  // v2 has no per-turn agent/model on the prompt body — the switches are
+  // session-scoped, so only send what actually differs from the session
+  // row (every switch writes a bookkeeping message row server-side).
+  let agent: string | undefined = sel.agent;
+  let model: ModelSelection | undefined = sel.model;
+  if (dialect() === "v2") {
+    const row = sessions.value.find((s) => s.id === id);
+    if (row) {
+      if (row.agent === sel.agent) agent = undefined;
+      const rm = row.model;
+      if (
+        rm &&
+        sel.model &&
+        rm.providerID === sel.model.providerID &&
+        rm.id === sel.model.id &&
+        (sel.model.variant === undefined || rm.variant === sel.model.variant)
+      )
+        model = undefined;
+    }
+  }
+  const sent = await promptSession(id, parts, agent, model);
   if (!sent.ok) {
     dropPending(id);
     sessionStatus.value = { ...sessionStatus.value, [id]: { type: "idle" } };
     setSendError(withReason("The message could not be sent", sent.error));
   } else {
     clearComposerFiles(id);
-    // Its user row hasn't landed yet — the ghost watch must not mistake
-    // it for a ghost once a stop wipes the echo (see postedRows).
-    postedRows.set(id, (postedRows.get(id) ?? 0) + 1);
+    // v2 replies the admitted user row with the POST — land it in place of
+    // the optimistic echo (v1 hears it as message.updated on /event).
+    if (sent.user) {
+      clearPending(id);
+      upsertMessage(id, {
+        id: sent.user.id,
+        role: "user",
+        time: { created: sent.user.created ?? Date.now() },
+      });
+      upsertPart(id, {
+        id: `${sent.user.id}:text`,
+        messageID: sent.user.id,
+        sessionID: id,
+        type: "text",
+        text: sent.user.text ?? body,
+      });
+    } else {
+      // Its user row hasn't landed yet — the ghost watch must not mistake
+      // it for a ghost once a stop wipes the echo (see postedRows).
+      postedRows.set(id, (postedRows.get(id) ?? 0) + 1);
+    }
     // The send commits a pending revert: the server truncates the store at
     // the marker and clears it — drop the local copy so the fold lifts.
     patchSession(id, (s) => ({ ...s, revert: undefined }));

@@ -85,6 +85,13 @@ make install   # compile, package the .vsix, install - then reload VS Code
 Requires the [opencode CLI](https://opencode.ai/) where the workspace runs
 (remote workspaces: on the remote machine). `make uninstall` removes it.
 
+Both server generations are supported: opencode 1.x (`opencode-ai`, 1.16+) and
+opencode 2.x (`@opencode/cli`). The extension detects the server's dialect at
+boot and speaks the matching routes. On 2.x the server is password-protected
+by default; the extension generates that password itself (attachments in the
+composer are a 1.x feature — the 2.x prompt API has no verified attachment
+support yet).
+
 > ℹ️ On server start, the `oc-attachments` skill is installed into your
 > opencode config dir (`~/.config/opencode/skills/`) so every session gets
 > attachment reuse. Sub-agent delegation uses the built-in `task` tool.
@@ -112,4 +119,5 @@ uncaught-exception handling, orphan-process checks. Needs Node ≥ 22.5 and
 `opencode` + `git` on `PATH`. ~30 s, cleans up after itself.
 
 UI is also exercised in a plain browser via `node scripts/ui-rig.js <dir>
-[port]` (real server). See `AGENTS.md` for the verification bar.
+[port]` (real server; `OPENCODE_BIN=<path>` points it at another binary, e.g.
+a 2.x `@opencode/cli` install). See `AGENTS.md` for the verification bar.

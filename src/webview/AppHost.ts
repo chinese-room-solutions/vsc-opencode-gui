@@ -6,6 +6,7 @@ import { themeStyle } from "../theme";
 import { tokenizeToTokens } from "../tokenizer";
 import { saveAttachment, savePromptAttachments } from "../attachments";
 import { serverAuthHeaders } from "../server/serverAuth";
+import { detectDialect, type Dialect } from "../server/dialect";
 import { log } from "../log";
 import type { PeerInfo } from "./Peers";
 
@@ -113,6 +114,11 @@ export class AppHost implements vscode.Disposable {
   // one line per route (see _relayApi).
   private _relayFailures = new Map<string, number>();
   private _serverUrl?: string;
+  // Dialect of the server behind _serverUrl; probed once per origin before
+  // the page is (re)baked with it, so the app boots knowing its routes.
+  private _dialect: Dialect = "v1";
+  // Guards the async dialect probe: only the newest url/error wins.
+  private _urlSeq = 0;
   private _error?: { message: string; showInstallHint: boolean };
   private _attachments: vscode.Disposable[] = [];
   // SSE pumps to the server: (re)started with a server url, aborted when it
@@ -363,13 +369,27 @@ export class AppHost implements vscode.Disposable {
   }
 
   setServerUrl(url: string) {
-    this._serverUrl = url;
+    // Probe the dialect before baking the page: the app's routes, prompt
+    // body, and envelopes all hang off it, and a probe is two fast fetches
+    // (cached per origin). Until it resolves the page stays on loading —
+    // the same state a booting server shows.
+    const seq = ++this._urlSeq;
     this._error = undefined;
-    if (this._webview) this._startPump(url);
-    this._renderCurrentState();
+    this._stopPump();
+    void detectDialect(url, serverAuthHeaders()).then((dialect) => {
+      if (seq !== this._urlSeq) return;
+      this._serverUrl = url;
+      this._dialect = dialect;
+      if (this._webview) this._startPump(url);
+      this._renderCurrentState();
+      // Belt and braces for a page that somehow booted before the bake
+      // (idempotent in the app).
+      this._post({ type: "dialect", dialect });
+    });
   }
 
   setError(message: string, showInstallHint = true) {
+    this._urlSeq++;
     this._error = { message, showInstallHint };
     this._serverUrl = undefined;
     this._stopPump();
@@ -377,6 +397,7 @@ export class AppHost implements vscode.Disposable {
   }
 
   setLoading() {
+    this._urlSeq++;
     this._serverUrl = undefined;
     this._error = undefined;
     this._stopPump();
@@ -570,14 +591,19 @@ export class AppHost implements vscode.Disposable {
   // the forwarded messages, so the pumps run regardless of app state — a
   // late message to a reloading webview is harmless. They start at first
   // webview attach (a never-resolved view holds no streams; see attach
-  // and setServerUrl).
+  // and setServerUrl). A v2 server never frames /event (and 1.18 servers
+  // drop /api/event subscribers when one connects), so only /api/event is
+  // pumped there.
   private _startPump(base: string): void {
     this._stopPump();
     const v2 = new AbortController();
-    const v1 = new AbortController();
-    this._pumps = [v2, v1];
+    this._pumps = [v2];
     void this._pumpEvents(base, v2, "/api/event");
-    void this._pumpEvents(base, v1, "/event");
+    if (this._dialect !== "v2") {
+      const v1 = new AbortController();
+      this._pumps.push(v1);
+      void this._pumpEvents(base, v1, "/event");
+    }
   }
 
   private _stopPump(): void {
@@ -653,18 +679,25 @@ export class AppHost implements vscode.Disposable {
     }
   }
 
-  // Forward one `data:` frame; malformed JSON is skipped, as before.
+  // Forward one `data:` frame; malformed JSON is skipped, as before. The
+  // v2 dialect stamps a top-level `created` (ms) on its frames — folded
+  // into `data.timestamp` so the app's step/idle stamps use wire time.
   private _pumpFrame(pump: AbortController, line: string): void {
     if (!line.startsWith("data:")) return;
     try {
       const raw = JSON.parse(line.slice(5).trim()) as ServerEvent & {
         properties?: unknown;
+        created?: number;
       };
       if (!this._pumps.includes(pump)) return;
+      const body = raw.data ?? raw.properties;
       const event: ServerEvent = {
         id: raw.id,
         type: raw.type,
-        data: raw.data ?? raw.properties,
+        data:
+          typeof body === "object" && body !== null && raw.created !== undefined
+            ? { timestamp: raw.created, ...body }
+            : body,
       };
       this._post({ type: "sse-event", event });
     } catch {
@@ -732,6 +765,9 @@ export class AppHost implements vscode.Disposable {
       // relayed, so nothing in the page connects to it. Empty while
       // loading/error.
       .replaceAll("{{ORIGIN}}", this._serverUrl ?? "")
+      // The server's dialect ("v2" or empty for v1): decides the app's
+      // routes, prompt body, envelopes, and event translation.
+      .replaceAll("{{DIALECT}}", this._dialect === "v2" ? "v2" : "")
       .replaceAll("{{ERROR_MESSAGE}}", escapeAttr(error?.message ?? ""))
       .replaceAll("{{INSTALL_HINT}}", error?.showInstallHint ? "1" : "")
       .replaceAll(
