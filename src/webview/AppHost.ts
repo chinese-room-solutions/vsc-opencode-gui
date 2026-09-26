@@ -57,6 +57,29 @@ const NO_FRAME_MS = 30_000;
 // tab on this signal.
 const PING_TIMEOUT_MS = 45_000;
 
+// One compact line of why a relayed call failed, for the app's error banners
+// and the deduped relay log line. The server's own message when it sent one
+// ({"name","data":{"message"}} and plain {"message"} shapes), else just the
+// transport fact.
+function relayFailureReason(err: unknown): string {
+  const e = err as { name?: string; message?: string; cause?: { code?: string } };
+  if (e?.name === "TimeoutError" || e?.name === "AbortError") return "request timed out";
+  const code = e?.cause?.code;
+  return `${e?.name ?? "error"}${code ? ` ${code}` : ""}`;
+}
+
+function serverErrorMessage(json: unknown): string | undefined {
+  if (!json || typeof json !== "object") return undefined;
+  const j = json as {
+    message?: unknown;
+    data?: { message?: unknown };
+    error?: { message?: unknown };
+  };
+  const msg = j.data?.message ?? j.message ?? j.error?.message;
+  return typeof msg === "string" && msg.trim() ? msg.trim().slice(0, 140) : undefined;
+}
+
+
 // ServerEvent, as fed to the app through the pump (mirrors
 // src/webview/app/events.ts across the postMessage seam).
 interface ServerEvent {
@@ -459,7 +482,7 @@ export class AppHost implements vscode.Disposable {
     // Not yet attached: a normal boot race (the app re-syncs on
     // server.connected), not a failure worth logging.
     if (!this._serverUrl || typeof message.path !== "string") {
-      this._post({ type: "api-result", id, ok: false });
+      this._post({ type: "api-result", id, ok: false, error: "server not connected" });
       return;
     }
     try {
@@ -504,21 +527,39 @@ export class AppHost implements vscode.Disposable {
         "application/json",
       );
       const json = isJson ? await res.json() : undefined;
-      this._post({ type: "api-result", id, ok: res.ok, json });
+      // Failure reason for the app's banners: status + the server's own
+      // message, or the non-JSON fact for a 2xx that skipped the JSON parse
+      // (ok semantics stay unchanged — callers judge shape themselves).
+      let error: string | undefined;
+      if (!res.ok) {
+        const detail = serverErrorMessage(json);
+        error = `HTTP ${res.status}${detail ? `: ${detail}` : ""}`;
+      } else if (!isJson) {
+        error = `HTTP ${res.status} (${(res.headers.get("content-type") ?? "no content type").split(";")[0]} reply)`;
+      }
+      this._post({ type: "api-result", id, ok: res.ok, json, ...(error ? { error } : {}) });
       // A restart makes every in-flight fetch fail at once; log the first
       // failure per route, count the rest, and note the recovery once.
+      // 404 stays out: the app probes possibly-dead sessions with it.
       const key = `${message.method} ${message.path}`;
-      const fails = this._relayFailures.get(key);
-      if (fails !== undefined) {
-        this._relayFailures.delete(key);
-        if (fails > 1) log.info(`api relay recovered after ${fails} failed ${key} requests`);
+      if (res.ok && !error) {
+        const fails = this._relayFailures.get(key);
+        if (fails !== undefined) {
+          this._relayFailures.delete(key);
+          if (fails > 1) log.info(`api relay recovered after ${fails} failed ${key} requests`);
+        }
+      } else if (res.status !== 404) {
+        const fails = (this._relayFailures.get(key) ?? 0) + 1;
+        this._relayFailures.set(key, fails);
+        if (fails === 1) log.error(`api relay failed: ${key} ${error}`);
       }
     } catch (err) {
+      const reason = relayFailureReason(err);
       const key = `${message.method} ${message.path}`;
       const fails = (this._relayFailures.get(key) ?? 0) + 1;
       this._relayFailures.set(key, fails);
       if (fails === 1) log.error("api relay failed:", message.method, message.path, err);
-      this._post({ type: "api-result", id, ok: false });
+      this._post({ type: "api-result", id, ok: false, error: reason });
     }
   }
 

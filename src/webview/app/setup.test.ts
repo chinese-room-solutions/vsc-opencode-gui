@@ -155,6 +155,15 @@ export interface ApiCall {
 export const apiLog: ApiCall[] = [];
 export const hostPosted: unknown[] = [];
 export const API_FAIL = Symbol("api-fail");
+// A failed reply carrying the relay's failure reason (HTTP status + server
+// message), mirroring what AppHost posts for a real failed fetch.
+export interface ApiFailWith {
+  fail: true;
+  error: string;
+}
+export function apiFailWith(error: string): ApiFailWith {
+  return { fail: true, error };
+}
 type Responder = (call: ApiCall) => unknown;
 let responders: Responder[] = [];
 
@@ -196,13 +205,17 @@ captureApi({
         console.error("[test] responder threw:", err);
         result = API_FAIL;
       }
-      const ok = result !== API_FAIL;
+      const failed =
+        result === API_FAIL ||
+        (!!result && typeof result === "object" && "fail" in result);
+      const error = failed && result !== API_FAIL ? (result as ApiFailWith).error : undefined;
       void Promise.resolve().then(() =>
         dispatchWindowMessage({
           type: "api-result",
           id: m.id,
-          ok,
-          json: ok ? result : undefined,
+          ok: !failed,
+          json: failed ? undefined : result,
+          ...(error ? { error } : {}),
         }),
       );
       return;

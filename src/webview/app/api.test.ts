@@ -2,6 +2,7 @@ import "./setup.test";
 import { strict as assert } from "node:assert";
 import {
   API_FAIL,
+  apiFailWith,
   flushEvents,
   onApi,
   dispatchWindowMessage,
@@ -12,12 +13,14 @@ import {
   attachmentParts,
   clampPartText,
   clampToolOutput,
+  createSession,
   fetchMessages,
   fetchSessions,
   forgetTruncatedParts,
   isTruncatedPart,
   normalizePermission,
   normalizeSession,
+  promptSession,
   sniffsText,
   stringifyError,
   toolName,
@@ -283,6 +286,45 @@ describe("api", () => {
     it("fails (undefined) when the relay reports failure", async () => {
       onApi(() => API_FAIL);
       assert.equal(await fetchSessions(), undefined);
+    });
+  });
+
+  describe("createSession", () => {
+    it("returns the normalized session row", async () => {
+      onApi((call) =>
+        call.method === "POST" && call.path === "/session"
+          ? { id: "s1", directory: "C:\\w\\repo" }
+          : undefined,
+      );
+      const { session } = await createSession();
+      assert.equal(session?.id, "s1");
+      assert.equal(session?.location.directory, "C:\\w\\repo");
+    });
+    it("returns the relay failure reason", async () => {
+      onApi((call) =>
+        call.path === "/session" ? apiFailWith("HTTP 500: boom") : undefined,
+      );
+      const { session, error } = await createSession();
+      assert.equal(session, undefined);
+      assert.equal(error, "HTTP 500: boom");
+    });
+  });
+
+  describe("promptSession", () => {
+    it("reports ok, and carries the reason on failure", async () => {
+      onApi((call) =>
+        call.path === "/session/s1/prompt_async"
+          ? apiFailWith("request timed out")
+          : undefined,
+      );
+      const bad = await promptSession("s1", []);
+      assert.equal(bad.ok, false);
+      assert.equal(bad.error, "request timed out");
+      onApi((call) =>
+        call.path === "/session/s1/prompt_async" ? {} : undefined,
+      );
+      const good = await promptSession("s1", []);
+      assert.equal(good.ok, true);
     });
   });
 

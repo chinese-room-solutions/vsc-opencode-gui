@@ -302,6 +302,11 @@ export function messagesFor(
 export const sendError = signal<{ for?: string; text: string } | undefined>(
   undefined,
 );
+// Banner text with the relay's failure reason (HTTP status + server
+// message, or the transport failure) appended when the host sent one.
+function withReason(text: string, reason?: string): string {
+  return reason ? `${text}: ${reason}.` : `${text}.`;
+}
 export function setSendError(
   text: string | undefined,
   forSession?: string,
@@ -2121,9 +2126,9 @@ export async function newSession(): Promise<void> {
   if (creatingSession) return;
   creatingSession = true;
   try {
-    const session = await createSession();
+    const { session, error } = await createSession();
     if (!session) {
-      setSendError("Could not create the session.");
+      setSendError(withReason("Could not create the session", error));
       return;
     }
     upsertSession(session);
@@ -2674,12 +2679,12 @@ export async function sendPrompt(
   if (!body) return;
   let id: string;
   if (target === "draft") {
-    const session = await createSession(titleFrom(body), {
+    const { session, error } = await createSession(titleFrom(body), {
       agent: draftAgent.value,
       model: draftModel.value,
     });
     if (!session) {
-      setSendError("Could not create the session.");
+      setSendError(withReason("Could not create the session", error));
       return;
     }
     id = session.id;
@@ -2741,10 +2746,11 @@ async function postPrompt(
     ),
   ];
   const sel = currentSelection(id);
-  if (!(await promptSession(id, parts, sel.agent, sel.model))) {
+  const sent = await promptSession(id, parts, sel.agent, sel.model);
+  if (!sent.ok) {
     dropPending(id);
     sessionStatus.value = { ...sessionStatus.value, [id]: { type: "idle" } };
-    setSendError("The message could not be sent.");
+    setSendError(withReason("The message could not be sent", sent.error));
   } else {
     clearComposerFiles(id);
     // Its user row hasn't landed yet — the ghost watch must not mistake
@@ -2854,12 +2860,12 @@ export async function runSlashCommand(
   }
   let id = target;
   if (target === "draft") {
-    const session = await createSession(`/${name}`, {
+    const { session, error } = await createSession(`/${name}`, {
       agent: draftAgent.value,
       model: draftModel.value,
     });
     if (!session) {
-      setSendError("Could not create the session.");
+      setSendError(withReason("Could not create the session", error));
       return;
     }
     id = session.id;

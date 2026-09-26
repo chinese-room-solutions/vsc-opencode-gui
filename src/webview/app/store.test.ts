@@ -12,6 +12,7 @@ import {
   localStorageStub,
   onApi,
   API_FAIL,
+  apiFailWith,
   pendingTimers,
   setNow,
   settle,
@@ -1732,9 +1733,35 @@ describe("sendPrompt", () => {
     );
     assert.equal(sendError.value?.text, "The message could not be sent.");
   });
+  it("failure carries the relay's reason", async () => {
+    const sid = "sp3";
+    open(sid, []);
+    onApi((call) =>
+      call.path.startsWith(`/session/${sid}/prompt_async`)
+        ? apiFailWith("HTTP 500: Internal error")
+        : undefined,
+    );
+    await sendPrompt(sid, "hi");
+    assert.equal(
+      sendError.value?.text,
+      "The message could not be sent: HTTP 500: Internal error.",
+    );
+  });
 });
 
 describe("newSession and blank hiding", () => {
+  it("a failed create reports the relay's reason", async () => {
+    onApi((call) =>
+      call.method === "POST" && call.path === "/session"
+        ? apiFailWith("HTTP 500: nope")
+        : undefined,
+    );
+    await newSession();
+    assert.equal(
+      sendError.value?.text,
+      "Could not create the session: HTTP 500: nope.",
+    );
+  });
   it("creates, opens, and hides as blank until touched", async () => {
     onApi((call) => {
       if (call.method === "POST" && call.path === "/session")

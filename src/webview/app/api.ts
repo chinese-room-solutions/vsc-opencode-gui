@@ -73,10 +73,12 @@ export interface Providers {
 
 // One relay round-trip: post the request, resolve on the matching reply.
 // The host always answers — any relay/fetch failure replies {ok:false} —
-// so the promise never hangs or rejects.
+// so the promise never hangs or rejects. `error` is the host's compact
+// reason (HTTP status + server message, or the transport failure).
 interface ApiResult {
   ok: boolean;
   json?: unknown;
+  error?: string;
 }
 
 const pending = new Map<number, (r: ApiResult) => void>();
@@ -108,12 +110,17 @@ window.addEventListener("message", (e: MessageEvent) => {
     id?: number;
     ok?: boolean;
     json?: unknown;
+    error?: unknown;
   };
   if (m?.type !== "api-result" || typeof m.id !== "number") return;
   const resolve = pending.get(m.id);
   if (!resolve) return;
   pending.delete(m.id);
-  resolve({ ok: m.ok === true, json: m.json });
+  resolve({
+    ok: m.ok === true,
+    json: m.json,
+    error: typeof m.error === "string" ? m.error : undefined,
+  });
 });
 
 // GET JSON or nothing: a non-JSON 200 body (v2 SPA fallback) is a failure,
@@ -800,9 +807,9 @@ async function sendJson<T>(
   path: string,
   body?: unknown,
   timeoutMs?: number,
-): Promise<{ ok: boolean; data?: T }> {
+): Promise<{ ok: boolean; data?: T; error?: string }> {
   const res = await apiRequest(method, path, body, timeoutMs);
-  return { ok: res.ok, data: res.json as T | undefined };
+  return { ok: res.ok, data: res.json as T | undefined, error: res.error };
 }
 
 // Every v1 session row (POST /session reply, SSE info) carries the worktree
@@ -824,14 +831,16 @@ export function normalizeSession(
 export async function createSession(
   title?: string,
   preset?: { agent?: string; model?: ModelSelection },
-): Promise<Session | undefined> {
+): Promise<{ session?: Session; error?: string }> {
   const res = await sendJson<Session & { directory?: string }>(
     "POST",
     "/session",
     { title, agent: preset?.agent, model: preset?.model },
   );
   const row = res?.data;
-  return row ? normalizeSession(row) : undefined;
+  return res?.ok && row
+    ? { session: normalizeSession(row) }
+    : { error: res?.error };
 }
 
 // POST /session/{id}/prompt_async — the v1 pipeline, what every native
@@ -976,7 +985,7 @@ export async function promptSession(
   parts: PromptPart[],
   agent?: string,
   model?: ModelSelection,
-): Promise<boolean> {
+): Promise<{ ok: boolean; error?: string }> {
   const body = {
     parts,
     ...(agent ? { agent } : {}),
@@ -988,8 +997,8 @@ export async function promptSession(
     // the first send.
     ...(model?.variant ? { variant: model.variant } : {}),
   };
-  return (await sendJson("POST", `/session/${id}/prompt_async`, body))?.ok ===
-    true;
+  const res = await sendJson("POST", `/session/${id}/prompt_async`, body);
+  return { ok: res.ok === true, error: res.error };
 }
 
 // GET /find/file — the file finder behind "@" mentions (the same route the

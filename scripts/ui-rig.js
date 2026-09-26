@@ -139,9 +139,13 @@ const stubFor = (nonce, serverUrl) =>
   `});` +
   `const isJson = (res.headers.get("content-type") || "").includes("application/json");` +
   `const json = isJson ? await res.json() : undefined;` +
-  `window.postMessage({ type: "api-result", id: m.id, ok: res.ok, json: json }, "*");` +
-  `} catch {` +
-  `window.postMessage({ type: "api-result", id: m.id, ok: false }, "*");` +
+  // Mirror AppHost's failure reason so banners read the same in the rig.
+  `let error;` +
+  `if (!res.ok) { const d = (json && json.data && json.data.message) || (json && json.message); error = "HTTP " + res.status + (d ? ": " + String(d).slice(0, 140) : ""); }` +
+  `else if (!isJson) { error = "HTTP " + res.status + " (" + (res.headers.get("content-type") || "no content type").split(";")[0] + " reply)"; }` +
+  `window.postMessage({ type: "api-result", id: m.id, ok: res.ok, json: json, error: error }, "*");` +
+  `} catch (e) {` +
+  `window.postMessage({ type: "api-result", id: m.id, ok: false, error: e && e.name === "TimeoutError" ? "request timed out" : "fetch failed" }, "*");` +
   `}` +
   `})();` +
   `} else {` +
