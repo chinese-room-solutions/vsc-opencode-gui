@@ -102,8 +102,15 @@ process.on("exit", kill); // hard kills (taskkill on node) still tree-kill the c
 // from the server here and SSE frames are forwarded as window messages
 // (e.data IS the message, like a webview postMessage), so the app runs
 // unchanged in a plain browser. Same nonce as the app script so CSP passes.
-const stubFor = (nonce, serverUrl) =>
-  `<script nonce="${nonce}">` +
+const stubFor = (nonce, serverUrl) => {
+  // Basic auth for password-protected servers, mirroring the extension
+  // host's serverAuthHeaders (OPENCODE_SERVER_PASSWORD; any username).
+  const auth = process.env.OPENCODE_SERVER_PASSWORD
+    ? `"authorization": "Basic ${Buffer.from(
+        "opencode:" + process.env.OPENCODE_SERVER_PASSWORD,
+      ).toString("base64")}",`
+    : "";
+  return `<script nonce="${nonce}">` +
   `(() => {` +
   `let pumped = false;` +
   `const startPump = () => {` +
@@ -134,7 +141,7 @@ const stubFor = (nonce, serverUrl) =>
   `try {` +
   `const res = await fetch("${serverUrl}" + m.path, {` +
   `method: m.method,` +
-  `headers: m.body === undefined ? undefined : { "content-type": "application/json" },` +
+  `headers: { ${auth}"content-type": m.body === undefined ? undefined : "application/json" },` +
   `body: m.body === undefined ? undefined : JSON.stringify(m.body),` +
   `});` +
   `const isJson = (res.headers.get("content-type") || "").includes("application/json");` +
@@ -155,6 +162,7 @@ const stubFor = (nonce, serverUrl) =>
   `getState: () => ({}), setState: () => {} });` +
   `})();` +
   `</script>`;
+};
 
 const shellHtml = (serverUrl) => {
   const nonce = crypto.randomBytes(16).toString("hex");

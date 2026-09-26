@@ -5,6 +5,7 @@ import * as path from "path";
 import * as os from "os";
 import * as fs from "fs";
 import { ChatHub } from "../webview/ChatHub";
+import { serverAuthHeaders } from "./serverAuth";
 import { log } from "../log";
 
 const execFile = promisify(execFileCb);
@@ -735,6 +736,7 @@ export class ServerManager {
       const res = await fetch(`${this._apiBaseUrl}${path}`, {
         method,
         signal: AbortSignal.timeout(10_000),
+        headers: serverAuthHeaders(),
       });
       if (!res.ok) return undefined;
       return (await res.json()) as T;
@@ -753,6 +755,7 @@ export class ServerManager {
       const timeout = setTimeout(() => controller.abort(), 1000);
       const res = await fetch(`${baseUrl}/project/current`, {
         signal: controller.signal,
+        headers: serverAuthHeaders(),
       });
       clearTimeout(timeout);
       if (!res.ok) return false;
@@ -774,13 +777,16 @@ export class ServerManager {
   // already colored.
   private async ensureProjectColor(baseUrl: string): Promise<void> {
     const signal = () => AbortSignal.timeout(10_000);
-    const res = await fetch(`${baseUrl}/project/current`, { signal: signal() });
+    const res = await fetch(`${baseUrl}/project/current`, {
+      signal: signal(),
+      headers: serverAuthHeaders(),
+    });
     if (!res.ok) return;
     const project = (await res.json()) as { id?: string; worktree?: string };
     if (!project.id || project.id === "global" || !project.worktree) return;
     // /project/current is cached at server boot; the list reflects PATCHes.
     const list = (await (
-      await fetch(`${baseUrl}/project`, { signal: signal() })
+      await fetch(`${baseUrl}/project`, { signal: signal(), headers: serverAuthHeaders() })
     ).json()) as {
       id: string;
       icon?: { color?: string };
@@ -792,7 +798,7 @@ export class ServerManager {
       `${baseUrl}/project/${project.id}?directory=${encodeURIComponent(project.worktree)}`,
       {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...serverAuthHeaders() },
         body: JSON.stringify({ icon: { color } }),
         signal: signal(),
       },
@@ -808,6 +814,7 @@ export class ServerManager {
       const timeout = setTimeout(() => controller.abort(), 1000);
       const res = await fetch(`${url}/api/health`, {
         signal: controller.signal,
+        headers: serverAuthHeaders(),
       });
       clearTimeout(timeout);
       if (!res.ok) return false;

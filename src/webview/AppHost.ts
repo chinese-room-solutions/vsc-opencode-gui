@@ -5,6 +5,7 @@ import * as path from "path";
 import { themeStyle } from "../theme";
 import { tokenizeToTokens } from "../tokenizer";
 import { saveAttachment, savePromptAttachments } from "../attachments";
+import { serverAuthHeaders } from "../server/serverAuth";
 import { log } from "../log";
 import type { PeerInfo } from "./Peers";
 
@@ -516,10 +517,12 @@ export class AppHost implements vscode.Disposable {
         signal: AbortSignal.timeout(
           typeof message.timeoutMs === "number" ? message.timeoutMs : 10_000,
         ),
-        headers:
-          message.body === undefined
-            ? undefined
-            : { "content-type": "application/json" },
+        headers: {
+          ...serverAuthHeaders(),
+          ...(message.body === undefined
+            ? {}
+            : { "content-type": "application/json" }),
+        },
         body:
           message.body === undefined ? undefined : JSON.stringify(message.body),
       });
@@ -612,6 +615,7 @@ export class AppHost implements vscode.Disposable {
         this._pumpState(pump, "connecting");
         const res = await fetch(`${base}${path}`, {
           signal: AbortSignal.any([pump.signal, conn.signal]),
+          headers: serverAuthHeaders(),
         });
         if (!res.ok || !res.body) {
           throw new Error(`GET ${path} returned ${res.status}`);
