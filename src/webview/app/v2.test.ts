@@ -36,11 +36,13 @@ import {
   runCommand,
   setDialect,
 } from "./api";
+import type { FilePart } from "./api";
 import { translateV2Event } from "./v2events";
 import { judgeDialect, detectDialect } from "../../server/dialect";
 import {
   init,
   messagesBySession,
+  sendPrompt,
   sessionStatus,
   sessions,
 } from "./store";
@@ -283,7 +285,7 @@ describe("v2 route/body/envelope translation", () => {
     assert.deepEqual(await fetchSessionStatus(), {});
     onApi((call) =>
       call.path === "/api/session/active"
-        ? { data: { sessionID: "ses_x" } }
+        ? { data: { ses_x: { id: "ses_x", title: "running" } } }
         : undefined,
     );
     assert.deepEqual(await fetchSessionStatus(), {
@@ -483,6 +485,42 @@ describe("v2 transcript normalization (fetchMessages)", () => {
   beforeEach(() => setDialect("v2"));
   afterEach(() => setDialect("v1"));
 
+  it("maps a completed compaction row as the summary assistant row", async () => {
+    onApi((call) =>
+      call.path.startsWith("/api/session/ses_c/message")
+        ? {
+            data: [
+              {
+                id: "msg_sum",
+                time: { created: 5, completed: 6 },
+                type: "compaction",
+                status: "completed",
+                reason: "manual",
+                summary: "The user greeted.",
+                recent: "user: hi",
+              },
+              {
+                id: "msg_run",
+                time: { created: 7 },
+                type: "compaction",
+                status: "running",
+                reason: "auto",
+                summary: "",
+              },
+            ],
+          }
+        : undefined,
+    );
+    const page = await fetchMessages("ses_c");
+    const list = page?.messages ?? [];
+    assert.equal(list.length, 1);
+    assert.equal(list[0].info.role, "assistant");
+    assert.equal(list[0].info.agent, "compaction");
+    assert.equal(list[0].info.id, "msg_sum");
+    assert.equal(list[0].parts[0]?.type, "text");
+    assert.equal((list[0].parts[0] as { text?: string }).text, "The user greeted.");
+  });
+
   it("maps the captured v2 rows into the app shape, dropping marker rows", async () => {
     // The recorded shape from DIALECT.md: newest first, user text in
     // payload, lifecycle/bookkeeping rows interleaved.
@@ -564,6 +602,93 @@ describe("v2 transcript normalization (fetchMessages)", () => {
     );
     const text = assistant.parts.find((p) => p.type === "text");
     assert.equal((text as { text?: string } | undefined)?.text, "Hi!");
+  });
+
+  it("maps a v2 user row's files[] into chips and mention pills", async () => {
+    // Session.Message.User.files (Prompt.FileAttachment): inline payloads
+    // carry {data, mime}, on-disk files source {type:"uri", uri}, a
+    // mention adds its range.
+    onApi((call) =>
+      call.path.startsWith("/api/session/ses_1/message")
+        ? {
+            data: [
+              {
+                id: "msg_u",
+                time: { created: 1 },
+                type: "user",
+                payload: { text: "see @src/store.ts#12-14" },
+                files: [
+                  { data: "AAA", mime: "image/png", name: "shot.png" },
+                  {
+                    mime: "text/plain",
+                    source: {
+                      type: "uri",
+                      uri: "file:///C:/w/repo/attach/notes.txt",
+                    },
+                    name: "notes.txt",
+                  },
+                  {
+                    mime: "text/plain",
+                    source: {
+                      type: "uri",
+                      uri: "file:///C:/w/repo/src/store.ts?start=12&end=14",
+                    },
+                    mention: { start: 4, end: 23, text: "@src/store.ts#12-14" },
+                  },
+                ],
+              },
+            ],
+            cursor: { next: null },
+          }
+        : undefined,
+    );
+    const page = await fetchMessages("ses_1");
+    const user = page?.messages[0];
+    assert.equal(user?.info.role, "user");
+    assert.equal(user?.parts.length, 4);
+    const [img, notes, mention] = (user?.parts.slice(1) ?? []) as FilePart[];
+    // inline image → rebuilt data: URI (thumbnail chip + lightbox)
+    assert.equal(img.url, "data:image/png;base64,AAA");
+    assert.equal(img.filename, "shot.png");
+    assert.equal(img.source, undefined);
+    assert.equal(img.mime, "image/png");
+    // on-disk attachment → file:// chip that opens the file
+    assert.equal(notes.url, "file:///C:/w/repo/attach/notes.txt");
+    assert.equal(notes.filename, "notes.txt");
+    assert.equal(notes.source, undefined);
+    // mention → the v1-shaped source pillifyOwnText pills inline
+    assert.equal(mention.url, "file:///C:/w/repo/src/store.ts?start=12&end=14");
+    assert.deepEqual(mention.source, {
+      type: "file",
+      path: "C:/w/repo/src/store.ts",
+      text: { value: "@src/store.ts#12-14", start: 4, end: 23 },
+    });
+  });
+
+  it("reads a user row's files nested under payload (the API's wrapper)", async () => {
+    onApi((call) =>
+      call.path.startsWith("/api/session/ses_1/message")
+        ? {
+            data: [
+              {
+                id: "msg_u",
+                time: { created: 1 },
+                type: "user",
+                payload: {
+                  text: "hi",
+                  files: [{ data: "AA==", mime: "application/pdf" }],
+                },
+              },
+            ],
+            cursor: { next: null },
+          }
+        : undefined,
+    );
+    const page = await fetchMessages("ses_1");
+    const user = page?.messages[0];
+    const [file] = (user?.parts.slice(1) ?? []) as FilePart[];
+    assert.equal(file.url, "data:application/pdf;base64,AA==");
+    assert.equal(file.filename, undefined);
   });
 
   it("normalizes v2 tool stamps: {created,ran,completed} time, streaming status", async () => {
@@ -654,10 +779,10 @@ describe("v2 transcript normalization (fetchMessages)", () => {
     assert.equal(isTaskTool("bash"), false);
   });
 
-  it("fetchSessionStatus reads the active row's id; fetchAgents keeps display labels", async () => {
+  it("fetchSessionStatus reads the active record's keys; fetchAgents keeps display labels", async () => {
     onApi((call) => {
       if (call.path === "/api/session/active")
-        return { data: { id: "ses_busy", title: "running" } };
+        return { data: { ses_busy: { id: "ses_busy", title: "running" } } };
       if (call.path === "/api/agent")
         return {
           data: [{ id: "build", name: "Build", mode: "primary", hidden: false }],
@@ -898,7 +1023,8 @@ describe("v2 SSE → pipeline translation", () => {
         },
       ],
     );
-    // session.created → a renderable default row.
+    // session.created → a facts-only partial row (defaults land on the
+    // store's upsert path, so a known row's title/cost survive).
     const created = translateV2Event(
       ev("session.created", { sessionID: "s2", title: "T", parentID: "s1" }),
     );
@@ -907,7 +1033,7 @@ describe("v2 SSE → pipeline translation", () => {
     assert.equal(info.id, "s2");
     assert.equal(info.title, "T");
     assert.equal(info.parentID, "s1");
-    assert.equal(info.cost, 0);
+    assert.equal("cost" in info, false);
     // usage → partial row merge
     const usage = translateV2Event(
       ev("session.usage.updated", {
@@ -934,6 +1060,76 @@ describe("v2 SSE → pipeline translation", () => {
       sessionID: "s",
       status: { type: "retry", attempt: 2, message: "rate limited", next: 1234 },
     });
+    // bare permission.asked/replied carry the v2 schema — must dock and
+    // undock through the v2 cases, not the v1 names they share.
+    const askedPerm = translateV2Event(
+      ev("permission.asked", {
+        id: "pr_1",
+        sessionID: "s",
+        action: "bash",
+        resources: ["cat foo"],
+      }),
+    );
+    assert.deepEqual(askedPerm, [
+      {
+        id: "evt_x",
+        type: "permission.v2.asked",
+        data: {
+          id: "pr_1",
+          sessionID: "s",
+          action: "bash",
+          resources: ["cat foo"],
+          save: [],
+          source: undefined,
+        },
+      },
+    ]);
+    assert.deepEqual(
+      translateV2Event(
+        ev("permission.replied", {
+          sessionID: "s",
+          requestID: "pr_1",
+          reply: "once",
+        }),
+      )[0].type,
+      "permission.v2.replied",
+    );
+    // tool.success metadata rides along (subagent chip, edit diffs).
+    const ok = translateV2Event(
+      ev("session.tool.success", {
+        sessionID: "s",
+        assistantMessageID: "am",
+        id: "cal",
+        metadata: { sessionId: "child" },
+      }),
+    );
+    assert.deepEqual(
+      (ok[0].data as { metadata?: unknown }).metadata,
+      { sessionId: "child" },
+    );
+    // revert markers across clients
+    const staged = translateV2Event(
+      ev("session.revert.staged", {
+        sessionID: "s",
+        revert: { messageID: "msg_1" },
+      }),
+    );
+    assert.deepEqual(
+      (staged[0].data as { info: unknown }).info,
+      { id: "s", revert: { messageID: "msg_1" } },
+    );
+    for (const t of ["session.revert.cleared", "session.revert.committed"]) {
+      const cleared = translateV2Event(ev(t, { sessionID: "s" }));
+      assert.deepEqual((cleared[0].data as { info: unknown }).info, {
+        id: "s",
+        revert: null,
+      });
+    }
+    // compaction's end signals the store to pull the summary row
+    assert.deepEqual(
+      translateV2Event(ev("session.compaction.ended", { sessionID: "s" })),
+      [{ id: "evt_x", type: "session.compaction.done", data: { sessionID: "s" } }],
+    );
   });
 
   it("frames without a sessionID or coordinates translate to nothing", () => {
@@ -1029,5 +1225,96 @@ describe("v2 turn through the store (recorded frame sequence)", () => {
     assert.equal((text as { text?: string }).text, "Hi!");
     // The step's usage also landed on the session row (running sum).
     assert.equal(sessions.value[0].tokens.input, 4999);
+  });
+
+  it("lands the admitted user row with attachment and mention parts", async () => {
+    init();
+    const sid = "v2send";
+    sessions.value = [sessRow(sid, { agent: "build" })];
+    onApi((call) =>
+      call.method === "POST" && call.path === `/api/session/${sid}/prompt`
+        ? {
+            data: {
+              id: "msg_u1",
+              sessionID: sid,
+              time: { created: T0 + 1 },
+              type: "user",
+              payload: { text: "see @src/a.ts" },
+              delivery: "steer",
+            },
+          }
+        : undefined,
+    );
+    await sendPrompt(sid, "see @src/a.ts", [
+      { uri: "data:image/png;base64,AA", name: "p.png" },
+    ]);
+    const list = messagesBySession.value.get(sid) ?? [];
+    assert.ok(!list.some((m) => m.info.id.startsWith("pending:")));
+    const admitted = list.find((m) => m.info.id === "msg_u1");
+    assert.equal(admitted?.info.role, "user");
+    const files = (admitted?.parts ?? []).filter(
+      (p) => p.type === "file",
+    ) as FilePart[];
+    assert.equal(files.length, 2);
+    // the pasted image: data: chip shape
+    assert.equal(files[0].url, "data:image/png;base64,AA");
+    assert.equal(files[0].filename, "p.png");
+    assert.equal(files[0].source, undefined);
+    // the @-mention: pill shape (file:// url plus its source range)
+    assert.equal(files[1].url, "file:///C:/work/repo/src/a.ts");
+    assert.deepEqual(files[1].source?.text, {
+      value: "@src/a.ts",
+      start: 4,
+      end: 13,
+    });
+    assert.equal(files[1].source?.path, "C:\\work\\repo/src/a.ts");
+  });
+
+  it("docks bare permission.asked, merges remote reverts and wire usage", async () => {
+    init();
+    const sid = "v2asks";
+    sessions.value = [sessRow(sid, { title: "Real title", cost: 1 })];
+
+    // The v2-shaped bare event must dock like session.permissions does.
+    v2sse("permission.asked", {
+      id: "pr_9",
+      sessionID: sid,
+      action: "bash",
+      resources: ["ls"],
+    });
+    await flushEvents();
+    assert.ok(
+      (await import("./store")).pendingPermissions.value.some(
+        (p) => p.id === "pr_9" && p.v1 !== true,
+      ),
+    );
+
+    // Remote revert marker merges without blanking the row it lands on.
+    v2sse("session.revert.staged", {
+      sessionID: sid,
+      revert: { messageID: "msg_1" },
+    });
+    await flushEvents();
+    assert.equal(sessions.value[0].revert?.messageID, "msg_1");
+    assert.equal(sessions.value[0].title, "Real title");
+    v2sse("session.revert.committed", { sessionID: sid });
+    await flushEvents();
+    assert.equal(sessions.value[0].revert, undefined);
+    assert.equal(sessions.value[0].title, "Real title");
+
+    // Wire usage is the running sum — a SET, not another delta add.
+    v2sse("session.usage.updated", {
+      sessionID: sid,
+      cost: 0.5,
+      tokens: {
+        input: 10,
+        output: 0,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      },
+    });
+    await flushEvents();
+    assert.equal(sessions.value[0].cost, 0.5);
+    assert.equal(sessions.value[0].tokens.input, 10);
   });
 });

@@ -189,26 +189,22 @@ export async function fetchSessions(
 }
 
 // GET /session/status (v1: the sessionID → status map). v2 serves the
-// ACTIVE session only, at /api/session/active: {data:{}} when idle, the
-// running session's full row (its `id`) when busy. Streaming truth comes
-// from the event translation either way (see v2events.ts).
+// ACTIVE sessions at /api/session/active: a record keyed by sessionID
+// ({} when idle) — the official client reads it as
+// `new Map(Object.keys(t).map(...running))`. Streaming truth comes from
+// the event translation either way (see v2events.ts).
 export async function fetchSessionStatus(): Promise<
   Record<string, SessionStatus> | undefined
 > {
   if (serverDialect === "v2") {
-    const body = await getJson<{
-      data?:
-        | Record<string, unknown>
-        | { id?: string; sessionID?: string }
-        | null;
-    }>("/api/session/active");
+    const body = await getJson<{ data?: Record<string, unknown> | null }>(
+      "/api/session/active",
+    );
     const active = body?.data;
-    if (!active || typeof active !== "object") return undefined;
+    if (!active || typeof active !== "object" || Array.isArray(active))
+      return undefined;
     const map: Record<string, SessionStatus> = {};
-    const sid =
-      (active as { sessionID?: unknown }).sessionID ??
-      (active as { id?: unknown }).id;
-    if (typeof sid === "string" && sid) map[sid] = { type: "busy" };
+    for (const sid of Object.keys(active)) map[sid] = { type: "busy" };
     return map;
   }
   return getJson<Record<string, SessionStatus>>("/session/status");
@@ -846,15 +842,88 @@ export interface MessageWithParts {
 interface V2MessageRow {
   id: string;
   type: "user" | "assistant" | "system" | "idle" | "compaction" | string;
+  // compaction rows: "running" until the summary lands.
+  status?: string;
   time: { created: number; completed?: number };
   text?: string;
-  payload?: { text?: string };
+  payload?: { text?: string; files?: V2RowFile[] };
   content?: { type: string; id?: string }[];
+  // A user row's attachments (Session.Message.User.files — the same
+  // Prompt.FileAttachment the prompt body speaks): an inline payload carries
+  // {data, mime}; an on-disk file carries source {type:"uri", uri}; a
+  // mention adds its range. Nesting under payload covers the API's text
+  // wrapper (the store keeps both bare).
+  files?: V2RowFile[];
   agent?: string;
   model?: { id?: string; providerID?: string };
   cost?: number;
   tokens?: MessageTokens;
   error?: { name: string; data?: { message?: string } };
+}
+
+interface V2RowFile {
+  data?: string;
+  mime?: string;
+  source?: { type?: string; uri?: string };
+  name?: string;
+  mention?: V2Mention;
+}
+
+// file:///C:/w/repo/src/a.ts?start=12 → C:/w/repo/src/a.ts — a path the
+// pill's data-path opener (resolveFileRef) accepts like any v1 mention path.
+function fileUrlToPath(uri: string): string | undefined {
+  const m = /^file:\/\/([^?]+)/.exec(uri);
+  if (!m) return undefined;
+  const path = m[1]
+    .split("/")
+    .map((s) => {
+      try {
+        return decodeURIComponent(s);
+      } catch {
+        return s;
+      }
+    })
+    .join("/");
+  const win = /^\/[A-Za-z]:/.test(path) ? path.slice(1) : path;
+  return win || undefined;
+}
+
+// A v2 user row's files[] → the FilePart the renderers speak (same shape a
+// v1 row's file parts have): uri-sourced files keep their file:// url,
+// inline payloads rebuild the data: URI, a mention range becomes the v1
+// source that pillifies the "@path" text.
+function v2RowFileParts(row: V2MessageRow, sessionID: string): FilePart[] {
+  return (row.files ?? row.payload?.files ?? []).map((f, i) => {
+    const uri = f.source?.type === "uri" ? f.source.uri : undefined;
+    const url =
+      uri ??
+      (f.data !== undefined
+        ? `data:${f.mime ?? "application/octet-stream"};base64,${f.data}`
+        : undefined);
+    const path = uri !== undefined ? fileUrlToPath(uri) : undefined;
+    return {
+      id: `${row.id}:f${i}`,
+      messageID: row.id,
+      sessionID,
+      type: "file" as const,
+      ...(f.mime ? { mime: f.mime } : {}),
+      ...(url ? { url } : {}),
+      ...(f.name ? { filename: f.name } : {}),
+      ...(f.mention && (path ?? f.name)
+        ? {
+            source: {
+              type: "file" as const,
+              path: path ?? f.name!,
+              text: {
+                value: f.mention.text,
+                start: f.mention.start,
+                end: f.mention.end,
+              },
+            },
+          }
+        : {}),
+    };
+  });
 }
 
 // GET /api/session/{id}/message (v2) — {data, cursor}, newest first. The v1
@@ -905,11 +974,44 @@ export async function fetchMessages(
   let parent: string | undefined;
   const messages = rows
     .filter(
-      (r): r is V2MessageRow & { type: "user" | "assistant" } =>
-        r.type === "user" || r.type === "assistant",
+      (r): r is V2MessageRow & { type: "user" | "assistant" | "compaction" } =>
+        r.type === "user" ||
+        r.type === "assistant" ||
+        (r.type === "compaction" && r.status !== "running"),
     )
     .map((r) => {
     if (r.type === "user") parent = r.id;
+    // A completed compaction row is v2's summary — the same facts v1's
+    // legacy store serves as an assistant row with agent "compaction"
+    // (running ones have no content yet; the done-event refresh brings
+    // them completed).
+    if (r.type === "compaction") {
+      const c = r as V2MessageRow & {
+        type: "compaction";
+        summary?: string;
+        recent?: string;
+      };
+      return {
+        info: {
+          id: r.id,
+          role: "assistant",
+          time: r.time,
+          agent: "compaction",
+        },
+        parts: [
+          {
+            id: `${r.id}:text`,
+            messageID: r.id,
+            sessionID: id,
+            type: "text",
+            text: c.summary ?? "",
+          },
+        ],
+      } satisfies { info: Message; parts: Part[] };
+    }
+    // v2 rides a user row's attachments as top-level files[] (mapped below);
+    // content file items are the older/1.18 fallback.
+    const rowFiles = v2RowFileParts(r, id);
     const parts: Part[] =
       r.type === "user"
         ? [
@@ -923,16 +1025,18 @@ export async function fetchMessages(
                 r.payload?.text ?? r.text ?? "",
               ),
             },
-            // Durable @-mention attachments ride the row's content (the live
-            // path speaks parts directly); keep them so pills survive reload.
-            ...(r.content ?? [])
-              .filter((c) => (c as { type?: string }).type === "file")
-              .map((c, i) => ({
-                ...c,
-                id: c.id ?? `${r.id}:f${i}`,
-                messageID: r.id,
-                sessionID: id,
-              })),
+            ...(rowFiles.length > 0
+              ? rowFiles
+              : // Durable @-mention attachments ride the row's content (the live
+                // path speaks parts directly); keep them so pills survive reload.
+                (r.content ?? [])
+                  .filter((c) => (c as { type?: string }).type === "file")
+                  .map((c, i) => ({
+                    ...c,
+                    id: c.id ?? `${r.id}:f${i}`,
+                    messageID: r.id,
+                    sessionID: id,
+                  }))),
           ]
         : (r.content ?? []).map((c, i) => ({
             ...c,

@@ -318,7 +318,7 @@ export class ServerManager {
         `server attached on port ${parsed.port} (dialect ${this._dialect})`,
       );
       this._markReady();
-      this.ensureProjectColor(this._apiBaseUrl).catch((err) =>
+      this.ensureProjectColor(this._apiBaseUrl, cwd).catch((err) =>
         log.warn("project color assignment failed:", err),
       );
       hub.setServerUrl(this._apiBaseUrl);
@@ -911,38 +911,71 @@ export class ServerManager {
 
   // Give the server's current project a random avatar color if it has none.
   // No-ops for the global (folderless) project and for projects the user
-  // already colored. v2 has no /project/current (the SPA fallback answers
-  // 200 + HTML) and its project PATCH is unverified — no-op there.
-  private async ensureProjectColor(baseUrl: string): Promise<void> {
-    if (this._dialect === "v2") return;
+  // already colored. v1 reads /project/current (cached at server boot; the
+  // list reflects PATCHes); v2 has no current-project route — the worktree
+  // matches the /api/project list's `canonical` instead, and the PATCH
+  // speaks the SDK's full body shape.
+  private async ensureProjectColor(baseUrl: string, cwd: string): Promise<void> {
     const signal = () => AbortSignal.timeout(10_000);
-    const res = await fetch(`${baseUrl}/project/current`, {
-      signal: signal(),
-      headers: serverAuthHeaders(),
-    });
+    const target = normWorktree(cwd);
+    const list = await (
+      await fetch(
+        `${baseUrl}${this._dialect === "v2" ? "/api/project" : "/project"}`,
+        { signal: signal(), headers: serverAuthHeaders() },
+      )
+    ).json();
+    let project: {
+      id?: string;
+      worktree?: string;
+      canonical?: string;
+    };
+    if (this._dialect === "v2") {
+      const rows = list as {
+        id?: string;
+        canonical?: string;
+        icon?: { color?: string };
+      }[];
+      project = rows.find((p) => p.canonical && normWorktree(p.canonical) === target) ?? {};
+    } else {
+      const res = await fetch(`${baseUrl}/project/current`, {
+        signal: signal(),
+        headers: serverAuthHeaders(),
+      });
+      if (
+        !res.ok ||
+        !(res.headers.get("content-type") ?? "").includes("application/json")
+      )
+        return;
+      project = (await res.json()) as { id?: string; worktree?: string };
+    }
+    if (!project.id || project.id === "global") return;
     if (
-      !res.ok ||
-      !(res.headers.get("content-type") ?? "").includes("application/json")
+      (list as { id?: string; icon?: { color?: string } }[]).find(
+        (p) => p.id === project.id,
+      )?.icon?.color
     )
       return;
-    const project = (await res.json()) as { id?: string; worktree?: string };
-    if (!project.id || project.id === "global" || !project.worktree) return;
-    // /project/current is cached at server boot; the list reflects PATCHes.
-    const list = (await (
-      await fetch(`${baseUrl}/project`, { signal: signal(), headers: serverAuthHeaders() })
-    ).json()) as {
-      id: string;
-      icon?: { color?: string };
-    }[];
-    if (list.find((p) => p.id === project.id)?.icon?.color) return;
     const color =
       PROJECT_COLORS[Math.floor(Math.random() * PROJECT_COLORS.length)];
     await fetch(
-      `${baseUrl}/project/${project.id}?directory=${encodeURIComponent(project.worktree)}`,
+      `${baseUrl}${this._dialect === "v2" ? "/api" : ""}/project/${project.id}${
+        this._dialect === "v2" || !project.worktree
+          ? ""
+          : `?directory=${encodeURIComponent(project.worktree)}`
+      }`,
       {
         method: "PATCH",
         headers: { "Content-Type": "application/json", ...serverAuthHeaders() },
-        body: JSON.stringify({ icon: { color } }),
+        body: JSON.stringify(
+          this._dialect === "v2"
+            ? {
+                canonical: project.canonical,
+                name: undefined,
+                icon: { color },
+                commands: undefined,
+              }
+            : { icon: { color } },
+        ),
         signal: signal(),
       },
     );

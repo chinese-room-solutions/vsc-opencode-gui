@@ -56,9 +56,11 @@ interface V2Data {
 export function translateV2Event(event: ServerEvent): ServerEvent[] {
   const d = (event.data ?? {}) as V2Data;
   const sid = d.sessionID;
-  // v2 frames carry a top-level `created` (ms); the shared ServerEvent
-  // type doesn't declare it — read it softly.
-  const at = (event as { created?: number }).created;
+  // v2 frames carry a top-level `created` (ms); the pump folds it into
+  // data.timestamp for the app's stamps — read whichever survived.
+  const at =
+    (event as { created?: number }).created ??
+    (typeof d.timestamp === "number" ? d.timestamp : undefined);
   // One synthesized pipeline event; `id` keeps the wire id for tracing.
   const synth = (type: string, data: Record<string, unknown>): ServerEvent => ({
     id: event.id,
@@ -207,12 +209,15 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
               callID: d.id,
               // v2 carries the readable result as content items (the
               // store folds them into output) and the machine result in
-              // resultState (~ the structured patches/todos).
+              // resultState (~ the structured patches/todos). metadata
+              // carries the subagent's child session, edit diffs, and
+              // background flags — the chips read it.
               ...(Array.isArray(d.content) ? { content: d.content } : {}),
               ...(d.resultState !== null &&
               typeof d.resultState === "object"
                 ? { structured: d.resultState }
                 : {}),
+              ...(d.metadata !== undefined ? { metadata: d.metadata } : {}),
             }),
           ]
         : [];
@@ -257,6 +262,25 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
       );
     }
     // --- asks: permissions and forms dock like the v1 pipeline's ---
+    // v2 asks ride two channels: the per-turn `session.permissions` list
+    // AND a bare `permission.asked` with the v2 shape (same schema the
+    // official client docks). Both map to permission.v2.asked — the dock
+    // dedupes by id. Unmapped, the store's v1 `permission.asked` case
+    // would dock it with the v1 normalizer and reply on the dropped v1
+    // route.
+    case "permission.asked":
+      return d.id
+        ? [
+            synth("permission.v2.asked", {
+              id: d.id,
+              sessionID: sid,
+              action: d.action,
+              resources: d.resources ?? [],
+              save: d.save ?? [],
+              source: d.source,
+            }),
+          ]
+        : [];
     // session.permissions {sessionID, permissions[]} — each row is an ask;
     // the store's permission.v2.asked case normalizes and docks it.
     case "session.permissions": {
@@ -297,21 +321,34 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
       return sid && d.id
         ? [synth("question.v2.rejected", { requestID: d.id, sessionID: sid })]
         : [];
+    // v2's reply facts under the bare (v1-named) events with the v2
+    // coordinates — the store's v2-suffixed cases consume them.
+    case "permission.replied":
+      return d.requestID
+        ? [
+            synth("permission.v2.replied", {
+              requestID: d.requestID,
+              sessionID: sid,
+              reply: d.reply,
+            }),
+          ]
+        : [];
     // --- session rows: v1 sends full rows (session.updated {info}); v2
     // sends facts. The store merges partial info, so each fact maps to a
     // partial-row session.updated. ---
     case "session.created":
-      // {sessionID, title, slug, projectID, location...} — no time/cost;
-      // defaults keep the row renderable until the next full refresh.
+      // {sessionID, title, slug, projectID, location...} — facts only; the
+      // store's partial merge keeps what it already has and defaults the
+      // rest on the upsert path (a row we've never listed).
       return sid
         ? [
             synth("session.updated", {
               info: {
                 id: sid,
-                title: d.title ?? "",
-                time: { created: at ?? Date.now(), updated: at ?? Date.now() },
-                cost: 0,
-                tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                ...(d.title !== undefined ? { title: d.title } : {}),
+                ...(at !== undefined
+                  ? { time: { created: at, updated: at } }
+                  : {}),
                 location: d.location,
                 ...(d.parentID ? { parentID: d.parentID } : {}),
               },
@@ -319,8 +356,9 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
           ]
         : [];
     case "session.usage.updated":
-      // {sessionID, cost, tokens} — the running sum (v1 parity: the v1 row
-      // refresh).
+      // {sessionID, cost, tokens} — the running sum, so the partial-row
+      // merge SETS it (step.ended adds its delta first; a set from wire
+      // truth converges either way). The v1 row refresh in event form.
       return sid
         ? [
             synth("session.updated", {
@@ -333,6 +371,38 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
             }),
           ]
         : [];
+    case "session.revert.staged":
+      // {sessionID, revert:{messageID}} — another client's revert marker;
+      // the partial-row merge carries it (refreshMessages folds at it).
+      return sid
+        ? [
+            synth("session.updated", {
+              info: {
+                id: sid,
+                revert:
+                  (d.revert as { messageID?: string } | undefined)?.messageID !==
+                  undefined
+                    ? { messageID: (d.revert as { messageID: string }).messageID }
+                    : undefined,
+              },
+            }),
+          ]
+        : [];
+    case "session.revert.cleared":
+    case "session.revert.committed":
+      // Committing truncates server-side; clearing drops the marker. Both
+      // land as a revert-free partial row, and the store pulls the
+      // truncated truth.
+      return sid
+        ? [synth("session.updated", { info: { id: sid, revert: null } })]
+        : [];
+    // Compaction runs as its own server-side turn: the summary row lands
+    // in the message store only when it completes. The store's done case
+    // refreshes (and retires the /compact echo) — streaming the delta
+    // would need a live row the pipeline has no part for.
+    case "session.compaction.ended":
+    case "session.compaction.failed":
+      return sid ? [synth("session.compaction.done", { sessionID: sid })] : [];
     case "session.retry.scheduled":
       // {sessionID, attempt, at, error} — v1 surfaces retries as a
       // session.status {type:"retry"}.
@@ -356,9 +426,6 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
     // pass through — small store cases handle them (v1 surfaces the same
     // facts through full-row events v2 never sends).
     // Dropped on purpose:
-    // - session.usage.updated: usage lands per step via the step.ended
-    //   mapping and per row via the durable fetch; mapping it too would
-    //   double-count into the session row.
     // - session.inbox.*: queue bookkeeping; busy/idle is covered by the
     //   execution.* mapping and the echo lands with the prompt reply.
     // - session.instructions.updated: no pipeline consumer.

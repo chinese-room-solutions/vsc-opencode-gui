@@ -1307,6 +1307,9 @@ function applyEvent(event: ServerEvent): void {
     result?: unknown;
     // tool.success's machine-readable result (patches, todo rows).
     structured?: unknown;
+    // tool.success's metadata (subagent child session, edit diffs,
+    // background flags) — the chips read it off the tool state.
+    metadata?: unknown;
     content?: unknown;
     // session.next.step.ended's step finish reason ("stop", "tool-calls", …).
     finish?: string;
@@ -1334,6 +1337,9 @@ function applyEvent(event: ServerEvent): void {
           sessions.value.some((s) => s.id === info.id) &&
           (info.title === undefined || info.location === undefined)
         ) {
+          const partial = info as Session & {
+            revert?: { messageID: string } | null;
+          };
           patchSession(info.id, (s) => ({
             ...s,
             ...(info.title !== undefined ? { title: info.title } : {}),
@@ -1342,8 +1348,30 @@ function applyEvent(event: ServerEvent): void {
             ...(info.time?.updated !== undefined
               ? { time: { ...s.time, updated: info.time.updated } }
               : {}),
+            ...(info.time?.created !== undefined
+              ? { time: { ...s.time, created: info.time.created } }
+              : {}),
+            // revert: null clears the marker (v2's cleared/committed);
+            // a marker folds the transcript like a local revert would.
+            ...("revert" in partial
+              ? { revert: partial.revert ?? undefined }
+              : {}),
           }));
-        } else upsertSession(normalizeSession(info));
+        } else
+          upsertSession(
+            normalizeSession({
+              ...info,
+              title: info.title ?? "",
+              time: info.time ?? { created: Date.now(), updated: Date.now() },
+              cost: info.cost ?? 0,
+              tokens: info.tokens ?? {
+                input: 0,
+                output: 0,
+                reasoning: 0,
+                cache: { read: 0, write: 0 },
+              },
+            }),
+          );
       }
       break;
     // The v1 stream's authoritative busy/idle (v1 turns have no step events
@@ -1450,6 +1478,19 @@ function applyEvent(event: ServerEvent): void {
     // of the row, the tab included.
     case "session.deleted":
       if (data.sessionID) dropSessionLocal(data.sessionID);
+      break;
+    // v2's compaction turn ended (summary written or failed): the summary
+    // row lives only in the durable store, so pull it — and retire the
+    // /compact echo (v1's trigger row does that on the stream; v2 has
+    // none). Synthesized by the v2 event translation; v1 never emits it.
+    case "session.compaction.done":
+      if (
+        data.sessionID &&
+        sessions.value.some((s) => s.id === data.sessionID)
+      ) {
+        dropPending(data.sessionID);
+        void refreshMessages(data.sessionID).catch(() => undefined);
+      }
       break;
     case "permission.v2.asked":
       // The TUI's permission bell: live asks ring once — a repeated event
@@ -1909,6 +1950,11 @@ function applyEvent(event: ServerEvent): void {
           data.structured !== null &&
           typeof data.structured === "object"
             ? { structured: data.structured as Record<string, unknown> }
+            : {}),
+          ...(data.metadata !== undefined &&
+          data.metadata !== null &&
+          typeof data.metadata === "object"
+            ? { metadata: data.metadata as Record<string, unknown> }
             : {}),
           time: { ...s.time, end: data.timestamp },
         }));
@@ -2837,19 +2883,34 @@ async function postPrompt(
     // v2 replies the admitted user row with the POST — land it in place of
     // the optimistic echo (v1 hears it as message.updated on /event).
     if (sent.user) {
+      const uid = sent.user.id;
       clearPending(id);
       upsertMessage(id, {
-        id: sent.user.id,
+        id: uid,
         role: "user",
         time: { created: sent.user.created ?? Date.now() },
       });
       upsertPart(id, {
-        id: `${sent.user.id}:text`,
-        messageID: sent.user.id,
+        id: `${uid}:text`,
+        messageID: uid,
         sessionID: id,
         type: "text",
         text: sent.user.text ?? body,
       });
+      // The reply row carries text only — the attachments and mentions
+      // just sent ride along as file parts so chips and pills show at once
+      // (v1 gets them from the streamed row; a v2 refresh maps the row's
+      // files back into this same shape).
+      let fi = 0;
+      for (const p of parts) {
+        if (p.type !== "file") continue;
+        upsertPart(id, {
+          ...p,
+          id: `${uid}:f${fi++}`,
+          messageID: uid,
+          sessionID: id,
+        });
+      }
     } else {
       // Its user row hasn't landed yet — the ghost watch must not mistake
       // it for a ghost once a stop wipes the echo (see postedRows).
