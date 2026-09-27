@@ -302,7 +302,7 @@ export function AgentPicker(props: { id?: string }) {
       kind="agent"
       entries={visibleAgents(agents.value).map((a) => ({
         key: a.name,
-        label: cap(a.name),
+        label: cap(a.label ?? a.name),
         hint: a.description,
         active: a.name === shown,
       }))}
@@ -311,7 +311,12 @@ export function AgentPicker(props: { id?: string }) {
         return false;
       }}
     >
-      <span class="comp-chip-label">{cap(shown)}</span>
+      <span class="comp-chip-label">
+        {cap(
+          visibleAgents(agents.value).find((a) => a.name === shown)
+            ?.label ?? shown,
+        )}
+      </span>
     </Chip>
   );
 }

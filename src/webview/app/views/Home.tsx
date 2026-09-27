@@ -14,6 +14,7 @@ import {
 import { navigate } from "../router";
 import {
   baseLoaded,
+  sessionsStalled,
   currentDir,
   deleteSession,
   formatSessionTimes,
@@ -184,7 +185,7 @@ export function Home() {
               </button>
             )}
           </div>
-          {!baseLoaded.value ? (
+          {!baseLoaded.value || sessionsStalled.value ? (
             <div class="empty">Loading sessions…</div>
           ) : groups.length === 0 ? (
             <div class="empty">

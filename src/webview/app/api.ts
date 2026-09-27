@@ -6,6 +6,34 @@
 // reports a body as `json` when its content-type is application/json.
 import { postToHost } from "./host";
 
+// Which server dialect the routes below speak. v1 (opencode-ai 1.x) keeps
+// its turn pipeline under bare /session routes; v2 (@opencode/cli 2.x)
+// dropped that surface — everything lives under /api with {data}/{location,
+// data} envelopes, 204s on PATCH/DELETE, and a {text} prompt body. The host
+// probes the dialect at boot and bakes it here; a late "dialect" host
+// message can flip it (idempotent — callers re-sync on it).
+export type Dialect = "v1" | "v2";
+let serverDialect: Dialect =
+  (document.querySelector('meta[name="opencode-dialect"]')?.getAttribute(
+    "content",
+  ) ?? "") === "v2"
+    ? "v2"
+    : "v1";
+
+export function dialect(): Dialect {
+  return serverDialect;
+}
+
+export function setDialect(d: Dialect): void {
+  serverDialect = d;
+}
+
+// Route seam: v1 path, v2 path.
+const route = (v1: string, v2: string): string =>
+  serverDialect === "v2" ? v2 : v1;
+
+
+
 // Row of GET /api/session.
 export interface Session {
   id: string;
@@ -30,6 +58,40 @@ export interface Session {
   // everything after hide) until the next prompt commits the cut — the
   // server keeps serving the rows until then.
   revert?: { messageID: string };
+}
+
+// v2 time fields arrive as epoch ms on 2.0.x and ISO strings on newer
+// builds — one coercion keeps sorts and stamps numeric either way.
+export function toMs(v: unknown): number | undefined {
+  if (typeof v === "number") return v;
+  if (typeof v === "string") {
+    const t = Date.parse(v);
+    return Number.isNaN(t) ? undefined : t;
+  }
+  return undefined;
+}
+
+// A v2 model ref: 2.0.x serves {providerID, id, variant?}; newer builds
+// speak the encoded string "providerID/modelID#variant". Normalized to the
+// object every consumer (rows, events, the picker) already reads.
+export function v2ModelRef(
+  v: unknown,
+): { providerID?: string; id?: string; variant?: string } | undefined {
+  if (typeof v === "string") {
+    const slash = v.indexOf("/");
+    const hash = v.indexOf("#");
+    const providerID = v.slice(0, slash);
+    const id = slash < 0 ? "" : v.slice(slash + 1, hash < 0 ? undefined : hash);
+    const variant = hash < 0 ? undefined : v.slice(hash + 1);
+    return providerID && id
+      ? { providerID, id, ...(variant ? { variant } : {}) }
+      : undefined;
+  }
+  if (v && typeof v === "object") {
+    const m = v as { providerID?: string; id?: string; variant?: string };
+    return m.id !== undefined || m.providerID !== undefined ? m : undefined;
+  }
+  return undefined;
 }
 
 // Value of the GET /session/status map (sessionID → status).
@@ -143,51 +205,202 @@ export interface SessionPage {
 const SESSION_PAGE = 50;
 
 // GET /api/session — newest first, paginated ({data, cursor} envelope).
+// Times coerced to ms and the model ref normalized (see toMs/v2ModelRef):
+// 2.0.x and newer builds disagree on both shapes.
 export async function fetchSessions(
   cursor?: string,
 ): Promise<SessionPage | undefined> {
   const params = new URLSearchParams({ limit: String(SESSION_PAGE) });
   if (cursor) params.set("cursor", cursor);
   const body = await getJson<{
-    data?: Session[];
+    data?: (Session & {
+      time: { created: unknown; updated: unknown };
+      model?: unknown;
+    })[];
     cursor?: { next?: string };
   }>(`/api/session?${params}`);
   if (!body) return undefined;
-  const rows = body.data ?? [];
+  const rows: Session[] = (body.data ?? []).map((s) => {
+    const created = toMs(s.time?.created);
+    const updated = toMs(s.time?.updated) ?? created;
+    const model = v2ModelRef(s.model);
+    return {
+      ...s,
+      title: s.title ?? "",
+      time: { created: created ?? 0, updated: updated ?? 0 },
+      ...(model
+        ? {
+            model: {
+              id: model.id ?? "",
+              providerID: model.providerID ?? "",
+              ...(model.variant ? { variant: model.variant } : {}),
+            },
+          }
+        : {}),
+    };
+  });
   return {
     sessions: rows,
     next: rows.length < SESSION_PAGE ? undefined : body.cursor?.next,
   };
 }
 
-// GET /session/status — the sessionID → status map.
+// GET /session/status (v1: the sessionID → status map). v2 serves the
+// ACTIVE sessions at /api/session/active: a record keyed by sessionID
+// ({} when idle) — the official client reads it as
+// `new Map(Object.keys(t).map(...running))`. Streaming truth comes from
+// the event translation either way (see v2events.ts).
 export async function fetchSessionStatus(): Promise<
   Record<string, SessionStatus> | undefined
 > {
+  if (serverDialect === "v2") {
+    const body = await getJson<{ data?: Record<string, unknown> | null }>(
+      "/api/session/active",
+    );
+    const active = body?.data;
+    if (!active || typeof active !== "object" || Array.isArray(active))
+      return undefined;
+    const map: Record<string, SessionStatus> = {};
+    for (const sid of Object.keys(active)) map[sid] = { type: "busy" };
+    return map;
+  }
   return getJson<Record<string, SessionStatus>>("/session/status");
 }
 
-export async function fetchProviders(): Promise<Providers | undefined> {
-  return getJson<Providers>("/provider");
+// Row of GET /api/model (v2): flat catalog entry. `capabilities.input`
+// lists modalities as strings (v1 speaks a boolean record); `variants` is
+// an array of {id, settings} (v1 keys a record by id); `limit` carries the
+// context/output window sizes.
+interface V2ModelRow {
+  id?: string;
+  providerID?: string;
+  name?: string;
+  capabilities?: { tools?: boolean; input?: string[]; output?: string[] };
+  variants?: { id?: string }[];
+  limit?: { context?: number; output?: number };
+}
+
+// ["text","image"] → {text:true, image:true}
+function inputRecord(list?: string[]): ModelInput | undefined {
+  if (!Array.isArray(list)) return undefined;
+  const out: ModelInput = {};
+  for (const m of list) out[m as keyof ModelInput] = true;
+  return out;
+}
+
+// GET /provider (v1 shape). On v2 the catalog is assembled from three
+// routes: /api/provider (connected providers — no models), /api/model
+// (the flat catalog — LOCATION-SCOPED: the bare route serves nothing, so
+// the workspace directory rides along as the object-param the official
+// client sends), and /api/model/default (the pinned default). No `limit`
+// param on /api/model: the route returns an empty list when handed one.
+export async function fetchProviders(
+  directory?: string,
+): Promise<Providers | undefined> {
+  if (serverDialect !== "v2")
+    return getJson<Providers>("/provider");
+  const modelQs = directory
+    ? `?location%5Bdirectory%5D=${encodeURIComponent(directory)}`
+    : "";
+  const [providers, models, config] = await Promise.all([
+    getJson<{ data?: { id?: string; name?: string }[] }>("/api/provider"),
+    getJson<{ data?: V2ModelRow[] }>(`/api/model${modelQs}`),
+    getJson<
+      { info?: { model?: { providerID?: string; model?: string } } }[]
+    >("/api/config"),
+  ]);
+  if (!models) return undefined;
+  const all: Providers["all"] = [];
+  const byId = new Map<string, Providers["all"][number]>();
+  for (const m of models.data ?? []) {
+    if (!m?.id || !m.providerID) continue;
+    let provider = byId.get(m.providerID);
+    if (!provider) {
+      provider = { id: m.providerID, name: m.providerID, models: {} };
+      byId.set(m.providerID, provider);
+      all.push(provider);
+    }
+    provider.models[m.id] = {
+      name: m.name ?? m.id,
+      variants: Object.fromEntries(
+        (m.variants ?? [])
+          .map((v) => v?.id)
+          .filter((id): id is string => !!id)
+          .map((id) => [id, {}]),
+      ),
+      ...(m.limit?.context !== undefined
+        ? { limit: { context: m.limit.context } }
+        : {}),
+      capabilities: {
+        input: inputRecord(m.capabilities?.input),
+      },
+    };
+  }
+  // "Connected" on v2: the /api/model catalog is availability-filtered
+  // server-side (public models, configured providers, discovered local
+  // servers — a fresh isolated server shows only what it can actually
+  // run), so every provider it lists is pickable. /api/provider rows and
+  // the config default's provider are unioned in for completeness (rows
+  // without catalog models render no group either way).
+  const connected = [
+    ...new Set(
+      [
+        ...all.map((p) => p.id),
+        ...(providers?.data ?? [])
+          .map((r) => r.id)
+          .filter((id): id is string => !!id),
+        v2ConfigDefaultModel(config)?.providerID,
+      ].filter((id): id is string => !!id),
+    ),
+  ];
+  return {
+    all,
+    default: {},
+    connected,
+  };
+}
+
+// v2's /api/config is an array of source documents; the first doc with an
+// info.model block is the user's configured default (the /api/model/default
+// route answers the built-in public default instead, which no one picked).
+function v2ConfigDefaultModel(
+  docs: { info?: { model?: { providerID?: string; model?: string } } }[] | undefined,
+): { providerID?: string; model?: string } | undefined {
+  for (const d of docs ?? [])
+    if (d?.info?.model?.providerID) return d.info.model;
+  return undefined;
 }
 
 // GET /config — the default model ("providerID/modelID", so a draft with no
 // explicit pick can show what a prompt would run on) and the user's provider
-// blocks (the ids the model picker may list).
+// blocks (the ids the model picker may list). v2 has no merged config: the
+// default comes from the config source docs' model block.
 export interface ServerConfig {
   model?: string;
   provider?: Record<string, unknown>;
 }
 
 export async function fetchConfig(): Promise<ServerConfig | undefined> {
+  if (serverDialect === "v2") {
+    const docs = await getJson<
+      { info?: { model?: { providerID?: string; model?: string } } }[]
+    >("/api/config");
+    const model = v2ConfigDefaultModel(docs);
+    return model?.providerID && model.model
+      ? { model: `${model.providerID}/${model.model}` }
+      : {};
+  }
   return getJson<ServerConfig>("/config");
 }
 
-// GET /agent — flat array; the key is `name`. Only mode:"primary" agents
-// take the composer's turn; hidden ones (compaction, summary, title) are
-// bookkeeping.
+// GET /agent — flat array; v2 rows carry the id ("build") the switch
+// endpoint wants and the display name ("Build"); `name` below stays the
+// switch key (v1: the id-ish name), `label` the display copy. Only
+// mode:"primary" agents take the composer's turn; hidden ones (compaction,
+// summary, title) are bookkeeping.
 export interface Agent {
   name: string;
+  label?: string;
   description?: string;
   mode: "primary" | "subagent" | "all";
   hidden?: boolean;
@@ -195,6 +408,28 @@ export interface Agent {
 }
 
 export async function fetchAgents(): Promise<Agent[] | undefined> {
+  if (serverDialect === "v2") {
+    const body = await getJson<{
+      data?: {
+        id?: string;
+        name?: string;
+        description?: string;
+        mode?: Agent["mode"];
+        hidden?: boolean;
+      }[];
+    }>("/api/agent");
+    return (body?.data ?? [])
+      .filter((r) => r.id || r.name)
+      .map((r) => ({
+        name: r.id ?? r.name ?? "",
+        ...(r.name && r.name !== (r.id ?? r.name)
+          ? { label: r.name }
+          : {}),
+        description: r.description,
+        mode: r.mode ?? "primary",
+        hidden: r.hidden,
+      }));
+  }
   return getJson<Agent[]>("/agent");
 }
 
@@ -202,9 +437,34 @@ export async function fetchAgents(): Promise<Agent[] | undefined> {
 export interface Command {
   name: string;
   description?: string;
+  // v2 skill rows (GET /api/skill): run through the experimental session
+  // skill route, not the command route.
+  skill?: boolean;
 }
 
+// GET /api/command + GET /api/skill (v2): commands and skills are separate
+// lists there — v1's /command merges them. Skill rows key by id; `name` is
+// display copy. Both registries fill lazily per location after boot, so a
+// boot-adjacent pull can predate project rows (the store re-pulls).
 export async function fetchCommands(): Promise<Command[] | undefined> {
+  if (serverDialect === "v2") {
+    const [cmdBody, skillBody] = await Promise.all([
+      getJson<{ data?: Command[] }>("/api/command"),
+      getJson<{
+        data?: { id?: string; name?: string; description?: string }[];
+      }>("/api/skill"),
+    ]);
+    if (!cmdBody) return undefined;
+    const rows = cmdBody.data ?? [];
+    const names = new Set(rows.map((c) => c.name));
+    for (const s of skillBody?.data ?? []) {
+      // A command with the same name owns it — it runs by that name.
+      if (!s.id || names.has(s.id)) continue;
+      names.add(s.id);
+      rows.push({ name: s.id, description: s.description, skill: true });
+    }
+    return rows;
+  }
   return getJson<Command[]>("/command");
 }
 
@@ -262,12 +522,24 @@ export async function fetchSessionPermissions(
   return body?.data;
 }
 
-// GET /permission — the v1 pipeline's pending asks, across all sessions (the
-// v2 route above never lists them). Asks made while the page was closed are
-// recovered from here.
+// Pending asks, both dialects: v2 GETs /api/permission/request ({data}
+// envelope, same row shape the session.permissions event carries); v1
+// GETs the global /permission list. Asks made while the page was closed
+// are recovered from here.
 export async function fetchPendingPermissions(): Promise<
   PermissionRequest[] | undefined
 > {
+  if (serverDialect === "v2") {
+    const body = await getJson<
+      { data?: (PermissionRequest & { sessionID?: string })[] } | PermissionRequest[]
+    >("/api/permission/request");
+    const rows = Array.isArray(body)
+      ? body
+      : Array.isArray((body as { data?: PermissionRequest[] })?.data)
+        ? (body as { data: PermissionRequest[] }).data
+        : undefined;
+    return rows ? rows.map((r) => normalizePermission(r as PermissionRequest, false)) : undefined;
+  }
   const body = await getJson<
     (PermissionRequest & { permission?: string; patterns?: string[]; always?: string[] })[]
   >("/permission");
@@ -291,15 +563,23 @@ export interface QuestionRequest {
   questions: QuestionInfo[];
   // Which pipeline holds the ask — it decides the reply route. A v1 turn's
   // question tool lists only on the global GET /question and answers on the
-  // global /question/{id}/reply; a v2 ask lists on /api/session/{id}/question
-  // and answers on the /api route. The other route 404s (QuestionNotFoundError).
+  // global /question/{id}/reply; a v2 ask is a FORM (lists on
+  // /api/session/{id}/form, answers on /api/session/{id}/form/{id}/reply
+  // with {answer}). The other route 404s (QuestionNotFoundError).
   v1?: boolean;
+  // A v2 form ask: per-field names, in question order — a multi-field
+  // reply keys its answer object by them (single-field answers go as the
+  // scalar).
+  formFieldNames?: string[];
 }
 
-// Pending questions for one session, both pipelines merged: the v2
-// per-session route plus the global /question list (v1 asks; the /api route
-// returns [] for them — wire-verified 1.18.25). The /api copy wins on an id
-// collision, so a v2 ask that shows up in both keeps the v2 reply route.
+// Pending questions for one session, both pipelines merged: v2 asks are
+// FORMS (GET /api/session/{id}/form, {data} envelope — the /question
+// routes are gone); v1 asks list on the global /question (the /api route
+// returns [] for them — wire-verified 1.18.25). A form row maps onto the
+// v1 question shape the dock renders; the form flag routes its reply to
+// the form endpoints. The /api copy wins on an id collision, so a v2 ask
+// that shows up in both keeps the v2 reply route.
 // Which of the two lists actually loaded rides along: a refresh may only
 // retire an ask its own pipeline's list confirmed absent.
 export interface SessionQuestions {
@@ -311,13 +591,24 @@ export async function fetchSessionQuestions(
   id: string,
 ): Promise<SessionQuestions | undefined> {
   const [v2, global] = await Promise.all([
-    getJson<{ data?: QuestionRequest[] }>(`/api/session/${id}/question`),
+    serverDialect === "v2"
+      ? getJson<{ data?: unknown[] }>(`/api/session/${id}/form`)
+      : getJson<{ data?: QuestionRequest[] }>(`/api/session/${id}/question`),
     getJson<QuestionRequest[]>("/question"),
   ]);
   if (v2 === undefined && global === undefined) return undefined;
-  const v2Rows = (v2?.data ?? []).map((q) => ({ ...q, v1: false }));
+  const v2Rows =
+    serverDialect === "v2"
+      ? ((Array.isArray((v2 as { data?: unknown[] })?.data)
+          ? (v2 as { data: unknown[] }).data
+          : []) as Record<string, unknown>[])
+          .map((f) => formToQuestion(f, id))
+          .filter((q): q is QuestionRequest => !!q)
+      : ((Array.isArray(v2?.data) ? v2?.data : []) as QuestionRequest[]).map(
+          (q) => ({ ...q, v1: false }),
+        );
   const seen = new Set(v2Rows.map((q) => q.id));
-  const v1Rows = (global ?? [])
+  const v1Rows = (Array.isArray(global) ? global : [])
     .filter((q) => q.sessionID === id && !seen.has(q.id))
     .map((q) => ({ ...q, v1: true }));
   return {
@@ -327,6 +618,73 @@ export async function fetchSessionQuestions(
   };
 }
 
+// v2 form row → v1 QuestionRequest. Field shape is only partially known
+// (Form.Field: name/label/type/options); option-like fields list their
+// options, everything else offers the free-text row. Field names ride
+// along so a multi-field reply can key its answer object.
+export function formToQuestion(
+  raw: Record<string, unknown>,
+  sessionID: string,
+): QuestionRequest | undefined {
+  const id = typeof raw.id === "string" ? raw.id : undefined;
+  if (!id) return undefined;
+  const title = typeof raw.title === "string" ? raw.title : "";
+  const fields = (Array.isArray(raw.fields) ? raw.fields : []).filter(
+    (f): f is Record<string, unknown> =>
+      typeof f === "object" && f !== null,
+  );
+  const names = fields.map((f, i) =>
+    typeof f.name === "string" ? f.name : `field${i}`,
+  );
+  const questions: QuestionInfo[] =
+    fields.length === 0
+      ? [{ question: title, header: "", options: [], custom: true }]
+      : fields.map((f, i) => {
+          const label =
+            typeof f.label === "string"
+              ? f.label
+              : typeof f.name === "string"
+                ? f.name
+                : `Field ${i + 1}`;
+          const options = Array.isArray(f.options)
+            ? (f.options as Record<string, unknown>[])
+                .map((o) =>
+                  typeof o === "string"
+                    ? { label: o }
+                    : typeof o?.label === "string"
+                      ? {
+                          label: o.label,
+                          ...(typeof o.description === "string"
+                            ? { description: o.description }
+                            : {}),
+                        }
+                      : typeof o?.value === "string" ||
+                          typeof o?.value === "number"
+                        ? { label: String(o.value) }
+                        : undefined,
+                )
+                .filter(
+                  (o): o is { label: string; description?: string } => !!o,
+                )
+            : [];
+          return {
+            question:
+              fields.length > 1
+                ? `${title} — ${label}`
+                : title || label,
+            header: label,
+            options,
+            multiple: f.multiple === true,
+            // Free-text row: explicit on the field, or the only offering
+            // of an option-less (input) field.
+            custom:
+              f.custom === true ||
+              (options.length === 0 && f.custom !== false),
+          };
+        });
+  return { id, sessionID, questions, formFieldNames: names, v1: false };
+}
+
 // Chat message. Only the fields the UI reads; the server sends more.
 // Assistant messages carry the turn's usage (cost + token classes) and the
 // model that ran (providerID/modelID) — the ring's context fill derives
@@ -334,7 +692,11 @@ export async function fetchSessionQuestions(
 export interface Message {
   id: string;
   role: "user" | "assistant";
-  time: { created: number; completed?: number };
+  time: {
+    created: number;
+    completed?: number;
+    streamed?: number;
+  };
   error?: { name: string; data?: { message?: string } };
   providerID?: string;
   modelID?: string;
@@ -442,11 +804,21 @@ export const isText = (p: Part): p is TextPart =>
   p.type === "text" || p.type === "reasoning";
 export const isTool = (p: Part): p is ToolPart => p.type === "tool";
 
-// Tool ids arrive as schema names ("bash"); the row shows the friendly label.
-// Only the ids whose capitalization wouldn't read right on its own — read,
-// glob, grep, edit, write, list, skill, question, task label themselves.
+// Tool ids arrive as schema names; the row shows the friendly label. v2
+// renamed some tools while accepting the v1 names in places — the shell
+// tool can arrive as bash/shell/execute, the subagent spawner as
+// task/subagent — so the matchers below go through the alias sets.
+export const isBashTool = (tool: string): boolean =>
+  tool === "bash" || tool === "shell" || tool === "execute";
+export const isTaskTool = (tool: string): boolean =>
+  tool === "task" || tool === "subagent";
+
 const TOOL_NAMES: Record<string, string> = {
   bash: "Shell",
+  shell: "Shell",
+  execute: "Shell",
+  task: "Task",
+  subagent: "Task",
   apply_patch: "Patch",
   webfetch: "Fetch",
   websearch: "Web Search",
@@ -546,32 +918,144 @@ export interface MessageWithParts {
   parts: Part[];
 }
 
-// Row of GET /api/session/{id}/message (v2). Assistant rows carry their
-// parts in `content` (fields the SSE part events add — messageID/sessionID
-// and sometimes the part id — are row-level or absent here); user rows carry
-// the prompt as a bare `text`. Rows have no `role` (it's `type`) and no
-// `parentID` (the preceding user row IS the parent). `system` rows are
-// server-injected context notes ("Today's date is now …") — filtered out
-// below: they are not conversation, and a row between the prompt and the
-// reply would split the turn.
+// Row of GET /api/session/{id}/message. Assistant rows carry their parts in
+// `content` (fields the SSE part events add — messageID/sessionID and
+// sometimes the part id — are row-level or absent here); user rows carry
+// the prompt in `payload.text` (v2 CLI) or a bare `text` (1.18). Rows have
+// no `role` (it's `type`) and no `parentID` (the preceding user row IS the
+// parent). `system` rows are server-injected context notes ("Today's date
+// is now …"); `idle`/`compaction` are lifecycle markers and
+// `agent-switched`/`model-switched` are bookkeeping rows the v2 switch
+// endpoints write — all filtered out below: none of them are conversation,
+// and a row between the prompt and the reply would split the turn.
 interface V2MessageRow {
   id: string;
-  type: "user" | "assistant" | "system";
-  time: { created: number; completed?: number };
+  type: "user" | "assistant" | "system" | "idle" | "compaction" | "shell" | "synthetic" | string;
+  // compaction rows: "running" until the summary lands.
+  status?: string;
+  // 2.0.x serves epoch ms; newer builds ISO strings — normalized to ms at
+  // intake (normV2Row) so every consumer reads numbers.
+  time: {
+    created: number | string;
+    completed?: number | string;
+    streamed?: number | string;
+  };
   text?: string;
-  content?: { type: string; id?: string }[];
+  payload?: { text?: string; files?: V2RowFile[] };
+  content?: { type: string; id?: string; time?: { created?: number | string; completed?: number | string } }[];
+  // shell rows: their own run, keyed by shellID.
+  shellID?: string;
+  command?: string;
+  output?: string;
+  exit?: number;
+  // A user row's attachments (Session.Message.User.files — the same
+  // Prompt.FileAttachment the prompt body speaks): an inline payload carries
+  // {data, mime}; an on-disk file carries source {type:"uri", uri}; a
+  // mention adds its range. Nesting under payload covers the API's text
+  // wrapper (the store keeps both bare).
+  files?: V2RowFile[];
   agent?: string;
-  model?: { id?: string; providerID?: string };
+  // 2.0.x: {providerID, id}; newer: the encoded "providerID/modelID" ref.
+  model?: unknown;
   cost?: number;
   tokens?: MessageTokens;
   error?: { name: string; data?: { message?: string } };
 }
 
-// GET /api/session/{id}/message (v2) — {data, cursor}, newest first. The v1
-// /session/{id}/message returns [] on CLI 1.18.x (legacy store gone), so
-// rows are mapped into the {info, parts} the SSE message events also speak.
-// Tool and step failures stringify whatever the server sent (live SSE and
-// durable rows carry it as an object).
+// A row after intake: times as ms, the model ref as the object shape.
+interface NormV2Row
+  extends Omit<V2MessageRow, "time" | "model"> {
+  time: { created: number; completed?: number; streamed?: number };
+  model?: { id?: string; providerID?: string; variant?: string };
+}
+
+// One intake pass over a fetched row: times to ms, the model ref to the
+// object shape. Everything downstream reads the normalized row.
+function normV2Row(r: V2MessageRow): NormV2Row {
+  const { time, model, ...rest } = r;
+  const created = toMs(time?.created);
+  const completed = toMs(time?.completed);
+  const streamed = toMs(time?.streamed);
+  const ref = v2ModelRef(model);
+  return {
+    ...rest,
+    time: {
+      created: created ?? 0,
+      ...(completed !== undefined ? { completed } : {}),
+      ...(streamed !== undefined ? { streamed } : {}),
+    },
+    ...(ref ? { model: ref } : {}),
+  };
+}
+
+interface V2RowFile {
+  data?: string;
+  mime?: string;
+  source?: { type?: string; uri?: string };
+  name?: string;
+  mention?: V2Mention;
+}
+
+// file:///C:/w/repo/src/a.ts?start=12 → C:/w/repo/src/a.ts — a path the
+// pill's data-path opener (resolveFileRef) accepts like any v1 mention path.
+function fileUrlToPath(uri: string): string | undefined {
+  const m = /^file:\/\/([^?]+)/.exec(uri);
+  if (!m) return undefined;
+  const path = m[1]
+    .split("/")
+    .map((s) => {
+      try {
+        return decodeURIComponent(s);
+      } catch {
+        return s;
+      }
+    })
+    .join("/");
+  const win = /^\/[A-Za-z]:/.test(path) ? path.slice(1) : path;
+  return win || undefined;
+}
+
+// A v2 user row's files[] → the FilePart the renderers speak (same shape a
+// v1 row's file parts have): uri-sourced files keep their file:// url,
+// inline payloads rebuild the data: URI, a mention range becomes the v1
+// source that pillifies the "@path" text.
+function v2RowFileParts(row: V2MessageRow, sessionID: string): FilePart[] {
+  return (row.files ?? row.payload?.files ?? []).map((f, i) => {
+    const uri = f.source?.type === "uri" ? f.source.uri : undefined;
+    const url =
+      uri ??
+      (f.data !== undefined
+        ? `data:${f.mime ?? "application/octet-stream"};base64,${f.data}`
+        : undefined);
+    const path = uri !== undefined ? fileUrlToPath(uri) : undefined;
+    return {
+      id: `${row.id}:f${i}`,
+      messageID: row.id,
+      sessionID,
+      type: "file" as const,
+      ...(f.mime ? { mime: f.mime } : {}),
+      ...(url ? { url } : {}),
+      ...(f.name ? { filename: f.name } : {}),
+      ...(f.mention && (path ?? f.name)
+        ? {
+            source: {
+              type: "file" as const,
+              path: path ?? f.name!,
+              text: {
+                value: f.mention.text,
+                start: f.mention.start,
+                end: f.mention.end,
+              },
+            },
+          }
+        : {}),
+    };
+  });
+}
+
+// GET /api/session/{id}/message (v2) — {data, cursor} envelope. Tool and
+// step failures stringify whatever the server sent (live SSE and durable
+// rows carry it as an object).
 export function stringifyError(error: unknown): string {
   if (typeof error === "string") return error;
   const m = error as { message?: string; data?: { message?: string } };
@@ -580,46 +1064,163 @@ export function stringifyError(error: unknown): string {
 
 export interface MessagePage {
   messages: MessageWithParts[];
-  // Cursor to the next (older) page — only when the page came back FULL.
-  // The endpoint reports a cursor on every non-empty page, even the
-  // exhausted one (it points at the oldest row just returned), so a short
-  // page is the only real "no more messages" signal.
-  next?: string;
+  // Older-row signal: a tail fetch sets true when its full desc page proves
+  // older rows may exist; an older fetch sets the asc-walk cursor to
+  // continue with (undefined at the transcript's start… reached). The v2
+  // endpoint's previous-direction cursors come back empty on 2.0.x, so
+  // older pages only walk forward — order=asc from the start, then cursor
+  // pages (the cursor may not be combined with an order param).
+  older?: boolean | string;
 }
 
 // The default page size (the server's own). A page shorter than this
 // proves the transcript is complete.
 const MESSAGE_PAGE = 50;
+// The server clamps the limit at 400.
+const MESSAGE_PAGE_CAP = 400;
 
 export async function fetchMessages(
   id: string,
-  cursor?: string,
-  limit?: number,
+  opts?: { cursor?: string; asc?: boolean; size?: number },
 ): Promise<MessagePage | undefined> {
-  const size = limit ?? MESSAGE_PAGE;
-  const params = new URLSearchParams();
-  if (cursor) {
-    params.set("cursor", cursor);
-    params.set("direction", "next");
-  }
-  params.set("limit", String(size));
-  const query = `?${params}`;
+  const size = Math.min(opts?.size ?? MESSAGE_PAGE, MESSAGE_PAGE_CAP);
+  const params = new URLSearchParams({ limit: String(size) });
+  if (opts?.cursor) params.set("cursor", opts.cursor);
+  else params.set("order", opts?.asc ? "asc" : "desc");
   const body = await getJson<{
     data?: V2MessageRow[];
     cursor?: { next?: string };
-  }>(`/api/session/${id}/message${query}`);
+  }>(`/api/session/${id}/message?${params.toString()}`);
   if (!body) return undefined;
-  const rows = [...(body.data ?? [])].sort(
-    (a, b) => a.time.created - b.time.created,
-  );
+  const rows: NormV2Row[] = [...(body.data ?? [])]
+    .map(normV2Row)
+    .sort((a, b) => a.time.created - b.time.created);
   let parent: string | undefined;
   const messages = rows
     .filter(
-      (r): r is V2MessageRow & { type: "user" | "assistant" } =>
-        r.type === "user" || r.type === "assistant",
+      (
+        r,
+      ): r is NormV2Row & {
+        type: "user" | "assistant" | "compaction" | "shell" | "synthetic";
+      } =>
+        r.type === "user" ||
+        r.type === "assistant" ||
+        r.type === "shell" ||
+        // Only a completed compaction has a summary to show — a failed one
+        // has none (the live failure surfaces as the turn's error).
+        (r.type === "compaction" && r.status === "completed") ||
+        r.type === "synthetic",
     )
-    .map((r) => {
+    .flatMap((r): MessageWithParts[] => {
+    // The closest durable anchor to when the i-th content item's tokens
+    // streamed: the completion of the nearest preceding item that has one.
+    const prevEnd = (i: number): number | undefined => {
+      for (let j = i - 1; j >= 0; j--) {
+        const t = (r.content ?? [])[j]?.time;
+        if (t?.completed !== undefined) return toMs(t.completed);
+      }
+      return undefined;
+    };
     if (r.type === "user") parent = r.id;
+    // A completed compaction row is v2's summary — the same facts v1's
+    // legacy store serves as TWO rows: the trigger user row (a lone
+    // `compaction` part — what folds the turn into Claude Code's compact
+    // block; `reason:"auto"` is its auto flag) and the summary assistant
+    // row with agent "compaction". Synthesized with derived `:c` ids so
+    // the live stream (same derivation) merges instead of duplicating.
+    // Failed rows have no summary to show — the live failure surfaces as
+    // the turn's error; running ones get their content at done.
+    if (r.type === "compaction") {
+      const c = r as V2MessageRow & {
+        type: "compaction";
+        summary?: string;
+        recent?: string;
+        reason?: string;
+      };
+      const auto = c.reason === "auto";
+      return [
+        {
+          info: { id: `${r.id}:c`, role: "user", time: r.time },
+          parts: [
+            {
+              id: `${r.id}:c:0`,
+              messageID: `${r.id}:c`,
+              sessionID: id,
+              type: "compaction",
+              ...(auto ? { auto: true } : {}),
+            },
+          ],
+        },
+        {
+          info: {
+            id: r.id,
+            role: "assistant",
+            time: r.time,
+            agent: "compaction",
+          },
+          parts: [
+            {
+              id: `${r.id}:text`,
+              messageID: r.id,
+              sessionID: id,
+              type: "text",
+              text: c.summary ?? "",
+            },
+          ],
+        },
+      ] satisfies { info: Message; parts: Part[] }[];
+    }
+    // A native shell run renders as the bash tool row the live path
+    // builds (the SSE translation shapes the same).
+    if (r.type === "shell") {
+      const failed = r.status === "failed";
+      return [
+        {
+          info: { id: r.id, role: "assistant", time: r.time },
+          parts: [
+            {
+              id: r.shellID ?? r.id,
+              messageID: r.id,
+              sessionID: id,
+              type: "tool",
+              tool: "bash",
+              state: {
+                status: failed ? "error" : "completed",
+                ...(r.command !== undefined ? { input: { command: r.command } } : {}),
+                ...(r.output !== undefined
+                  ? failed
+                    ? { error: r.output, output: r.output }
+                    : { output: r.output }
+                  : {}),
+                time: { start: r.time.created, end: r.time.completed },
+              },
+            },
+          ],
+        },
+      ];
+    }
+    // A server-injected note — the live translation lands it as a plain
+    // assistant row (a user row would entangle the echo retirement and
+    // the ghost-turn abort).
+    if (r.type === "synthetic") {
+      return [
+        {
+          info: { id: r.id, role: "assistant", time: r.time },
+          parts: [
+            {
+              id: `${r.id}:text`,
+              messageID: r.id,
+              sessionID: id,
+              type: "text",
+              text: clampPartText(`${r.id}:text`, r.text ?? ""),
+            },
+          ],
+        },
+      ];
+    }
+    // v2 rides a user row's attachments as top-level files[] (mapped below);
+    // content file items are the older/1.18 fallback.
+    const rowFiles = v2RowFileParts(r, id);
     const parts: Part[] =
       r.type === "user"
         ? [
@@ -628,20 +1229,51 @@ export async function fetchMessages(
               messageID: r.id,
               sessionID: id,
               type: "text",
-              text: clampPartText(`${r.id}:text`, r.text ?? ""),
+              text: clampPartText(
+                `${r.id}:text`,
+                r.payload?.text ?? r.text ?? "",
+              ),
             },
-            // Durable @-mention attachments ride the row's content (the live
-            // path speaks parts directly); keep them so pills survive reload.
-            ...(r.content ?? [])
-              .filter((c) => (c as { type?: string }).type === "file")
-              .map((c, i) => ({
-                ...c,
-                id: c.id ?? `${r.id}:f${i}`,
-                messageID: r.id,
-                sessionID: id,
-              })),
+            ...(rowFiles.length > 0
+              ? rowFiles
+              : // Durable @-mention attachments ride the row's content (the live
+                // path speaks parts directly); keep them so pills survive reload.
+                (r.content ?? [])
+                  .filter((c) => (c as { type?: string }).type === "file")
+                  .map((c, i) => ({
+                    ...c,
+                    id: c.id ?? `${r.id}:f${i}`,
+                    messageID: r.id,
+                    sessionID: id,
+                  }))),
           ]
         : (r.content ?? []).map((c, i) => ({
+            ...c,
+            // v2 content items carry no time of their own (reasoning's
+            // {created, completed} aside), and the turn footer's settled
+            // rate divides by generation spans: the first generated
+            // element anchors at the row's streamed stamp, a later text
+            // at the closest preceding item's completion — the nearest
+            // durable truth to when its tokens actually streamed (v1
+            // parts carry it natively).
+            ...((c as { time?: unknown }).time === undefined &&
+            (c as { type?: string }).type === "text"
+              ? {
+                  time: {
+                    start:
+                      prevEnd(i) ?? r.time.streamed ?? r.time.created,
+                  },
+                }
+              : i ===
+                  (r.content ?? []).findIndex(
+                    (g) => g.type === "text" || g.type === "reasoning",
+                  ) && (c as { time?: unknown }).time === undefined
+                ? {
+                    time: {
+                      start: r.time.streamed ?? r.time.created,
+                    },
+                  }
+                : {}),
             ...c,
             // Durable rows name tools `name`; the SSE dialect the UI speaks
             // (and ToolPart declares) uses `tool`.
@@ -686,6 +1318,34 @@ export async function fetchMessages(
       if (typeof p.state.error === "object" && p.state.error !== null) {
         p.state = { ...p.state, error: stringifyError(p.state.error) };
       }
+      // v2 stamps tool runs {created, ran, completed}; the live dialect
+      // (and ToolState) speaks {start, end}. A mid-stream reload's
+      // "streaming" status is a still-writing input — reads as running.
+      const t = p.state.time as
+        | {
+            created?: number;
+            ran?: number;
+            completed?: number;
+            start?: number;
+            end?: number;
+          }
+        | undefined;
+      if (
+        t &&
+        (t.created !== undefined ||
+          t.ran !== undefined ||
+          t.completed !== undefined)
+      ) {
+        p.state = {
+          ...p.state,
+          time: {
+            start: t.start ?? t.ran ?? t.created,
+            end: t.end ?? t.completed,
+          },
+        };
+      }
+      if ((p.state.status as string) === "streaming")
+        p.state = { ...p.state, status: "running" };
       p.state = clampToolState(p.id, p.state);
     }
     const info: Message = {
@@ -712,11 +1372,25 @@ export async function fetchMessages(
         ? { parentID: parent }
         : {}),
     };
-    return { info, parts };
+    return [{ info, parts }];
   });
-  // Raw row count (pre-filter): full page → an older page may exist.
+  // Raw row count (pre-filter): a full page leaves more rows — the tail
+  // flags "older may exist" for the store; an older page (cursor or asc
+  // start) hands back its continuation cursor (a short page is the only
+  // "done" signal — the endpoint reports a cursor on every non-empty
+  // page).
   const full = (body.data?.length ?? 0) >= size;
-  return { messages, next: full ? body.cursor?.next : undefined };
+  const walk = opts?.cursor !== undefined || opts?.asc === true;
+  return {
+    messages,
+    ...(walk
+      ? full && body.cursor?.next
+        ? { older: body.cursor.next }
+        : {}
+      : full
+        ? { older: true }
+        : {}),
+  };
 }
 
 // GET /session/{id}/message (v1) — the legacy store. Compaction writes ONLY
@@ -730,6 +1404,8 @@ export async function fetchMessages(
 export async function fetchLegacyMessages(
   id: string,
 ): Promise<MessageWithParts[] | undefined> {
+  // v2 dropped the legacy store route (SPA fallback) — nothing to merge.
+  if (serverDialect === "v2") return undefined;
   const rows = await getJson<MessageWithParts[]>(`/session/${id}/message`);
   if (!rows) return undefined;
   return rows.map(({ info, parts }) => ({
@@ -750,16 +1426,32 @@ export async function fetchLegacyMessages(
   }));
 }
 
-// GET /session/{id} (v1) — the flat row; used to tell a restored route a
-// dead session id without relying on the paginated list. The flat row
-// carries root `directory`, so normalize before it enters the store.
-export async function fetchSession(id: string): Promise<Session | undefined> {
-  const row = await getJson<Session & { directory?: string }>(`/session/${id}`);
+// GET /session/{id} (v1) / /api/session/{id} (v2, {data} envelope) — used
+// to tell a restored route a dead session id without relying on the
+// paginated list. The v1 flat row carries root `directory`, so normalize
+// before it enters the store. "missing" = a definitive 404 (the id is
+// dead); undefined = the fetch couldn't answer (relay down, timeout) —
+// callers must not treat that as dead.
+export type FetchedSession = Session | "missing" | undefined;
+export async function fetchSession(id: string): Promise<FetchedSession> {
+  const res = await apiRequest(
+    "GET",
+    serverDialect === "v2" ? `/api/session/${id}` : `/session/${id}`,
+  );
+  if (!res.ok)
+    return res.error?.startsWith("HTTP 404") ? "missing" : undefined;
+  const row = (
+    serverDialect === "v2"
+      ? (res.json as { data?: Session & { directory?: string } } | undefined)
+          ?.data
+      : (res.json as (Session & { directory?: string }) | undefined)
+  );
   return row ? normalizeSession(row) : undefined;
 }
 
-// Row of GET /project — a known worktree with its avatar color (assigned by
-// the host's ServerManager on boot when missing) and optional display name.
+// Row of GET /project (v1) / /api/project (v2, bare array with the
+// worktree as `canonical`) — a known worktree with its avatar color and
+// optional display name.
 export interface Project {
   id: string;
   worktree: string;
@@ -769,24 +1461,32 @@ export interface Project {
 }
 
 export async function fetchProjects(): Promise<Project[] | undefined> {
+  if (serverDialect === "v2") {
+    const rows = await getJson<
+      (Omit<Project, "worktree"> & { canonical?: string })[]
+    >("/api/project");
+    return rows?.map((r) => ({ ...r, worktree: r.canonical ?? "" }));
+  }
   return getJson<Project[]>("/project");
 }
 
 // PATCH /project/{id} — set the display name. The worktree stays the
-// project's identity; the name is pure label.
+// project's identity; the name is pure label. (v2's project PATCH is
+// unverified; a failure surfaces through the app's error banner.)
 export async function renameProject(
   id: string,
   name: string,
-  directory: string,
 ): Promise<boolean> {
   return (
-    (await sendJson("PATCH", `/project/${id}${dirQuery(directory)}`, { name }))
-      ?.ok === true
+    (await sendJson("PATCH", route(`/project/${id}`, `/api/project/${id}`), {
+      name,
+    }))?.ok === true
   );
 }
 
 // GET /project/current — this server's project (`worktree` is the folder;
-// id "global" when the folder is not a git worktree root).
+// id "global" when the folder is not a git worktree root). Gone on v2 —
+// the host always bakes the workspace meta, which is the better source.
 export interface CurrentProject {
   id: string;
   worktree?: string;
@@ -796,6 +1496,7 @@ export interface CurrentProject {
 export async function fetchCurrentProject(): Promise<
   CurrentProject | undefined
 > {
+  if (serverDialect === "v2") return undefined;
   return getJson<CurrentProject>("/project/current");
 }
 
@@ -824,20 +1525,48 @@ export function normalizeSession(
   };
 }
 
-// POST /session (v1) — honors `title` plus an optional agent/model preset
-// (a draft's picker selection rides along on creation), returns a flat row.
+// POST /session (v1) / POST /api/session (v2) — honors `title` plus an
+// optional agent/model preset (a draft's picker selection rides along on
+// creation; both dialects accept all three fields — the v2 row comes back
+// with agent and model applied). v1 replies a flat row, v2 {data:{row}}.
 // No title leaves the naming to the server ("New session - <date>"), whose
 // auto-title replaces it again on the first prompt.
 export async function createSession(
   title?: string,
   preset?: { agent?: string; model?: ModelSelection },
 ): Promise<{ session?: Session; error?: string }> {
-  const res = await sendJson<Session & { directory?: string }>(
-    "POST",
-    "/session",
-    { title, agent: preset?.agent, model: preset?.model },
-  );
-  const row = res?.data;
+  const model = preset?.model;
+  const body = {
+    title,
+    agent: preset?.agent,
+    ...(model
+      ? {
+          model: {
+            providerID: model.providerID,
+            id: model.id,
+            ...(model.variant ? { variant: model.variant } : {}),
+          },
+        }
+      : {}),
+  };
+  const res =
+    serverDialect === "v2"
+      ? await sendJson<{ data?: Session & { directory?: string } }>(
+          "POST",
+          "/api/session",
+          body,
+        )
+      : await sendJson<Session & { directory?: string }>(
+          "POST",
+          "/session",
+          body,
+        );
+  const row = (
+    serverDialect === "v2"
+      ? (res?.data as { data?: Session & { directory?: string } } | undefined)
+          ?.data
+      : res?.data
+  ) as (Session & { directory?: string }) | undefined;
   return res?.ok && row
     ? { session: normalizeSession(row) }
     : { error: res?.error };
@@ -980,12 +1709,104 @@ export function attachmentParts(
   }));
 }
 
+// v2 attachment shapes: {start, end, text} pointing back at the mention.
+interface V2Mention {
+  start: number;
+  end: number;
+  text: string;
+}
+
+// The v2 prompt/command body's file/agent lists, mapped from our parts:
+// an attachment (data: URI or snapshotted file:// URL) is {uri, name}; a
+// mention additionally carries the range of its "@path" text. Mime is not
+// sent — the server sniffs the payload (PromptInput.FileAttachment).
+function v2PromptBody(
+  parts: PromptPart[],
+  text: string,
+): { text: string; files?: unknown[]; agents?: unknown[] } {
+  const files: unknown[] = [];
+  const agents: unknown[] = [];
+  for (const p of parts) {
+    if (p.type === "file") {
+      const m = p.source?.text;
+      const mention: V2Mention | undefined = m
+        ? { start: m.start, end: m.end, text: m.value }
+        : undefined;
+      files.push({
+        uri: p.url,
+        ...(mention ? { mention } : {}),
+        ...(!mention && p.filename ? { name: p.filename } : {}),
+      });
+    } else if (p.type === "agent" && p.source) {
+      agents.push({
+        name: p.name,
+        mention: { start: p.source.start, end: p.source.end, text: p.source.value },
+      });
+    } else if (p.type === "agent") {
+      agents.push({ name: p.name });
+    }
+  }
+  return {
+    text,
+    ...(files.length > 0 ? { files } : {}),
+    ...(agents.length > 0 ? { agents } : {}),
+  };
+}
+
+// The prompt POST's reply on v2: the admitted user message row. v1 has no
+// equivalent (the row streams back as message.updated).
+export interface PromptUserRow {
+  id: string;
+  created?: number;
+  text?: string;
+}
+
 export async function promptSession(
   id: string,
   parts: PromptPart[],
   agent?: string,
   model?: ModelSelection,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; user?: PromptUserRow }> {
+  // v2: per-turn agent/model rides the session-scoped switch routes (both
+  // wire-verified). Callers only pass a selection that differs from the
+  // session row, keeping the switches (each writes a bookkeeping message
+  // row server-side) off the steady state. The prompt body is PromptInput
+  // — {text, files, agents} — mapped from our parts below; the schema is
+  // additionalProperties:false, so nothing else may ride along.
+  if (serverDialect === "v2") {
+    if (agent)
+      await sendJson("POST", `/api/session/${id}/agent`, { agent });
+    if (model)
+      await sendJson("POST", `/api/session/${id}/model`, {
+        model: {
+          providerID: model.providerID,
+          id: model.id,
+          ...(model.variant ? { variant: model.variant } : {}),
+        },
+      });
+    const text = parts
+      .filter((p): p is { type: "text"; text: string } => p.type === "text")
+      .map((p) => p.text)
+      .join("");
+    const body = v2PromptBody(parts, text);
+    const res = await sendJson<{
+      data?: { id?: string; time?: { created?: number }; payload?: { text?: string } };
+    }>("POST", `/api/session/${id}/prompt`, body);
+    const row = res.ok ? res.data?.data : undefined;
+    return {
+      ok: res.ok === true,
+      error: res.error,
+      ...(row?.id
+        ? {
+            user: {
+              id: row.id,
+              created: toMs(row.time?.created),
+              text: row.payload?.text ?? text,
+            },
+          }
+        : {}),
+    };
+  }
   const body = {
     parts,
     ...(agent ? { agent } : {}),
@@ -1001,24 +1822,34 @@ export async function promptSession(
   return { ok: res.ok === true, error: res.error };
 }
 
-// GET /find/file — the file finder behind "@" mentions (the same route the
-// official app's compat layer calls). Bare array of paths relative to the
+// GET /find/file (v1) / GET /api/fs/find (v2, {location,data} envelope) —
+// the file finder behind "@" mentions. Bare array of paths relative to the
 // directory; directories carry the platform trailing separator. Normalized
 // to "/" so display, inserted text and the send-time parser agree.
 export async function findFiles(
   query: string,
   directory?: string,
 ): Promise<string[]> {
+  if (serverDialect === "v2") {
+    const qs = new URLSearchParams({ query, limit: "20" });
+    const body = await getJson<{ data?: string[] }>(`/api/fs/find?${qs}`);
+    return (body?.data ?? []).map((p) => p.replace(/\\/g, "/"));
+  }
   const qs = new URLSearchParams({ query, limit: "20" });
   if (directory) qs.set("directory", directory);
   const rows = await getJson<string[]>(`/find/file?${qs}`);
   return (rows ?? []).map((p) => p.replace(/\\/g, "/"));
 }
 
-// POST /session/{id}/abort — the v1 interrupt (the v2 one only reaches the
-// v2 loop). A no-op on an idle session.
+// POST /session/{id}/abort (v1) / POST /api/session/{id}/interrupt (v2,
+// replies {interrupted} instead of v1's {ok}). A no-op on an idle session.
 export async function interruptSession(id: string): Promise<boolean> {
-  return (await sendJson("POST", `/session/${id}/abort`))?.ok === true;
+  return (
+    (await sendJson(
+      "POST",
+      route(`/session/${id}/abort`, `/api/session/${id}/interrupt`),
+    ))?.ok === true
+  );
 }
 
 // POST /api/session/{id}/agent — the agent for subsequent turns. 204.
@@ -1060,13 +1891,32 @@ export async function switchSessionModel(
 // the server resolves a bare command under the default agent with no
 // variant and rewrites the session row from the turn (prompt.ts
 // createUserMessage) — resetting Plan to Build and the effort to default.
-// A command's own agent/model config still wins server-side.
+// A command's own agent/model config still wins server-side. v2's body is
+// {name, text} only (PromptInput, additionalProperties:false): no
+// per-command agent/model — the command's own config decides there. v2
+// skills are NOT commands (separate registry): `skill` routes the run to
+// POST /api/experimental/session/{id}/skill {id} — the server appends the
+// skill's activation message and resumes the loop. Skills take no args
+// there; `args` is dropped.
 export async function runCommand(
   id: string,
   command: string,
   args: string,
   sel?: { agent: string; model?: ModelSelection },
+  skill?: boolean,
 ): Promise<boolean> {
+  if (serverDialect === "v2") {
+    return (
+      (await sendJson(
+        "POST",
+        skill
+          ? `/api/experimental/session/${id}/skill`
+          : `/api/session/${id}/command`,
+        skill ? { id: command } : { name: command, text: args },
+        300_000,
+      ))?.ok === true
+    );
+  }
   const model = sel?.model;
   return (
     (await sendJson(
@@ -1086,11 +1936,11 @@ export async function runCommand(
   );
 }
 
-// POST /session/{id}/summarize — native compaction, what the TUI's /compact
-// runs: the server folds the history into an AI summary written by the
-// given model, freeing the context. `auto` defaults to false server-side.
-// The POST resolves only when the summary turn is done, so it carries its
-// own long timeout — the relay's default cap would abort mid-compaction and
+// POST /session/{id}/summarize (v1) / POST /api/session/{id}/compact (v2,
+// body {} required): native compaction, what the TUI's /compact runs — the
+// server folds the history into an AI summary, freeing the context. The
+// POST resolves only when the summary turn is done, so it carries its own
+// long timeout — the relay's default cap would abort mid-compaction and
 // read as failure while the server keeps folding.
 export async function compactSession(
   id: string,
@@ -1098,17 +1948,18 @@ export async function compactSession(
   modelID: string,
 ): Promise<boolean> {
   return (
-    await sendJson(
+    (await sendJson(
       "POST",
-      `/session/${id}/summarize`,
-      { providerID, modelID },
+      route(`/session/${id}/summarize`, `/api/session/${id}/compact`),
+      serverDialect === "v2" ? {} : { providerID, modelID },
       300_000,
-    )
-  ).ok;
+    ))?.ok === true
+  );
 }
 
-// POST /api/session/{sid}/permission/{id}/reply — `always` only when the
-// request offers it (save non-empty); `message` rides a reject.
+// POST /api/session/{sid}/permission/{id}/reply — SDK body is
+// {decision, message} ("once" | "always" | "reject"); `always` only when
+// the request offers it (save non-empty).
 export async function replyPermission(
   sessionID: string,
   id: string,
@@ -1120,7 +1971,7 @@ export async function replyPermission(
       await sendJson(
         "POST",
         `/api/session/${sessionID}/permission/${id}/reply`,
-        { reply, message },
+        { decision: reply, ...(message !== undefined ? { message } : {}) },
       )
     )?.ok === true
   );
@@ -1139,32 +1990,48 @@ export async function replyPermissionV1(
   );
 }
 
-// POST .../question/{id}/reply — one label array per question, in order.
-// The pipeline split runs through the reply too: a v1 ask answers on the
-// global /question/{id}/reply, a v2 ask on /api/session/{sid}/question/{id}/reply
-// — the wrong route 404s (QuestionNotFoundError).
+// POST .../reply — one label array per question, in order. The pipeline
+// split runs through the reply too: a v1 ask answers on the global
+// /question/{id}/reply; a v2 ask is a form — /api/session/{sid}/form/{id}/reply
+// with {answer} (the scalar for a single-field form, an object keyed by
+// field name for more).
 export async function replyQuestion(
   sessionID: string,
   id: string,
   answers: string[][],
   v1 = false,
+  formFieldNames?: string[],
 ): Promise<boolean> {
-  const path = v1
-    ? `/question/${id}/reply`
-    : `/api/session/${sessionID}/question/${id}/reply`;
-  return (await sendJson("POST", path, { answers }))?.ok === true;
+  if (!v1) {
+    const answer =
+      formFieldNames && formFieldNames.length > 1
+        ? Object.fromEntries(
+            formFieldNames.map((n, i) => [n, answers[i]?.[0] ?? ""]),
+          )
+        : (answers[0]?.[0] ?? "");
+    return (
+      (await sendJson("POST", `/api/session/${sessionID}/form/${id}/reply`, {
+        answer,
+      }))?.ok === true
+    );
+  }
+  return (
+    (await sendJson("POST", `/question/${id}/reply`, { answers }))?.ok === true
+  );
 }
 
-// POST .../question/{id}/reject — bodyless, same pipeline split.
+// POST .../reject — bodyless on v1; a v2 form ask cancels via DELETE.
 export async function rejectQuestion(
   sessionID: string,
   id: string,
   v1 = false,
 ): Promise<boolean> {
-  const path = v1
-    ? `/question/${id}/reject`
-    : `/api/session/${sessionID}/question/${id}/reject`;
-  return (await sendJson("POST", path))?.ok === true;
+  if (!v1)
+    return (
+      (await sendJson("DELETE", `/api/session/${sessionID}/form/${id}`))?.ok ===
+      true
+    );
+  return (await sendJson("POST", `/question/${id}/reject`))?.ok === true;
 }
 
 // `?directory=<worktree>` scopes a session write to its project. Verified
@@ -1173,37 +2040,60 @@ export async function rejectQuestion(
 const dirQuery = (directory?: string) =>
   directory ? `?directory=${encodeURIComponent(directory)}` : "";
 
-// PATCH /session/{id} — rename. Replies the flat v1 row; callers patch the
-// list locally instead of parsing it.
+// PATCH /session/{id} — rename. v1 replies the flat row (callers patch the
+// list locally instead of parsing it); v2 replies 204 with no body.
 export async function renameSession(
   id: string,
   title: string,
   directory?: string,
 ): Promise<boolean> {
   return (
-    (await sendJson("PATCH", `/session/${id}${dirQuery(directory)}`, { title }))
-      ?.ok === true
+    (await sendJson(
+      "PATCH",
+      serverDialect === "v2"
+        ? `/api/session/${id}`
+        : `/session/${id}${dirQuery(directory)}`,
+      { title },
+    ))?.ok === true
   );
 }
 
-// DELETE /session/{id} — 200, empty body.
+// DELETE /session/{id} — 200/204, empty body.
 export async function deleteSession(
   id: string,
   directory?: string,
 ): Promise<boolean> {
-  return (await sendJson("DELETE", `/session/${id}${dirQuery(directory)}`))
-    ?.ok === true;
+  return (
+    (await sendJson(
+      "DELETE",
+      serverDialect === "v2"
+        ? `/api/session/${id}`
+        : `/session/${id}${dirQuery(directory)}`,
+    ))?.ok === true
+  );
 }
 
-// POST /session/{id}/revert — rewind to before the given user message: it,
-// its reply, and everything after fold out of the transcript (v1
-// session.revert — the store prompt_async writes; unrevert would restore).
-// Replies the updated session row carrying the revert marker.
+// POST /session/{id}/revert (v1) / v2's two-step: POST /revert/stage
+// {messageID, files?} marks the cut, POST /revert/commit applies it (the
+// bare POST /revert 404s on v2 — wire-verified). Rewind semantics: the
+// message, its reply, and everything after fold out of the transcript.
+// v1 replies the updated session row carrying the revert marker; v2
+// commits with 204, so the row is refetched either way.
 export async function revertSession(
   id: string,
   messageID: string,
   directory?: string,
 ): Promise<Session | undefined> {
+  if (serverDialect === "v2") {
+    const staged = await sendJson("POST", `/api/session/${id}/revert/stage`, {
+      messageID,
+    });
+    if (!staged?.ok) return undefined;
+    const committed = await sendJson("POST", `/api/session/${id}/revert/commit`);
+    if (!committed?.ok) return undefined;
+    const row = await fetchSession(id);
+    return row === "missing" ? undefined : row;
+  }
   const res = await sendJson<Session & { directory?: string }>(
     "POST",
     `/session/${id}/revert${dirQuery(directory)}`,
@@ -1214,10 +2104,37 @@ export async function revertSession(
 }
 
 // GET /session?directory= (v1) — a project's sessions, unpaged. Only ids
-// are read (project purge).
+// are read (project purge). v2 has no directory filter: walk the paginated
+// /api/session list and match rows by their location directory (folded for
+// the compare — separators and drive-letter case).
 export async function fetchProjectSessions(
   directory: string,
 ): Promise<{ id: string }[] | undefined> {
+  if (serverDialect === "v2") {
+    const fold = (p: string | undefined) =>
+      (p ?? "").replace(/\\/g, "/").replace(/^([a-z]):/i, (m) => m.toUpperCase()).replace(/\/+$/, "");
+    const want = fold(directory);
+    const out: { id: string }[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 10; page++) {
+      const params = new URLSearchParams({ limit: "400" });
+      if (cursor) {
+        params.set("cursor", cursor);
+        params.set("direction", "next");
+      }
+      const body = await getJson<{
+        data?: Session[];
+        cursor?: { next?: string };
+      }>(`/api/session?${params}`);
+      if (!body) break;
+      for (const s of body.data ?? [])
+        if (fold(s.location?.directory) === want) out.push({ id: s.id });
+      if ((body.data?.length ?? 0) < 400) break;
+      cursor = body.cursor?.next;
+      if (!cursor) break;
+    }
+    return out;
+  }
   return getJson<{ id: string }[]>(
     `/session${dirQuery(directory)}`,
   );

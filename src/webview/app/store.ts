@@ -7,6 +7,8 @@ import {
   createSession,
   compactSession,
   deleteSession as deleteSessionApi,
+  dialect,
+  type TextPart,
   fetchAgents,
   fetchCommands,
   fetchConfig,
@@ -35,6 +37,7 @@ import {
   replyPermissionV1,
   replyQuestion,
   runCommand,
+  setDialect,
   switchSessionAgent,
   switchSessionModel,
   type Agent,
@@ -62,6 +65,7 @@ import {
   tokensTotal,
 } from "./api";
 import { connectEvents, type ServerEvent } from "./events";
+import { translateV2Event } from "./v2events";
 import { postToHost } from "./host";
 import { parseMentions } from "./mentions";
 import { setCopyModifier } from "./markdown";
@@ -128,6 +132,9 @@ export function normPath(p: string): string {
 export const sessions = signal<Session[]>([]);
 // Cursor to the next (older) page of sessions, when more exist.
 export const sessionsNext = signal<string | undefined>(undefined);
+// True while the session-list fetch keeps failing (a boot inside a server
+// restart window): Home keeps its loading copy instead of "No sessions yet."
+export const sessionsStalled = signal(false);
 export const sessionStatus = signal<Record<string, SessionStatus>>({});
 // Prompts the user interrupted before any step answered them: the awaiting
 // placeholder ("Processing...") must not resurrect a prompt the user killed.
@@ -274,6 +281,49 @@ export const serverDefaultModel = signal<ModelSelection | undefined>(
 // optimistic appends awaiting their server echo.
 export type ChatMessage = MessageWithParts;
 export const messagesBySession = signal<Map<string, ChatMessage[]>>(new Map());
+// Sessions whose transcript pull keeps failing with nothing stored yet
+// (boot inside the server restart window): the view shows a retrying line
+// while a backoff loop re-pulls.
+export const failedMsgLoads = signal<Set<string>>(new Set());
+const msgRetries = new Map<string, { timer: number; tries: number }>();
+
+function clearMsgRetry(id: string): void {
+  const r = msgRetries.get(id);
+  if (r) {
+    clearTimeout(r.timer);
+    msgRetries.delete(id);
+  }
+  if (failedMsgLoads.value.has(id))
+    failedMsgLoads.value = new Set(
+      [...failedMsgLoads.value].filter((x) => x !== id),
+    );
+}
+
+function scheduleMsgRetry(id: string): void {
+  const prev = msgRetries.get(id);
+  // Capped: a route to a session the server truly doesn't know stops
+  // pulling after a couple of minutes; a remount restarts the check.
+  if (prev && prev.tries >= 10) return;
+  failedMsgLoads.value = new Set([...failedMsgLoads.value, id]);
+  if (prev) return;
+  const state = { timer: 0, tries: 0 };
+  const fire = () => {
+    state.tries++;
+    if (
+      (route.value.view === "session" && route.value.id === id) ||
+      openTabs.value.includes(id)
+    )
+      void refreshMessages(id).then(() => {
+        const r = msgRetries.get(id);
+        if (r && r === state) {
+          r.timer = window.setTimeout(fire, Math.min(1000 * 2 ** r.tries, 10_000));
+        }
+      });
+    else clearMsgRetry(id);
+  };
+  state.timer = window.setTimeout(fire, 1000);
+  msgRetries.set(id, state);
+}
 
 // Per-session view of the transcript store. Reading
 // messagesBySession.value.get(sid) in a component subscribes it to every
@@ -465,14 +515,34 @@ function curateProviders(
 // Monotonic token so a stale refresh (slow response racing a
 // server.connected-triggered one) can't clobber fresher data.
 let generation = 0;
+// One delayed v2 command re-pull per webview load (see refreshBase).
+let commandsSettled = false;
+
+// A failed session-list pull is not an answer — the boot can race the
+// server's restart window (every fetch fails at once). One backoff retry
+// loop keeps pulling until a page lands; any successful refreshBase
+// clears it.
+let baseRetryTimer: number | undefined;
+let baseRetryDelay = 0;
+function scheduleBaseRetry(): void {
+  if (baseRetryTimer !== undefined) return;
+  baseRetryDelay = Math.min(baseRetryDelay ? baseRetryDelay * 2 : 1000, 10_000);
+  baseRetryTimer = window.setTimeout(() => {
+    baseRetryTimer = undefined;
+    void refreshBase();
+  }, baseRetryDelay);
+}
 
 async function refreshBase(): Promise<void> {
   const gen = ++generation;
+  // The workspace directory, known before any fetch when the host stamped
+  // it (the extension); the v2 model catalog is location-scoped without it.
+  const here = meta("opencode-workspace");
   const [statuses, page, providerList, agentList, commandList, projectList, current, config] =
     await Promise.all([
       fetchSessionStatus(),
       fetchSessions(),
-      fetchProviders(),
+      fetchProviders(here ?? undefined),
       fetchAgents(),
       fetchCommands(),
       fetchProjects(),
@@ -494,16 +564,53 @@ async function refreshBase(): Promise<void> {
     ].sort((a, b) => b.time.updated - a.time.updated);
     for (const s of page.sessions) guardVariant(s.id, s.model);
     sessionsNext.value = page.next;
+    if (baseRetryTimer !== undefined) {
+      clearTimeout(baseRetryTimer);
+      baseRetryTimer = undefined;
+    }
+    baseRetryDelay = 0;
+    sessionsStalled.value = false;
+  } else {
+    sessionsStalled.value = true;
   }
-  if (providerList) providers.value = curateProviders(providerList, config);
+  // The catalog is as boot-critical as the list: a failed pull leaves the
+  // model picker at "No models available" (the session's own model still
+  // runs — only switching dies). One retry loop covers both.
+  if (page === undefined || providerList === undefined) scheduleBaseRetry();
+  if (providerList)
+    providers.value =
+      dialect() === "v2"
+        ? providerList
+        : curateProviders(providerList, config);
   if (agentList) agents.value = agentList;
   if (commandList) commands.value = commandList;
+  // v2 fills its command/skill registries per location lazily after boot —
+  // a pull that close to boot can predate the project rows (builtins only).
+  // Re-pull once, after the sync has certainly settled.
+  if (dialect() === "v2" && !commandsSettled) {
+    commandsSettled = true;
+    window.setTimeout(() => {
+      void fetchCommands().then((list) => {
+        if (list) commands.value = list;
+      });
+    }, 2500);
+  }
   if (projectList) projects.value = projectList;
   // The window's folder: the host knows it exactly (it spawned the server
   // there). /project/current is the fallback (the rig) — a non-git folder
   // reports the "global" project (worktree "/"), which matches nothing.
-  const here = meta("opencode-workspace");
-  currentDir.value = normPath(here || current?.worktree || "");
+  const dir = normPath(here || current?.worktree || "");
+  currentDir.value = dir;
+  // The v2 catalog pull ran without a location when the host stamped none
+  // (the rig): the bare /api/model serves nothing, so re-pull it once the
+  // directory is known — the same lazy-settle pattern as the registries.
+  if (dialect() === "v2" && !here && dir && providerList?.all.length === 0) {
+    window.setTimeout(() => {
+      void fetchProviders(dir).then((list) => {
+        if (list) providers.value = list;
+      });
+    }, 2500);
+  }
   // "providerID/modelID" — the provider is the first segment.
   const m = config?.model?.match(/^([^/]+)\/(.+)$/);
   if (m) serverDefaultModel.value = { providerID: m[1], id: m[2] };
@@ -721,7 +828,7 @@ export async function renameProject(
     setSendError("That project is not in the server's project list.");
     return false;
   }
-  if (!(await renameProjectApi(row.id, name, row.worktree))) {
+  if (!(await renameProjectApi(row.id, name))) {
     setSendError("The rename was rejected by the server.");
     return false;
   }
@@ -1135,6 +1242,24 @@ function clearPending(sessionID: string): void {
   );
 }
 
+// Retire the ONE echo a server row just superseded — the oldest (the
+// server admits prompts in submit order), or the one matching the row's
+// text when the caller knows it. Wiping every echo would swallow a second
+// in-flight steer's bubble until its own row lands.
+function retirePending(sessionID: string, text?: string): void {
+  const list = messagesBySession.value.get(sessionID) ?? [];
+  const t = text?.trim();
+  const target =
+    list.find(
+      (m) =>
+        m.info.id.startsWith("pending:") &&
+        t !== undefined &&
+        (m.parts.find(isText)?.text ?? "").trim() === t,
+    ) ?? list.find((m) => m.info.id.startsWith("pending:"));
+  if (!target) return;
+  mutateMessages(sessionID, (l) => l.filter((m) => m !== target));
+}
+
 // A step ending is only PROBABLY the turn ending: a thinking step closes
 // and the answer step follows seconds later, and idling on the boundary
 // freezes a live turn dead (static dot, stopped counter). The server sends
@@ -1272,10 +1397,15 @@ function applyEvent(event: ServerEvent): void {
     status?: SessionStatus;
     agent?: string;
     model?: Session["model"];
+    // session.shell.started/ended carry the run itself; ended adds output.
+    shell?: { id?: string; command?: string; status?: string; exit?: number };
+    output?: string;
     // session.next.step.ended carries the finished step's own usage.
     timestamp?: number;
     cost?: number;
     tokens?: MessageTokens;
+    // session.renamed carries the server's new title.
+    title?: string;
     // permission.v2.asked / question.v2.asked carry the request itself; the
     // replied/rejected events carry {requestID, reply, ...}.
     id?: string;
@@ -1298,6 +1428,9 @@ function applyEvent(event: ServerEvent): void {
     result?: unknown;
     // tool.success's machine-readable result (patches, todo rows).
     structured?: unknown;
+    // tool.success's metadata (subagent child session, edit diffs,
+    // background flags) — the chips read it off the tool state.
+    metadata?: unknown;
     content?: unknown;
     // session.next.step.ended's step finish reason ("stop", "tool-calls", …).
     finish?: string;
@@ -1314,7 +1447,54 @@ function applyEvent(event: ServerEvent): void {
     // unbind the tab's project color.
     case "session.created":
     case "session.updated":
-      if (data.info) upsertSession(normalizeSession(data.info));
+      if (data.info) {
+        const info = data.info as Session & { directory?: string };
+        // Partial rows (the v2 event translation maps facts — usage,
+        // creation — onto session.updated) merge into the stored row; a
+        // full row upserts. Merging keeps a fact-only info (no title,
+        // no location) from blanking the row the list stored.
+        if (
+          typeof info.id === "string" &&
+          sessions.value.some((s) => s.id === info.id) &&
+          (info.title === undefined || info.location === undefined)
+        ) {
+          const partial = info as Session & {
+            revert?: { messageID: string } | null;
+          };
+          patchSession(info.id, (s) => ({
+            ...s,
+            ...(info.title !== undefined ? { title: info.title } : {}),
+            ...(info.location !== undefined ? { location: info.location } : {}),
+            ...(info.cost !== undefined ? { cost: info.cost } : {}),
+            ...(info.tokens !== undefined ? { tokens: info.tokens } : {}),
+            ...(info.time?.updated !== undefined
+              ? { time: { ...s.time, updated: info.time.updated } }
+              : {}),
+            ...(info.time?.created !== undefined
+              ? { time: { ...s.time, created: info.time.created } }
+              : {}),
+            // revert: null clears the marker (v2's cleared/committed);
+            // a marker folds the transcript like a local revert would.
+            ...("revert" in partial
+              ? { revert: partial.revert ?? undefined }
+              : {}),
+          }));
+        } else
+          upsertSession(
+            normalizeSession({
+              ...info,
+              title: info.title ?? "",
+              time: info.time ?? { created: Date.now(), updated: Date.now() },
+              cost: info.cost ?? 0,
+              tokens: info.tokens ?? {
+                input: 0,
+                output: 0,
+                reasoning: 0,
+                cache: { read: 0, write: 0 },
+              },
+            }),
+          );
+      }
       break;
     // The v1 stream's authoritative busy/idle (v1 turns have no step events
     // to derive from; the v2 fallback below stays for v2-prompted sessions).
@@ -1370,8 +1550,17 @@ function applyEvent(event: ServerEvent): void {
         }
       }
       break;
-    case "session.next.step.ended":
-      if (data.sessionID && data.tokens) {
+    case "session.next.step.ended": {
+      // The compaction summarizer's step measures the summary turn, not
+      // session context — taking it would pin the ring and the session
+      // sums at the folded history's size right after a compaction (the
+      // v1 step-finish path carries the same guard).
+      const compRow = data.sessionID
+        ? messagesBySession.value
+            .get(data.sessionID)
+            ?.find((m) => m.info.id === data.assistantMessageID)
+        : undefined;
+      if (data.sessionID && data.tokens && compRow?.info.agent !== "compaction") {
         const t = data.tokens;
         stepUsage.value = {
           ...stepUsage.value,
@@ -1397,6 +1586,7 @@ function applyEvent(event: ServerEvent): void {
         }));
       }
       break;
+    }
     case "session.next.agent.switched":
       if (data.sessionID && data.agent) {
         patchSession(data.sessionID, (s) => ({ ...s, agent: data.agent }));
@@ -1406,6 +1596,36 @@ function applyEvent(event: ServerEvent): void {
       if (data.sessionID && data.model) {
         patchSession(data.sessionID, (s) => ({ ...s, model: data.model }));
         guardVariant(data.sessionID, data.model);
+      }
+      break;
+    // v2 surfaces these facts as dedicated events (v1 sends full rows).
+    // Renamed: the server's auto-title after a turn — patch in place or
+    // Home keeps the old title until the next full refresh.
+    case "session.renamed":
+      if (data.sessionID && typeof data.title === "string") {
+        patchSession(data.sessionID, (s) => ({ ...s, title: data.title! }));
+      }
+      break;
+    // Deleted elsewhere (another window, the TUI): drop every local trace
+    // of the row, the tab included.
+    case "session.deleted":
+      if (data.sessionID) dropSessionLocal(data.sessionID);
+      break;
+    // v2's compaction turn ended (summary written or failed): the summary
+    // row is completed in the durable store, so pull it — and retire the
+    // /compact echo (v1's trigger row does that on the stream; v2 has
+    // none). Synthesized by the v2 event translation; v1 never emits it.
+    case "session.compaction.done":
+      if (
+        data.sessionID &&
+        sessions.value.some((s) => s.id === data.sessionID)
+      ) {
+        // A queued turn's or in-flight POST's echo is not the /compact
+        // echo — same guard as session.idle (compaction can land while a
+        // steer is being admitted).
+        if (!hasQueued(data.sessionID) && !postedRows.has(data.sessionID))
+          dropPending(data.sessionID);
+        void refreshMessages(data.sessionID).catch(() => undefined);
       }
       break;
     case "permission.v2.asked":
@@ -1591,7 +1811,7 @@ function applyEvent(event: ServerEvent): void {
           .get(sid)
           ?.some((m) => m.info.id === raw.id);
         if (echo) {
-          clearPending(sid);
+          retirePending(sid);
           const left = (postedRows.get(sid) ?? 1) - 1;
           if (left > 0) postedRows.set(sid, left);
           else postedRows.delete(sid);
@@ -1765,6 +1985,69 @@ function applyEvent(event: ServerEvent): void {
         });
       }
       break;
+    // v2's compaction turn streams its summary as deltas on the row
+    // compaction.started opened (the wire carries no row id — find the
+    // open compaction row like the official client does). The part id
+    // matches the durable fetch's, so the done-refresh merges, not
+    // duplicates.
+    case "session.compaction.delta":
+      if (typeof data.text === "string" && data.text) {
+        const row = [...(messagesBySession.value.get(sid) ?? [])]
+          .reverse()
+          .find((m) => m.info.agent === "compaction");
+        if (row) {
+          appendPartText(sid, row.info.id, `${row.info.id}:text`, "text", data.text);
+        }
+      }
+      break;
+    // v2 native shell runs are their own transcript rows — rendered as a
+    // tool row keyed by the shell id. started opens the row (the event id
+    // under its durable msg_ name); ended patches whatever row holds the
+    // part, the same way the official client resolves by shell id.
+    case "session.shell.started": {
+      const shell = data.shell;
+      const rowID =
+        event.id !== undefined ? event.id.replace(/^evt_/, "msg_") : undefined;
+      if (!shell?.id || !rowID) break;
+      upsertMessage(sid, {
+        id: rowID,
+        role: "assistant",
+        time: { created: data.timestamp ?? Date.now() },
+      });
+      upsertPart(sid, {
+        id: shell.id,
+        messageID: rowID,
+        sessionID: sid,
+        type: "tool",
+        tool: "bash",
+        state: {
+          status: "running",
+          ...(shell.command !== undefined
+            ? { input: { command: shell.command } }
+            : {}),
+        },
+      });
+      break;
+    }
+    case "session.shell.ended": {
+      const shell = data.shell;
+      const output = data.output;
+      if (!shell?.id) break;
+      const row = (messagesBySession.value.get(sid) ?? []).find((m) =>
+        m.parts.some((p) => p.id === shell.id),
+      );
+      if (!row) break;
+      patchToolState(sid, row.info.id, shell.id, (s) => ({
+        ...s,
+        status: shell.status === "failed" ? "error" : "completed",
+        ...(output !== undefined ? { output } : {}),
+        ...(shell.status === "failed"
+          ? { error: output ?? "The shell command failed." }
+          : {}),
+        time: { ...s.time, end: data.timestamp ?? Date.now() },
+      }));
+      break;
+    }
     case "session.next.text.delta":
       if (data.assistantMessageID && data.textID && data.delta) {
         appendPartText(sid, data.assistantMessageID, data.textID, "text", data.delta);
@@ -1867,6 +2150,11 @@ function applyEvent(event: ServerEvent): void {
           typeof data.structured === "object"
             ? { structured: data.structured as Record<string, unknown> }
             : {}),
+          ...(data.metadata !== undefined &&
+          data.metadata !== null &&
+          typeof data.metadata === "object"
+            ? { metadata: data.metadata as Record<string, unknown> }
+            : {}),
           time: { ...s.time, end: data.timestamp },
         }));
       }
@@ -1896,7 +2184,16 @@ function applyEvent(event: ServerEvent): void {
               0,
             )
           : 0;
-        if (data.tokens && tokensTotal(data.tokens))
+        // A step that emitted a tool call bills the call's tokens against
+        // almost no chars — the pair would skew the text ratio the tail
+        // estimate and the live rate ride. Only tool-free rows calibrate
+        // (the same guard the v1 step-finish path carries).
+        if (
+          data.tokens &&
+          tokensTotal(data.tokens) &&
+          row &&
+          !row.parts.some((p) => isTool(p))
+        )
           calibrateTokens(
             Math.max(0, chars - (row?.info.reportedChars ?? 0)),
             (data.tokens.output ?? 0) + (data.tokens.reasoning ?? 0),
@@ -2045,7 +2342,13 @@ export function init(): void {
   // reports the webview visible again (resyncFromServer).
   let sawDrop = false;
   disconnectEvents = connectEvents({
-    onEvent: queueEvent,
+    // v2 servers speak their own event family — rewritten into the
+    // pipeline's dialect before anything queues (see v2events.ts).
+    onEvent: (event) => {
+      if (dialect() === "v2")
+        for (const e of translateV2Event(event)) queueEvent(e);
+      else queueEvent(event);
+    },
     onState: (state) => {
       if (state === "offline" || state === "connecting") {
         sawDrop = true;
@@ -2088,7 +2391,10 @@ export function resyncFromServer(): void {
 function pullServerTruth(): void {
   void refreshBase();
   void refreshStatuses();
-  for (const id of messagesBySession.value.keys()) {
+  for (const id of new Set([
+    ...messagesBySession.value.keys(),
+    ...failedMsgLoads.value,
+  ])) {
     void refreshMessages(id);
     void refreshPermissions(id);
     void refreshQuestions(id);
@@ -2104,15 +2410,19 @@ let restoredCheck: Promise<void> | undefined;
 function validateRestored(): Promise<void> {
   return (restoredCheck ??= (async () => {
     const r = route.value;
-    if (r.view === "session") {
+    // "missing" is a definitive 404 — bounce. undefined is a fetch that
+    // couldn't answer (relay down, timeout): bouncing would throw the user
+    // off a live session for a restart-window blip; the transcript retry
+    // owns the view from here.
+    if (r.view === "session" && r.id) {
       const row = await fetchSession(r.id);
-      if (!row) navigate({ view: "home" });
-      else upsertSession(row);
+      if (row === "missing") navigate({ view: "home" });
+      else if (row) upsertSession(row);
     }
     for (const t of openTabs.value) {
       const row = await fetchSession(t);
-      if (!row) closeSessionTab(t);
-      else upsertSession(row);
+      if (row === "missing") closeSessionTab(t);
+      else if (row) upsertSession(row);
     }
   })());
 }
@@ -2261,10 +2571,22 @@ export function hostMessage(msg: unknown) {
     peers?: unknown;
     from?: string;
     sessionId?: string;
+    dialect?: string;
   };
   // The webview became visible again: events streamed while VS Code had
   // it suspended were lost — pull truth.
   if (m.type === "resync") {
+    resyncFromServer();
+  }
+  // A dialect that arrived after the page booted (probe finished late, or
+  // the host re-detected): adopt it and re-pull everything — routes and
+  // envelopes change with it.
+  if (
+    m.type === "dialect" &&
+    (m.dialect === "v1" || m.dialect === "v2") &&
+    m.dialect !== dialect()
+  ) {
+    setDialect(m.dialect);
     resyncFromServer();
   }
   if (m.type === "insert-text" && typeof m.text === "string") {
@@ -2409,11 +2731,18 @@ export async function refreshMessages(id: string): Promise<void> {
       fetchMessages(id),
       fetchLegacyMessages(id),
     ]);
+    const fetchStart = Date.now();
     // Both failing (server blip) keeps whatever is stored; one failing must
     // not discard the other's rows — the ring and footer read usage off
     // these rows, and a blank map leaves the session showing 0 until the
-    // next turn's step-finish.
-    if (!page && !legacy) return;
+    // next turn's step-finish. Nothing stored at all is the boot race: the
+    // view would render bare composer with no indication — hand it to the
+    // retry loop instead.
+    if (!page && !legacy) {
+      if (!messagesBySession.value.has(id)) scheduleMsgRetry(id);
+      return;
+    }
+    clearMsgRetry(id);
     const merged = new Map((page?.messages ?? []).map((m) => [m.info.id, m]));
     for (const m of legacy ?? []) {
       if (!merged.has(m.info.id)) merged.set(m.info.id, m);
@@ -2429,10 +2758,43 @@ export async function refreshMessages(id: string): Promise<void> {
     const knownCmd = new Set(
       inMemory.filter((m) => m.info.id.startsWith("cmd:")).map((m) => m.info.id),
     );
+    // A pending echo superseded by its durable row retires here: v2 writes
+    // the prompt's user row only at first step start and delivers it by
+    // fetch, so the echo can outlive the POST reply — without this it
+    // lingers as a second prompt bubble beside the real one. Matched by
+    // text against durable user rows from this fetch that postdate the
+    // echo's send (slack for client/server clock skew); a queued echo
+    // whose turn never started has no durable row and stays.
+    const partText = (m: ChatMessage) =>
+      m.parts.find(isText)?.text?.trim() ?? undefined;
+    const durableUsers = sorted.filter(
+      (m) => m.info.role === "user" && !m.info.id.startsWith("pending:"),
+    );
     sorted.push(
-      ...inMemory.filter((m) =>
-        m.info.id.startsWith("cmd:") || m.info.id.startsWith("pending:"),
-      ),
+      ...inMemory.filter((m) => {
+        if (m.info.id.startsWith("cmd:")) return true;
+        if (!m.info.id.startsWith("pending:")) {
+          // A row the stream delivered while this fetch was in flight
+          // (message.updated mid-await) is newer than the snapshot — keep
+          // it; the next refresh confirms it. Anything older the fetch
+          // doesn't serve was deleted server-side.
+          return (
+            !merged.has(m.info.id) &&
+            (m.info.time.created ?? 0) >= fetchStart - 2000
+          );
+        }
+        const text = partText(m);
+        const sent = m.info.time.created;
+        return !(
+          text &&
+          durableUsers.some(
+            (u) =>
+              partText(u) === text &&
+              (u.info.time.created ?? 0) >= sent - 2000 &&
+              u.info.id !== m.info.id,
+          )
+        );
+      }),
       ...storedCommandRows(id).filter((m) => !knownCmd.has(m.info.id)),
     );
     sorted.sort(byCreated);
@@ -2461,7 +2823,11 @@ export async function refreshMessages(id: string): Promise<void> {
     // persists text at part end, so a refresh mid-turn reverts the part to
     // empty and the next deltas rebuild it from the current stream position
     // (fence opener lost, formatting gone until the part lands). Keep
-    // whichever copy of each text part carries more.
+    // whichever copy of each text part carries more. v2 streams parts under
+    // kind-distinct ids (`:t0`, `:r0`) while the durable fetch names them by
+    // content index (`:0`, `:1`), so a streamed part matches its durable
+    // copy by kind and position when the id misses — and its live time
+    // anchors ride along, keeping the settled rate's generation spans exact.
     const stored = new Map(
       messagesBySession.value.get(id)?.map((m) => [m.info.id, m]) ?? [],
     );
@@ -2470,17 +2836,42 @@ export async function refreshMessages(id: string): Promise<void> {
         const old = stored.get(m.info.id);
         if (!old) return m;
         let merged = false;
+        const oldByKind = new Map<string, TextPart[]>();
+        for (const q of old.parts)
+          if (isText(q)) oldByKind.set(q.type, [...(oldByKind.get(q.type) ?? []), q]);
+        const kindSeen = new Map<string, number>();
         const parts = m.parts.map((p) => {
-          const was = old.parts.find((q) => q.id === p.id);
-          if (!was || !isText(p) || !isText(was)) return p;
+          if (!isText(p)) return p;
+          const k = kindSeen.get(p.type) ?? 0;
+          kindSeen.set(p.type, k + 1);
+          const was =
+            old.parts.find((q) => q.id === p.id) ??
+            oldByKind.get(p.type)?.[k];
+          if (!was || !isText(was)) return p;
           const longer = (was.text?.length ?? 0) > (p.text?.length ?? 0) ? was : p;
           // The durable copy's type is authoritative; only its text lags.
           // A type disagreement is a live copy created by deltas whose
           // typed full write was lost in an event gap (reconnect): it
           // rendered as answer text — keep the fresher text, take the
           // server's type.
-          const keep =
+          let keep =
             longer.type === p.type ? longer : { ...longer, type: p.type };
+          if (
+            (keep.time?.start === undefined && was.time?.start !== undefined) ||
+            (keep.time?.end === undefined && was.time?.end !== undefined)
+          )
+            keep = {
+              ...keep,
+              time: {
+                ...keep.time,
+                ...(keep.time?.start === undefined && was.time?.start !== undefined
+                  ? { start: was.time.start }
+                  : {}),
+                ...(keep.time?.end === undefined && was.time?.end !== undefined
+                  ? { end: was.time.end }
+                  : {}),
+              },
+            };
           if (keep !== p) merged = true;
           return keep;
         });
@@ -2490,18 +2881,37 @@ export async function refreshMessages(id: string): Promise<void> {
       }),
     );
     const cursors = new Map(messagesCursor.value);
-    cursors.set(id, page?.next);
+    // `older`: true = the tail proved older rows (asc walk not started),
+    // string = a started walk's continuation, undefined = complete. A
+    // refresh must not downgrade a started walk back to its start.
+    const prev = cursors.get(id);
+    const older =
+      typeof page?.older === "string" ? page.older : page?.older ? true : undefined;
+    cursors.set(id, typeof prev === "string" && older === true ? prev : older);
     messagesCursor.value = cursors;
+    // An idle session's loaded tail is settled — record it, or a page that
+    // never saw the idle event (F5, a fresh open) treats the long-dead
+    // tail as live the moment the next prompt flips the session busy: its
+    // footer re-animates and ticks from hours back.
+    const st = sessionStatus.value[id]?.type ?? "idle";
+    if (st !== "busy" && st !== "retry") {
+      const tail = [...visible].reverse().find(
+        (m) => m.info.role === "assistant",
+      )?.info.id;
+      if (tail) idleTails[id] = tail;
+    }
   } finally {
     loadingMessages.delete(id);
   }
 }
 
-// The older-page cursor per session (fetchMessages pages newest-first);
-// undefined means the transcript is complete. olderPool holds the legacy
-// rows held back below the display window (the legacy store is unpaged —
-// its whole bulk arrives on every refresh). hasOlder gates the control.
-export const messagesCursor = signal<Map<string, string | undefined>>(
+// The older-page state per session: true = the tail page proved older rows
+// exist (the asc walk hasn't started); a string = the walk's continuation
+// cursor; undefined means the transcript is complete. olderPool holds the
+// legacy rows held back below the display window (the legacy store is
+// unpaged — its whole bulk arrives on every refresh). hasOlder gates the
+// control.
+export const messagesCursor = signal<Map<string, string | true | undefined>>(
   new Map(),
 );
 const olderPool = new Map<string, ChatMessage[]>();
@@ -2513,13 +2923,14 @@ export function hasOlder(id: string): boolean {
   );
 }
 
-// Prepend the next older page. Deduped: a live turn can land rows between
-// pages, and the cursor may overlap a concurrent refresh. Returns false when
-// nothing was added (empty page). A partial page already cleared the cursor
-// in fetchMessages — the walk ends there, "Load older messages" with it.
+// Prepend the next older page. The v2 endpoint walks older rows only
+// forward: page 1 is order=asc (from the transcript's start), then cursor
+// pages — dedupe drops what we already hold. Returns false when nothing
+// was added (empty page). A partial page already cleared the cursor in
+// fetchMessages — the walk ends there, "Load older messages" with it.
 const loadingOlder = new Set<string>();
-// Per click. The server caps this between 200 and 400 (limit=400 → 400);
-// the default page is 50, too small to walk back through a long session.
+// Per click. The server caps this at 400; the default page is 50, too
+// small to walk back through a long session.
 const OLDER_PAGE = 100;
 // Rows rendered on a cold open, parity with the server's page size.
 const VIEW_WINDOW = 50;
@@ -2529,21 +2940,24 @@ export async function loadOlderMessages(id: string): Promise<boolean> {
   try {
     const cursor = messagesCursor.value.get(id);
     if (cursor) {
-      const page = await fetchMessages(id, cursor, OLDER_PAGE);
+      const page = await fetchMessages(id, {
+        ...(cursor === true ? { asc: true } : { cursor }),
+        size: OLDER_PAGE,
+      });
       if (page) {
+        let added = 0;
         if (page.messages.length > 0) {
           mutateMessages(id, (list) => {
             const have = new Set(list.map((m) => m.info.id));
-            return [
-              ...page.messages.filter((m) => !have.has(m.info.id)),
-              ...list,
-            ];
+            const fresh = page.messages.filter((m) => !have.has(m.info.id));
+            added = fresh.length;
+            return [...fresh, ...list];
           });
         }
         const cursors = new Map(messagesCursor.value);
-        cursors.set(id, page.next);
+        cursors.set(id, typeof page.older === "string" ? page.older : undefined);
         messagesCursor.value = cursors;
-        if (page.messages.length > 0) return true;
+        if (added > 0) return true;
         // An exhausted cursor can sit over a stocked pool (the endpoint
         // hands out a next cursor past its last v2 row): fall through.
       }
@@ -2746,16 +3160,88 @@ async function postPrompt(
     ),
   ];
   const sel = currentSelection(id);
-  const sent = await promptSession(id, parts, sel.agent, sel.model);
+  // v2 has no per-turn agent/model on the prompt body — the switches are
+  // session-scoped, so only send what actually differs from the session
+  // row (every switch writes a bookkeeping message row server-side).
+  let agent: string | undefined = sel.agent;
+  let model: ModelSelection | undefined = sel.model;
+  if (dialect() === "v2") {
+    const row = sessions.value.find((s) => s.id === id);
+    if (row) {
+      if (row.agent === sel.agent) agent = undefined;
+      const rm = row.model;
+      if (
+        rm &&
+        sel.model &&
+        rm.providerID === sel.model.providerID &&
+        rm.id === sel.model.id &&
+        (sel.model.variant === undefined || rm.variant === sel.model.variant)
+      )
+        model = undefined;
+    }
+  }
+  // Count the POST from the moment it leaves: its echo is unprotected
+  // until the reply upserts the row, and an idle reading in that window
+  // (reconnect resync, the busy backstop) would wipe the bubble.
+  const unpost = () => {
+    const left = (postedRows.get(id) ?? 1) - 1;
+    if (left > 0) postedRows.set(id, left);
+    else postedRows.delete(id);
+  };
+  postedRows.set(id, (postedRows.get(id) ?? 0) + 1);
+  const sent = await promptSession(id, parts, agent, model);
   if (!sent.ok) {
-    dropPending(id);
+    unpost();
+    // Keep the echo: dropping it deleted the user's text from the
+    // transcript (the composer already cleared) — a failed send leaves the
+    // bubble in place, the banner explains, and the 4s wait hold retires
+    // the spinner.
     sessionStatus.value = { ...sessionStatus.value, [id]: { type: "idle" } };
     setSendError(withReason("The message could not be sent", sent.error));
   } else {
     clearComposerFiles(id);
-    // Its user row hasn't landed yet — the ghost watch must not mistake
-    // it for a ghost once a stop wipes the echo (see postedRows).
-    postedRows.set(id, (postedRows.get(id) ?? 0) + 1);
+    // v2 replies the admitted user row with the POST — land it in place of
+    // the optimistic echo (v1 hears it as message.updated on /event). The
+    // row lands BEFORE the echo clears: the echo is the group separator,
+    // and a step row arriving in the gap would graft onto the previous
+    // turn.
+    if (sent.user) {
+      const uid = sent.user.id;
+      upsertMessage(id, {
+        id: uid,
+        role: "user",
+        time: { created: sent.user.created ?? Date.now() },
+      });
+      upsertPart(id, {
+        id: `${uid}:text`,
+        messageID: uid,
+        sessionID: id,
+        type: "text",
+        text: sent.user.text ?? body,
+      });
+      // The reply row carries text only — the attachments and mentions
+      // just sent ride along as file parts so chips and pills show at once
+      // (v1 gets them from the streamed row; a v2 refresh maps the row's
+      // files back into this same shape).
+      let fi = 0;
+      for (const p of parts) {
+        if (p.type !== "file") continue;
+        upsertPart(id, {
+          ...p,
+          id: `${uid}:f${fi++}`,
+          messageID: uid,
+          sessionID: id,
+        });
+      }
+      // The durable row is in place — NOW this prompt's echo can go (a
+      // second in-flight steer's echo stays until its own row lands).
+      retirePending(id, sent.user.text ?? body);
+      unpost();
+    } else {
+      // Its user row hasn't landed yet — the ghost watch must not mistake
+      // it for a ghost once a stop wipes the echo (see postedRows; the
+      // pre-POST bump above is this counter).
+    }
     // The send commits a pending revert: the server truncates the store at
     // the marker and clears it — drop the local copy so the fold lifts.
     patchSession(id, (s) => ({ ...s, revert: undefined }));
@@ -2882,7 +3368,10 @@ export async function runSlashCommand(
   // The command must run on what the session is on — a bare command turn
   // would otherwise rewrite the row (agent back to build, effort to
   // default). The draft just became a session carrying its preset.
-  if (!(await runCommand(id, name, m?.[2] ?? "", currentSelection(id)))) {
+  // Skills (v2 rows off /api/skill) run on their own route.
+  const isSkill = commands.value.find((c) => c.name === name)?.skill === true;
+  const sel = currentSelection(id);
+  if (!(await runCommand(id, name, m?.[2] ?? "", sel, isSkill))) {
     // The call can fail while the command's turn still runs server-side
     // (relay abort, server churn): status decides. Busy keeps the echo —
     // idle truth retires it and the stream delivers the rows — instead of
@@ -2918,6 +3407,18 @@ effect(() => {
     ...sessionStatus.value,
     [hit.id]: { type: "busy" },
   };
+  // A tab closed mid-queue dropped the cached transcript with the echo —
+  // re-append it so the drained prompt stays visible through its POST.
+  if (
+    hit.kind === "prompt" &&
+    messagesBySession.value.has(hit.id) &&
+    !(messagesBySession.value.get(hit.id) ?? []).some(
+      (m) =>
+        m.info.id.startsWith("pending:") &&
+        (m.parts.find(isText)?.text ?? "") === hit.text,
+    )
+  )
+    appendPending(hit.id, hit.text);
   if (hit.kind === "command") void runSlashCommand(hit.id, hit.text, true);
   else void postPrompt(hit.id, hit.text, hit.files ?? []);
 });
@@ -3019,7 +3520,10 @@ export async function answerQuestion(
   answers: string[][],
   v1 = false,
 ): Promise<void> {
-  const done = replyQuestion(sessionID, id, answers, v1);
+  const formFieldNames = pendingQuestions.value.find(
+    (q) => q.id === id && q.v1 !== true,
+  )?.formFieldNames;
+  const done = replyQuestion(sessionID, id, answers, v1, formFieldNames);
   markSettled(settledQuestions, id);
   pendingQuestions.value = pendingQuestions.value.filter((q) => q.id !== id);
   if (!(await done)) {

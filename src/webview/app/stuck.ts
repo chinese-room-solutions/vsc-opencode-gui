@@ -11,7 +11,7 @@
 // opt-in auto-abort. opencodeGui.stuckToolSeconds (baked by AppHost) is the
 // threshold; 0 disables detection. opencodeGui.stuckAutoAbortSeconds
 // escalates to an automatic interrupt; 0 (default) keeps it detection-only.
-import { isTool } from "./api";
+import { isTaskTool, isTool } from "./api";
 import type { Part } from "./api";
 import {
   fmtDur,
@@ -160,7 +160,8 @@ function stuckTick(): void {
         anyRunning = true;
         const since = seen.get(p.id)!;
         const childId =
-          p.tool === "task" && typeof p.state.metadata?.sessionId === "string"
+          isTaskTool(p.tool) &&
+          typeof p.state.metadata?.sessionId === "string"
             ? p.state.metadata.sessionId
             : undefined;
         // A child stalled on its own permission/question ask isn't stuck —

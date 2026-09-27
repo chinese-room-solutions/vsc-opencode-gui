@@ -1,4 +1,4 @@
-import "./setup.test";
+﻿import "./setup.test";
 import { strict as assert } from "node:assert";
 import {
   apiLog,
@@ -68,9 +68,11 @@ import {
   resolveFileRef,
   revertSession,
   runSlashCommand,
+  failedMsgLoads,
   sendError,
   sendPrompt,
   serverDefaultModel,
+  sessionsStalled,
   sessionStatus,
   sessionTile,
   sessionTitle,
@@ -87,6 +89,7 @@ import {
   hiddenModels,
   peerNames,
 } from "./store";
+import { setDialect } from "./api";
 import type { ChatMessage, Status } from "./store";
 import { clampPartText, isTruncatedPart, PART_TEXT_CAP } from "./api";
 import type {
@@ -608,8 +611,13 @@ describe("transcript windowing and Load older (5185f17)", () => {
     onApi((call) => {
       if (call.method !== "GET") return undefined;
       if (call.path.startsWith(`/api/session/${sid}/message`)) {
-        if (call.path.includes("cursor=c1"))
-          return { data: [], cursor: { next: "c2" } };
+        // The older-row walk: page 1 is order=asc (no cursor), then cursor
+        // pages — here the asc page holds only rows we already have (all
+        // dups, short page) and the cursor page is empty: the v2 transcript
+        // is exhausted, the legacy pool still holds rows.
+        if (call.path.includes("cursor=c2"))
+          return { data: [], cursor: { next: "c3" } };
+        if (call.path.includes("order=asc")) return { data: v2 };
         return { data: v2, cursor: { next: "c1" } };
       }
       if (call.path === `/session/${sid}/message`) return legacy;
@@ -622,10 +630,10 @@ describe("transcript windowing and Load older (5185f17)", () => {
     const list = listOf(sid);
     assert.equal(list.length, 50);
     assert.equal(list[0].info.id, "v120"); // boundary snapped to a user head
-    assert.equal(messagesCursor.value.get(sid), "c1");
+    assert.equal(messagesCursor.value.get(sid), true);
     assert.ok(hasOlder(sid));
     assert.ok(
-      callsFor(`/api/session/${sid}/message`)[0].path.includes("limit=50"),
+      callsFor(`/api/session/${sid}/message`)[0].path.includes("order=desc"),
     );
   });
 
@@ -644,7 +652,40 @@ describe("transcript windowing and Load older (5185f17)", () => {
     await refreshMessages(sid);
     assert.equal(listOf(sid).length, 170);
     assert.equal(listOf(sid)[0].info.id, "l0");
-    assert.equal(messagesCursor.value.get(sid), "c1");
+    assert.equal(messagesCursor.value.get(sid), true);
+  });
+
+  it("walks older rows through the asc pages", async () => {
+    const older = Array.from({ length: 100 }, (_, i) => ({
+      id: `o${i}`,
+      type: i % 2 === 0 ? "user" : "assistant",
+      time: { created: T0 + i * 10 },
+    }));
+    onApi((call) => {
+      if (call.method !== "GET") return undefined;
+      if (call.path.startsWith(`/api/session/${sid}/message`)) {
+        if (call.path.includes("cursor=w2"))
+          return { data: older.slice(50), cursor: { next: "w3" } };
+        if (call.path.includes("cursor=w1"))
+          return { data: older.slice(0, 50), cursor: { next: "w2" } };
+        if (call.path.includes("order=asc"))
+          return { data: older, cursor: { next: "w1" } };
+        return { data: v2, cursor: { next: "c1" } };
+      }
+      if (call.path === `/session/${sid}/message`) return [];
+      return undefined;
+    });
+    await refreshMessages(sid);
+    assert.equal(await loadOlderMessages(sid), true);
+    assert.equal(listOf(sid).length, 150);
+    assert.equal(listOf(sid)[0].info.id, "o0");
+    // A full asc page keeps the walk's continuation cursor.
+    assert.equal(messagesCursor.value.get(sid), "w1");
+    // Its next page overlaps nothing new and comes back short: the walk
+    // ends there even though the endpoint still served a cursor.
+    assert.equal(await loadOlderMessages(sid), false);
+    assert.equal(messagesCursor.value.get(sid), undefined);
+    assert.equal(listOf(sid).length, 150);
   });
 });
 
@@ -1090,7 +1131,7 @@ describe("turn projection from stream events", () => {
     assert.equal(sessionStatus.value[sid]?.type, "busy");
   });
 
-  it("tool lifecycle: pending → running → completed/failed", async () => {
+  it("tool lifecycle: pending â†’ running â†’ completed/failed", async () => {
     const sid = "tp4";
     open(sid, [row("a1", "assistant", T0)]);
     await sseFlush("session.next.tool.input.started", {
@@ -1316,7 +1357,7 @@ describe("turn projection from stream events", () => {
     assert.equal(a1?.info.tokens?.reasoning, 10);
     assert.equal(a1?.info.reportedChars, 13);
     // The streamed-chars/usage pairs feed the tail estimator's ratio: one
-    // dominant pair (1M chars / 100M tokens → 0.01) pins it regardless of
+    // dominant pair (1M chars / 100M tokens â†’ 0.01) pins it regardless of
     // whatever earlier tests contributed.
     await sseFlush("message.part.delta", {
       sessionID: sid,
@@ -1342,6 +1383,80 @@ describe("turn projection from stream events", () => {
       },
     });
     assert.ok(Math.abs(charsPerToken() - 0.01) < 1e-3);
+  });
+
+  it("v2 step.ended calibrates only tool-free rows and still accumulates", async () => {
+    const sid = "v2cal";
+    setBusy(sid);
+    open(sid, [
+      {
+        info: { id: "a1", role: "assistant", time: { created: T0 } },
+        parts: [textPart("p1", "a1", sid, "x".repeat(1_000_000))],
+      },
+    ]);
+    await sseFlush("session.next.step.ended", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      timestamp: T0,
+      tokens: tok({ output: 100_000_000 }),
+    });
+    assert.ok(Math.abs(charsPerToken() - 0.01) < 1e-3);
+    // A tool-carrying row bills the call's tokens against almost no chars:
+    // the extreme pair must not recalibrate the ratio.
+    open(sid, [
+      {
+        info: { id: "a1", role: "assistant", time: { created: T0 } },
+        parts: [textPart("p1", "a1", sid, "x".repeat(1_000_000))],
+      },
+      {
+        info: { id: "a2", role: "assistant", time: { created: T0 + 1 } },
+        parts: [toolPart("t1", "a2", sid, { path: "f" }), textPart("p2", "a2", sid, "hi")],
+      },
+    ]);
+    await sseFlush("session.next.step.ended", {
+      sessionID: sid,
+      assistantMessageID: "a2",
+      timestamp: T0 + 2,
+      tokens: tok({ output: 10_000_000 }),
+    });
+    assert.ok(Math.abs(charsPerToken() - 0.01) < 1e-3);
+    // The step's own numbers still land on the row.
+    const a2 = findRow(sid, "a2");
+    assert.equal(a2?.info.tokens?.output, 10_000_000);
+    assert.equal(a2?.info.reportedChars, 2);
+    assert.equal(a2?.info.time.completed, T0 + 2);
+  });
+
+  it("v2 step.ended skips the compaction summarizer for ring and session sums", async () => {
+    const sid = "v2comp";
+    sessions.value = [sessRow(sid)];
+    open(sid, [
+      {
+        info: {
+          id: "c1",
+          role: "assistant",
+          agent: "compaction",
+          time: { created: T0 },
+        },
+        parts: [textPart("p1", "c1", sid, "summary text")],
+      },
+    ]);
+    setBusy(sid);
+    await sseFlush("session.next.step.ended", {
+      sessionID: sid,
+      assistantMessageID: "c1",
+      timestamp: T0,
+      tokens: tok({ input: 5000, output: 100 }),
+    });
+    // The summarizer's usage measures the summary turn, not the session's
+    // context: the ring's freshest-step slot and the session sums stay
+    // untouched, while the row keeps its own numbers.
+    assert.equal(usageOf(sid), undefined);
+    assert.equal(
+      sessions.value.find((s) => s.id === sid)?.tokens.input,
+      0,
+    );
+    assert.equal(findRow(sid, "c1")?.info.tokens?.output, 100);
   });
 
   it("compaction steps never touch the ring numbers", async () => {
@@ -1718,7 +1833,7 @@ describe("sendPrompt", () => {
     );
     assert.ok(listOf("d1").some((m) => m.info.id.startsWith("pending:")));
   });
-  it("failure drops the echo and reports", async () => {
+  it("failure keeps the echo and reports", async () => {
     const sid = "sp2";
     open(sid, []);
     onApi((call) =>
@@ -1727,9 +1842,11 @@ describe("sendPrompt", () => {
         : undefined,
     );
     await sendPrompt(sid, "hi");
+    // The composer already cleared — the bubble is the only copy of the
+    // text, so a failed send must not delete it.
     assert.equal(
       listOf(sid).some((m) => m.info.id.startsWith("pending:")),
-      false,
+      true,
     );
     assert.equal(sendError.value?.text, "The message could not be sent.");
   });
@@ -1746,6 +1863,73 @@ describe("sendPrompt", () => {
       sendError.value?.text,
       "The message could not be sent: HTTP 500: Internal error.",
     );
+  });
+
+  it("an idle during the POST flight keeps the echo until its row lands", async () => {
+    const sid = "sp4";
+    open(sid, []);
+    await sendPrompt(sid, "in flight");
+    // v1 prompt_async replies before any row exists — the POST is still
+    // outstanding server-side when a stray idle lands.
+    await sseFlush("session.idle", { sessionID: sid });
+    assert.ok(
+      listOf(sid).some((m) => m.info.id.startsWith("pending:")),
+      "echo must survive an idle while its POST is outstanding",
+    );
+    await sseFlush("message.updated", {
+      sessionID: sid,
+      info: { id: "u4", role: "user", time: { created: T0 } },
+    });
+    assert.equal(
+      listOf(sid).some((m) => m.info.id.startsWith("pending:")),
+      false,
+    );
+    assert.ok(findRow(sid, "u4"));
+  });
+
+  it("one landed user row retires only one of two in-flight echoes", async () => {
+    const sid = "sp5";
+    setBusy(sid);
+    await sendPrompt(sid, "first steer");
+    await sendPrompt(sid, "second steer");
+    const echoes = () =>
+      listOf(sid).filter((m) => m.info.id.startsWith("pending:"));
+    assert.equal(echoes().length, 2);
+    await sseFlush("message.updated", {
+      sessionID: sid,
+      info: { id: "u1", role: "user", time: { created: T0 } },
+    });
+    assert.equal(echoes().length, 1, "the second steer's bubble must stay");
+    await sseFlush("message.updated", {
+      sessionID: sid,
+      info: { id: "u2", role: "user", time: { created: T0 + 1 } },
+    });
+    assert.equal(echoes().length, 0);
+    assert.ok(findRow(sid, "u1") && findRow(sid, "u2"));
+  });
+
+  it("a row delivered mid-fetch survives the refresh that missed it", async () => {
+    const sid = "sp6";
+    const now = Date.now();
+    open(sid, [
+      row("old", "user", T0),
+      row("live1", "user", now),
+    ]);
+    onApi((call) => {
+      const p = call.path.split("?")[0];
+      if (p === `/api/session/${sid}/message`)
+        return {
+          data: [{ id: "old", type: "user", time: { created: T0 }, text: "a" }],
+          cursor: {},
+        };
+      if (p === `/session/${sid}/message`) return [];
+      return undefined;
+    });
+    await refreshMessages(sid);
+    const ids = listOf(sid).map((m) => m.info.id);
+    assert.ok(ids.includes("live1"), "the streamed row must survive");
+    assert.ok(!ids.includes("gone"), "nothing stale is kept");
+    assert.ok(ids.includes("old"));
   });
 });
 
@@ -2057,7 +2241,7 @@ describe("hostMessage routing", () => {
     hostMessage({ type: "hidden-models", ids: ["a", 2, "b"] });
     assert.deepEqual(hiddenModels.value, ["a", "b"]);
   });
-  it("peers builds the id → name/title map", () => {
+  it("peers builds the id â†’ name/title map", () => {
     hostMessage({
       type: "peers",
       peers: [
@@ -2236,5 +2420,120 @@ describe("project purge", () => {
       "Deleted 1 of 2 sessions — the project was not removed.",
     );
     assert.equal(tombstones.value.includes("C:/work/repo"), false);
+  });
+});
+
+
+// 9c1f2e7: a boot inside the server restart window — every list fetch
+// failing at once — must read as stalled, not as "no sessions", and must
+// keep retrying until a page lands.
+describe("session-list retry across the restart window (9c1f2e7)", () => {
+  it("marks the list stalled, retries on backoff, and clears once a page lands", async () => {
+    const connected = async () => {
+      dispatchWindowMessage({
+        type: "sse-event",
+        event: { id: "evt_r", type: "server.connected", data: {} },
+      });
+      await flushEvents();
+      await settle();
+    };
+    let failing = true;
+    onApi((call) => {
+      if (call.path.startsWith("/api/session?") || call.path === "/session")
+        return failing ? API_FAIL : undefined;
+      return undefined;
+    });
+    await connected(); // the boot pull — every list fetch fails
+    assert.equal(sessionsStalled.value, true);
+    assert.equal(fireExact(1000), 1); // first retry still fails
+    await settle();
+    assert.equal(sessionsStalled.value, true);
+    assert.equal(fireExact(2000), 1); // backoff grew
+    await settle();
+    failing = false; // the server came up
+    assert.equal(fireExact(4000), 1);
+    await settle();
+    assert.equal(sessionsStalled.value, false); // no further retry fires
+  });
+});
+
+// 9c1f2e7: a transcript pull that cannot answer leaves the map empty —
+// the view would render a bare composer. The failure is surfaced and a
+// backoff loop re-pulls while the session is on screen.
+describe("transcript load retry (9c1f2e7)", () => {
+  it("marks the failed load, retries, and clears on success", async () => {
+    navigate({ view: "session", id: "rl1" });
+    let failing = true;
+    onApi((call) => {
+      const p = call.path.split("?")[0];
+      if (p === "/api/session/rl1/message" || p === "/session/rl1/message")
+        return failing ? API_FAIL : undefined;
+      return undefined;
+    });
+    await refreshMessages("rl1");
+    assert.equal(failedMsgLoads.value.has("rl1"), true);
+    assert.equal(messagesBySession.value.has("rl1"), false);
+
+    failing = false;
+    assert.equal(fireExact(1000), 1); // the retry lands
+    await settle();
+    assert.equal(failedMsgLoads.value.has("rl1"), false);
+  });
+
+  it("stops retrying once the session leaves the screen", async () => {
+    navigate({ view: "session", id: "rl2" });
+    onApi((call) => {
+      const p = call.path.split("?")[0];
+      if (p === "/api/session/rl2/message" || p === "/session/rl2/message")
+        return API_FAIL;
+      return undefined;
+    });
+    await refreshMessages("rl2");
+    assert.equal(failedMsgLoads.value.has("rl2"), true);
+    // The open tab alone keeps the retry alive — close it, not just route away.
+    closeSessionTab("rl2");
+    navigate({ view: "home" });
+    assert.equal(fireExact(1000), 1);
+    await settle();
+    assert.equal(failedMsgLoads.value.has("rl2"), false);
+    assert.equal(fireExact(2000), 0);
+  });
+});
+
+
+
+// e4b1c93: v2 writes the prompt's user row only at first step start and
+// delivers it by fetch, so the optimistic echo can outlive the POST reply.
+// The refresh that finally lands the durable row must retire the echo, not
+// render the prompt twice.
+describe("echo retirement on the durable user row (e4b1c93)", () => {
+  it("a refresh drops the echo once its durable user row arrives", async () => {
+    setDialect("v2");
+    try {
+      sessions.value = [sessRow("er1")];
+      onApi((call) => {
+        const p = call.path.split("?")[0];
+        if (call.method === "POST" && p === "/api/session/er1/prompt")
+          return {}; // admitted, but no user row in the reply
+        if (p === "/api/session/er1/message")
+          return {
+            data: [
+              { id: "a1", type: "assistant", time: { created: Date.now() }, text: "" },
+              { id: "u1", type: "user", time: { created: Date.now() }, text: "hello echo" },
+            ],
+            cursor: {},
+          };
+        return undefined;
+      });
+      await sendPrompt("er1", "hello echo");
+      await refreshMessages("er1");
+      const rows = messagesBySession.value.get("er1") ?? [];
+      const users = rows.filter((m) => m.info.role === "user");
+      assert.equal(users.length, 1);
+      assert.equal(users[0].info.id, "u1");
+      assert.equal(rows.some((m) => m.info.id.startsWith("pending:")), false);
+    } finally {
+      setDialect("v1");
+    }
   });
 });

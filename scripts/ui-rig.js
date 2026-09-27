@@ -37,6 +37,29 @@ const rigPort = process.argv[3]
 let apiPort = 43100 + Math.floor(Math.random() * 1000);
 if (apiPort === rigPort) apiPort++;
 
+// The opencode binary: OPENCODE_BIN overrides (e.g. a v2 @opencode/cli
+// exe), bare `opencode` from PATH otherwise. `--version` sniffs the
+// dialect (v1 prints "1.18.30", v2 "opencode v2.0.18"): a v2 serve is
+// password-protected by default, so the rig generates one (env-provided
+// wins) and bakes the Basic header — mirroring ServerManager. The dialect
+// is baked into the page meta like AppHost does.
+const opencodeBin = process.env.OPENCODE_BIN || "opencode";
+let isV2 = false;
+try {
+  const ver = require("child_process").spawnSync(opencodeBin, ["--version"], {
+    encoding: "utf8",
+    timeout: 10000,
+    shell: process.platform === "win32",
+  });
+  isV2 = /^opencode\s+v?2\./m.test(`${ver.stdout || ""}${ver.stderr || ""}`);
+} catch {
+  // Sniff failed — assume v1.
+}
+const serverPassword =
+  process.env.OPENCODE_SERVER_PASSWORD ||
+  (isV2 ? crypto.randomBytes(24).toString("hex") : undefined);
+console.log(`BIN   ${opencodeBin} (${isV2 ? "dialect v2" : "dialect v1"})`);
+
 // Install the oc-attachments skill before the server boots — skills are
 // discovered at boot. Same install the extension's ServerManager does.
 const configRoot =
@@ -51,7 +74,7 @@ if (fs.existsSync(attachmentsSkill)) {
   installSkill("oc-attachments", fs.readFileSync(attachmentsSkill, "utf-8"));
 }
 
-const child = spawn("opencode", ["serve", "--port", String(apiPort)], {
+const child = spawn(opencodeBin, ["serve", "--port", String(apiPort)], {
   cwd: workspaceDir,
   shell: process.platform === "win32",
   windowsHide: true,
@@ -62,6 +85,9 @@ const child = spawn("opencode", ["serve", "--port", String(apiPort)], {
   env: {
     ...process.env,
     XDG_DATA_HOME: path.join(workspaceDir, ".oc-data"),
+    ...(serverPassword
+      ? { OPENCODE_SERVER_PASSWORD: serverPassword }
+      : {}),
   },
 });
 
@@ -102,16 +128,26 @@ process.on("exit", kill); // hard kills (taskkill on node) still tree-kill the c
 // from the server here and SSE frames are forwarded as window messages
 // (e.data IS the message, like a webview postMessage), so the app runs
 // unchanged in a plain browser. Same nonce as the app script so CSP passes.
-const stubFor = (nonce, serverUrl) =>
-  `<script nonce="${nonce}">` +
+const stubFor = (nonce, serverUrl) => {
+  // Basic auth for password-protected servers, mirroring the extension
+  // host's serverAuthHeaders (any username). The password is whatever the
+  // rig gave the server (env-provided or generated for v2).
+  const auth = serverPassword
+    ? `"authorization": "Basic ${Buffer.from(
+        "opencode:" + serverPassword,
+      ).toString("base64")}",`
+    : "";
+  return `<script nonce="${nonce}">` +
   `(() => {` +
   `let pumped = false;` +
   `const startPump = () => {` +
   `if (pumped) return; pumped = true;` +
   `window.postMessage({ type: "sse-state", state: "connecting" }, "*");` +
   // Two streams, like AppHost: /api/event (v2 asks, state authority) and
-  // /event (the v1 turn dialect). The v1 envelope addresses `properties`;
-  // normalized here so the app sees one shape.
+  // /event (the v1 turn dialect; v2 servers never frame it, and the rig
+  // proxies both with auth — a browser EventSource cannot send the Basic
+  // header itself). The v1 envelope addresses `properties`; normalized
+  // here so the app sees one shape.
   `const feed = (url, primary) => {` +
   `const es = new EventSource(url);` +
   `if (primary) {` +
@@ -119,12 +155,14 @@ const stubFor = (nonce, serverUrl) =>
   `es.onerror = () => window.postMessage({ type: "sse-state", state: "offline" }, "*");` +
   `}` +
   `es.onmessage = (e) => {` +
-  `try { const raw = JSON.parse(e.data); window.postMessage({ type: "sse-event", event: { id: raw.id, type: raw.type, data: raw.data === undefined ? raw.properties : raw.data } }, "*"); }` +
+  // Mirrors the host's _pumpFrame: v2 frames carry a top-level `created`
+  // that must land in data.timestamp or the app's time stamps go missing.
+  `try { const raw = JSON.parse(e.data); const body = raw.data === undefined ? raw.properties : raw.data; window.postMessage({ type: "sse-event", event: { id: raw.id, type: raw.type, data: body && typeof body === "object" && raw.created !== undefined ? { timestamp: raw.created, ...body } : body } }, "*"); }` +
   `catch {}` +
   `};` +
   `};` +
-  `feed("${serverUrl}/api/event", true);` +
-  `feed("${serverUrl}/event", false);` +
+  `feed("/sse/api-event", true);` +
+  (isV2 ? "" : `feed("/sse/event", false);`) +
   `};` +
   `window.acquireVsCodeApi = () => ({` +
   `postMessage: (m) => {` +
@@ -134,7 +172,7 @@ const stubFor = (nonce, serverUrl) =>
   `try {` +
   `const res = await fetch("${serverUrl}" + m.path, {` +
   `method: m.method,` +
-  `headers: m.body === undefined ? undefined : { "content-type": "application/json" },` +
+  `headers: { ${auth}"content-type": m.body === undefined ? undefined : "application/json" },` +
   `body: m.body === undefined ? undefined : JSON.stringify(m.body),` +
   `});` +
   `const isJson = (res.headers.get("content-type") || "").includes("application/json");` +
@@ -155,6 +193,7 @@ const stubFor = (nonce, serverUrl) =>
   `getState: () => ({}), setState: () => {} });` +
   `})();` +
   `</script>`;
+};
 
 const shellHtml = (serverUrl) => {
   const nonce = crypto.randomBytes(16).toString("hex");
@@ -175,6 +214,8 @@ const shellHtml = (serverUrl) => {
     .replaceAll("{{APP_JS}}", "/app.js")
     .replaceAll("{{APP_CSS}}", "/app.css")
     .replaceAll("{{ORIGIN}}", serverUrl)
+    // Same contract as AppHost: the probed dialect baked at boot.
+    .replaceAll("{{DIALECT}}", isV2 ? "v2" : "")
     .replaceAll("{{ERROR_MESSAGE}}", "")
     .replaceAll("{{INSTALL_HINT}}", "")
     // Boot-restore metas honor env so Playwright can exercise restore
@@ -218,6 +259,38 @@ const shellHtml = (serverUrl) => {
     );
 };
 
+// SSE proxy: pipe one of the server's event streams to the page with the
+// auth header attached. A browser EventSource cannot send Basic auth, so
+// password-protected servers (v2 always; v1 with a password) would show
+// SSE offline without this. The page's EventSource reconnects when the
+// upstream ends — ending the response on drop is the whole retry story.
+const sseHeaders = serverPassword
+  ? {
+      authorization:
+        "Basic " + Buffer.from("opencode:" + serverPassword).toString("base64"),
+    }
+  : {};
+const proxyEvents = (res, path) => {
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-cache",
+  });
+  const abort = new AbortController();
+  res.on("close", () => abort.abort());
+  fetch(serverUrl + path, { headers: sseHeaders, signal: abort.signal })
+    .then(async (upstream) => {
+      if (!upstream.ok || !upstream.body) throw new Error(String(upstream.status));
+      const reader = upstream.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done || res.destroyed) break;
+        res.write(value);
+      }
+    })
+    .catch(() => {})
+    .finally(() => res.end());
+};
+
 const server = http.createServer((req, res) => {
   if (req.url === "/") {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -228,6 +301,10 @@ const server = http.createServer((req, res) => {
   } else if (req.url === "/app.css") {
     res.writeHead(200, { "content-type": "text/css; charset=utf-8" });
     fs.createReadStream(appCss).pipe(res);
+  } else if (req.url === "/sse/api-event") {
+    proxyEvents(res, "/api/event");
+  } else if (req.url === "/sse/event") {
+    proxyEvents(res, "/event");
   } else {
     res.writeHead(404);
     res.end();

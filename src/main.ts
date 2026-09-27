@@ -159,8 +159,14 @@ export function activate(context: vscode.ExtensionContext) {
       if (serverManager !== sm) return;
       log.error("server exited unexpectedly — respawning");
       serverManager = undefined;
-      hub.setLoading();
-      ensureServer();
+      // Dispose first (same as the agent-sync restart): clears the dead
+      // manager's lease heartbeat and proves the port free before the
+      // replacement binds it.
+      void sm.dispose().then(() => {
+        if (serverManager !== undefined) return;
+        hub.setLoading();
+        ensureServer();
+      });
     };
   };
 

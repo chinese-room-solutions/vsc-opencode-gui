@@ -11,6 +11,7 @@ import {
 import { StopIcon, WordmarkIcon } from "../icons";
 import { isText, isTool } from "../api";
 import {
+  failedMsgLoads,
   interruptedPrompts,
   loadOlderMessages,
   hasOlder,
@@ -39,11 +40,25 @@ import type { ChatMessage } from "../store";
 // the panel's top within the turn's box (styles.css).
 type Group = { key: string; msgs: ChatMessage[] };
 
+// A step row never lags its predecessor by minutes: prefill gaps run
+// seconds, and a slow queue runs long but not silently so. A gap past it
+// means the separator (the prompt's user row) went missing — v2 writes
+// that row only at first step start and only a refresh delivers it — so
+// without the guard the row grafts onto a long-dead turn and rides its
+// footer anchors (seen live: a turn anchored 3h46m back).
+const STEP_GAP_MAX_MS = 10 * 60_000;
+
 function groupTurns(list: ChatMessage[]): Group[] {
   const out: Group[] = [];
   for (const m of list) {
     const last = out[out.length - 1];
-    if (m.info.role === "assistant" && last) last.msgs.push(m);
+    const tail = last?.msgs[last.msgs.length - 1];
+    const gap =
+      tail && m.info.time.created && tail.info.time.created
+        ? m.info.time.created - tail.info.time.created
+        : 0;
+    if (m.info.role === "assistant" && last && gap < STEP_GAP_MAX_MS)
+      last.msgs.push(m);
     else out.push({ key: m.info.id, msgs: [m] });
   }
   return out;
@@ -359,9 +374,12 @@ export function Session(props: { sessionId?: string; parent?: string }) {
     !compacting &&
     !interruptedPrompts.value.has(visible[visible.length - 1].info.id);
   // A queued prompt reads differently: the server holds it until the
-  // current work reaches a step boundary. No clock — nothing is processing
-  // it yet, and a ticking timer would claim otherwise.
-  const queued = awaiting && queuedNow;
+  // current work reaches a step boundary. That covers a steer sent onto a
+  // running turn (its user row lands below the live one — the model is
+  // streaming above, so "Waiting for the model..." would be wrong) as
+  // well as a client-held queue. No clock — nothing is processing it
+  // yet, and a ticking timer would claim otherwise.
+  const queued = awaiting && (queuedNow || liveId !== undefined);
   // The turn is working but nothing shows it: every text part closed and no
   // tool row is running — a running tool pulses in its own row, and a second
   // pulsing indicator under the footer reads as a duplicate. The residue is
@@ -374,7 +392,8 @@ export function Session(props: { sessionId?: string; parent?: string }) {
     const liveMsg = visible?.find((m) => m.info.id === liveId);
     if (!liveMsg) return false;
     if (!liveMsg.parts.some((p) => isText(p) && p.text)) return false;
-    if (liveMsg.parts.some((p) => isTool(p) && p.state?.status === "running"))
+    if (liveMsg.parts.some((p) => isTool(p) &&
+      (p.state?.status === "running" || p.state?.status === "pending")))
       return false;
     return !liveMsg.parts.some(
       (p) => isText(p) && p.text && p.time?.end === undefined,
@@ -466,6 +485,13 @@ export function Session(props: { sessionId?: string; parent?: string }) {
               Load older messages
             </button>
           )}
+          {id && list === undefined && (
+            <div class="empty">
+              {failedMsgLoads.value.has(id)
+                ? "Couldn't load the transcript — retrying…"
+                : "Loading transcript…"}
+            </div>
+          )}
           {visible &&
             groups.map((g) => {
               // The compaction turn renders as one fold (Claude Code): the
@@ -517,6 +543,7 @@ export function Session(props: { sessionId?: string; parent?: string }) {
                   {g.msgs.some((m) => m.info.role === "assistant") && (
                     <TurnFooter
                       msgs={g.msgs}
+                      sid={id}
                       live={g.msgs.some((m) => m.info.id === liveId)}
                     />
                   )}

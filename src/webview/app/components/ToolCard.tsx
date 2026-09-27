@@ -1,7 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import hljs from "highlight.js/lib/common";
 import type { ToolPart } from "../api";
-import { isTool, toolName } from "../api";
+import { isBashTool, isTaskTool, isTool, toolName } from "../api";
 import { openFile, openUrl } from "../host";
 import { route, navigate } from "../router";
 import {
@@ -235,10 +235,14 @@ function BodyRow(props: { label: "IN" | "OUT"; text: string }) {
 // The pill text: the command for bash, the file path for edit/write, the
 // todo progress, the tool's own title or first descriptive argument otherwise.
 function summary(part: ToolPart): string {
-  if (part.tool === "bash") {
+  if (isBashTool(part.tool)) {
     return inputStr(part, "command") ?? part.state?.title ?? "";
   }
-  if (part.tool === "edit" || part.tool === "write") {
+  if (
+    part.tool === "edit" ||
+    part.tool === "write" ||
+    part.tool === "patch"
+  ) {
     return inputStr(part, "filePath", "file", "path") ?? part.state?.title ?? "";
   }
   if (part.tool === "apply_patch") {
@@ -354,7 +358,7 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
   // server death leaves it unfinalized in the store, and trusting it after
   // a reload spins chips for work nothing is doing. The child's own status
   // decides then (a steer re-activating a settled card included).
-  if (part.tool === "task") {
+  if (isTaskTool(part.tool)) {
     const status = part.state?.status ?? "pending";
     const description =
       inputStr(part, "description") ?? part.state?.title ?? "task";
@@ -389,7 +393,7 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
     (!!state?.error && state.error !== "") ||
     output.includes("User aborted the command");
   const path =
-    part.tool === "edit" || part.tool === "write"
+    part.tool === "edit" || part.tool === "write" || part.tool === "patch"
       ? inputStr(part, "filePath", "file", "path")
       : undefined;
   // apply_patch names its file only in the structured result.
@@ -411,7 +415,7 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
   // IN carries the command for shell-like calls; other tools name their
   // target in the header pill, so only OUT applies to them.
   const command =
-    part.tool === "bash" ? (inputStr(part, "command") ?? "") : "";
+    isBashTool(part.tool) ? (inputStr(part, "command") ?? "") : "";
   const expandable = Boolean(command || outText || diff || todos.length);
 
   return (

@@ -136,7 +136,16 @@ suite("opencode ServerManager", function () {
     assert.ok(
       lease?.some((e) => e.port === port && e.session === vscode.env.sessionId),
     );
-    assert.ok(Array.isArray(await sm.listSessions()), "GET /session works");
+    // The first /session after a boot can take ~12s inside the harness
+    // (a one-time lazy init in the server binary — instant standalone,
+    // and the second call is always fast). Poll past it instead of
+    // racing ServerManager's 10s request cap.
+    let sessions: unknown;
+    for (let i = 0; i < 6 && !Array.isArray(sessions); i++) {
+      sessions = await sm.listSessions();
+      if (!Array.isArray(sessions)) await new Promise((r) => setTimeout(r, 500));
+    }
+    assert.ok(Array.isArray(sessions), "GET /session works");
     const catalog = await sm.providerCatalog();
     assert.ok(catalog && Array.isArray(catalog.connected) && Array.isArray(catalog.all));
     if (process.platform === "win32") {

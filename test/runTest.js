@@ -15,17 +15,35 @@ delete process.env.ELECTRON_RUN_AS_NODE;
 
 const portFile = path.join(os.tmpdir(), "oc-test-server-port");
 
-// Workspace under test — any local folder works; override with
-// OC_TEST_WORKSPACE on another machine. pathToFileURL for absolute paths:
+// Workspace under test — a throwaway folder per run (the spawned server
+// may write state into it); override with OC_TEST_WORKSPACE to aim the
+// suite at a real project. pathToFileURL for the absolute path:
 // concatenating onto "file:///" turns a POSIX path into file:////…, which
 // VS Code fails to open — the window then has no folder and the suite dies
-// on workspaceFolders[0].
-const workspaceDir = (
-  process.env.OC_TEST_WORKSPACE || "D:/workspace/oc-rig-ws"
-).replace(/\\/g, "/");
-const workspaceUri = /^\/|^[A-Za-z]:/.test(workspaceDir)
-  ? pathToFileURL(workspaceDir).href
-  : `file:///${workspaceDir}`;
+// on workspaceFolders[0]. The temp dir is git-initialized: the
+// server-attach test proves ownership through /project/current's
+// worktree, and a non-repo folder answers the "global" project — no
+// manager would ever attach.
+const makeWorkspace = () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-test-ws-"));
+  spawnSync("git", ["-C", dir, "init", "-q"], { encoding: "utf8" });
+  return dir;
+};
+const workspaceDir = process.env.OC_TEST_WORKSPACE
+  ? process.env.OC_TEST_WORKSPACE.replace(/\\/g, "/")
+  : makeWorkspace();
+const workspaceUri = pathToFileURL(workspaceDir).href;
+
+// Hermetic data dir: the spawned servers otherwise list/serve the REAL
+// user session store, whose size (months of sessions) made /session slow
+// enough to trip the request caps intermittently. Config stays real —
+// only the data (sessions, auth) is isolated. Override with
+// OC_TEST_KEEP_DATA to aim at the real store.
+if (!process.env.OC_TEST_KEEP_DATA) {
+  process.env.XDG_DATA_HOME = path.join(
+    fs.mkdtempSync(path.join(os.tmpdir(), "oc-test-data-")),
+  );
+}
 
 async function main() {
   if (!fs.existsSync(workspaceDir)) {

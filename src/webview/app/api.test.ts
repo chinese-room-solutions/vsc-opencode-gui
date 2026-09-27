@@ -379,7 +379,7 @@ describe("api", () => {
           };
         }
       });
-      const page = await fetchMessages("sx", undefined, 3);
+      const page = await fetchMessages("sx", { size: 3 });
       assert.deepEqual(
         page!.messages.map((m) => m.info.id),
         ["u1", "a1"],
@@ -409,19 +409,19 @@ describe("api", () => {
       assert.deepEqual(tool.state?.input, { command: "ls" });
       assert.equal(tool.state?.error, "Tool execution interrupted");
       assert.equal(text.text, "answer");
-      // a full page keeps the older-page cursor
-      assert.equal(page!.next, "page2");
+      // a full tail page flags "older may exist" (the asc walk's start)
+      assert.equal(page!.older, true);
     });
-    it("drops the cursor on a short page (transcript complete)", async () => {
+    it("marks a short tail page complete (transcript done)", async () => {
       onApi((call) => {
         if (call.path.includes("/api/session/sy/message"))
           return { data: [{ id: "u1", type: "user", time: { created: 1 } }], cursor: { next: "stale" } };
       });
       const page = await fetchMessages("sy");
       assert.equal(page!.messages.length, 1);
-      assert.equal(page!.next, undefined);
+      assert.equal(page!.older, undefined);
     });
-    it("keeps the cursor when the page came back full", async () => {
+    it("flags older rows on a full tail page", async () => {
       const rows = Array.from({ length: 50 }, (_, i) => ({
         id: `m${i}`,
         type: "user",
@@ -433,7 +433,7 @@ describe("api", () => {
       });
       const page = await fetchMessages("sz");
       assert.equal(page!.messages.length, 50);
-      assert.equal(page!.next, "more");
+      assert.equal(page!.older, true);
     });
     it("answers relay failures with undefined", async () => {
       onApi(() => API_FAIL);
