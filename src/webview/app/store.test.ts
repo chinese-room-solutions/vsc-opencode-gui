@@ -1314,6 +1314,32 @@ describe("turn projection from stream events", () => {
     assert.equal(a1?.info.cost, 0.25);
   });
 
+  it("v2 step.ended: zeroed usage is an announcement, not a measurement", async () => {
+    const sid = "tpz";
+    sessions.value = [sessRow(sid)];
+    open(sid, [row("a1", "assistant", T0)]);
+    await sseFlush("session.next.step.ended", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      timestamp: T0,
+      tokens: tok(),
+      cost: 0,
+    });
+    assert.equal(usageOf(sid), undefined);
+    const before = sessions.value.find((s) => s.id === sid)?.tokens.input;
+    await sseFlush("session.next.step.ended", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      timestamp: T0 + 1,
+      tokens: tok({ input: 5, total: 5 }),
+      cost: 0.25,
+    });
+    assert.equal(usageOf(sid)?.tokens.input, 5);
+    const sess = sessions.value.find((s) => s.id === sid);
+    assert.equal(sess?.tokens.input, (before ?? 0) + 5);
+    assert.equal(sess?.cost, 0.25);
+  });
+
   it("v1 step-finish accumulates, stamps the boundary, and calibrates the ratio", async () => {
     const sid = "sfcal";
     open(sid, [row("a1", "assistant", T0)]);

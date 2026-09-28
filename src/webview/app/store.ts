@@ -415,6 +415,29 @@ export const stepUsage = signal<
   Record<string, { timestamp: number; tokens: MessageTokens }>
 >({});
 
+// Step-usage stamps and sums, shared by the v1 step-finish and v2
+// session.next.step.ended paths.
+function stampStepUsage(sid: string, tokens: MessageTokens, ts?: number): void {
+  stepUsage.value = {
+    ...stepUsage.value,
+    [sid]: { timestamp: ts ?? Date.now(), tokens },
+  };
+}
+function addTokens(
+  a: MessageTokens | undefined,
+  b: MessageTokens | undefined,
+): MessageTokens {
+  return {
+    input: (a?.input ?? 0) + (b?.input ?? 0),
+    output: (a?.output ?? 0) + (b?.output ?? 0),
+    reasoning: (a?.reasoning ?? 0) + (b?.reasoning ?? 0),
+    cache: {
+      read: (a?.cache?.read ?? 0) + (b?.cache?.read ?? 0),
+      write: (a?.cache?.write ?? 0) + (b?.cache?.write ?? 0),
+    },
+  };
+}
+
 // Chars-per-token learned from boundary feedback: whenever a step's usage
 // lands, the chars streamed since the previous boundary measure the
 // endpoint's true ratio (GLM measures ~4.3-4.7, not the 5 the tail
@@ -1712,29 +1735,22 @@ function applyEvent(event: ServerEvent): void {
             .get(data.sessionID)
             ?.find((m) => m.info.id === data.assistantMessageID)
         : undefined;
-      if (data.sessionID && data.tokens && compRow?.info.agent !== "compaction") {
-        const t = data.tokens;
-        stepUsage.value = {
-          ...stepUsage.value,
-          [data.sessionID]: {
-            timestamp: data.timestamp ?? Date.now(),
-            tokens: t,
-          },
-        };
+      if (
+        data.sessionID &&
+        data.tokens &&
+        // Zeroed usage is a step announcement, not a measurement — taking
+        // it would pin the ring at 0 until the next real step (the v1
+        // step-finish path carries the same guard).
+        tokensTotal(data.tokens) &&
+        compRow?.info.agent !== "compaction"
+      ) {
+        stampStepUsage(data.sessionID, data.tokens, data.timestamp);
         // The step's numbers are a delta: the session row keeps the running
         // sum (server truth returns with the next full refresh).
         patchSession(data.sessionID, (s) => ({
           ...s,
           cost: s.cost + (data.cost ?? 0),
-          tokens: {
-            input: s.tokens.input + t.input,
-            output: s.tokens.output + t.output,
-            reasoning: s.tokens.reasoning + t.reasoning,
-            cache: {
-              read: s.tokens.cache.read + t.cache.read,
-              write: s.tokens.cache.write + t.cache.write,
-            },
-          },
+          tokens: addTokens(s.tokens, data.tokens),
         }));
       }
       break;
@@ -2030,10 +2046,7 @@ function applyEvent(event: ServerEvent): void {
           .get(sid)
           ?.find((m) => m.info.id === part.messageID);
         if (row?.info.agent !== "compaction") {
-          stepUsage.value = {
-            ...stepUsage.value,
-            [sid]: { timestamp: data.timestamp ?? Date.now(), tokens },
-          };
+          stampStepUsage(sid, tokens, data.timestamp);
           // The step's usage is a delta and the row keeps streaming past
           // the boundary: accumulate (not replace) and stamp the chars the
           // usage covers, so the tail estimate and the rate counter keep
@@ -2057,15 +2070,7 @@ function applyEvent(event: ServerEvent): void {
           patchMessage(sid, part.messageID, (info) => ({
             ...info,
             ...(cost !== undefined ? { cost: (info.cost ?? 0) + cost } : {}),
-            tokens: {
-              input: (info.tokens?.input ?? 0) + (tokens.input ?? 0),
-              output: (info.tokens?.output ?? 0) + (tokens.output ?? 0),
-              reasoning: (info.tokens?.reasoning ?? 0) + (tokens.reasoning ?? 0),
-              cache: {
-                read: (info.tokens?.cache?.read ?? 0) + (tokens.cache?.read ?? 0),
-                write: (info.tokens?.cache?.write ?? 0) + (tokens.cache?.write ?? 0),
-              },
-            },
+            tokens: addTokens(info.tokens, tokens),
             reportedChars: chars,
           }));
         }
@@ -2343,9 +2348,8 @@ function applyEvent(event: ServerEvent): void {
             (data.tokens.output ?? 0) + (data.tokens.reasoning ?? 0),
           );
         patchMessage(sid, data.assistantMessageID, (info) => {
-          const t = info.tokens;
           const d = data.tokens;
-          const total = (t?.total ?? 0) + (d?.total ?? 0);
+          const total = (info.tokens?.total ?? 0) + (d?.total ?? 0);
           return {
             ...info,
             time: { ...info.time, completed: data.timestamp },
@@ -2355,13 +2359,7 @@ function applyEvent(event: ServerEvent): void {
             ...(d && tokensTotal(d)
               ? {
                   tokens: {
-                    input: (t?.input ?? 0) + (d.input ?? 0),
-                    output: (t?.output ?? 0) + (d.output ?? 0),
-                    reasoning: (t?.reasoning ?? 0) + (d.reasoning ?? 0),
-                    cache: {
-                      read: (t?.cache?.read ?? 0) + (d.cache?.read ?? 0),
-                      write: (t?.cache?.write ?? 0) + (d.cache?.write ?? 0),
-                    },
+                    ...addTokens(info.tokens, d),
                     ...(total > 0 ? { total } : {}),
                   },
                   // Boundary stamp: chars streamed past this point are the
