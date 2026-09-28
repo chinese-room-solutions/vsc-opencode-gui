@@ -2642,3 +2642,22 @@ describe("echo retirement on the durable user row (e4b1c93)", () => {
     }
   });
 });
+
+// 1836cd3: the provider catalog and the config default both read the
+// /api/config docs — one refresh must hit the route once.
+describe("v2 refresh fetches /api/config once (1836cd3)", () => {
+  it("shares the config docs across providers and config", async () => {
+    setDialect("v2");
+    try {
+      dispatchWindowMessage({
+        type: "sse-event",
+        event: { id: "evt_c1", type: "server.connected", data: {} },
+      });
+      await flushEvents();
+      await settle();
+      assert.equal(callsFor("/api/config").length, 1);
+    } finally {
+      setDialect("v1");
+    }
+  });
+});

@@ -23,6 +23,7 @@ import {
   fetchSession,
   fetchSessions,
   fetchSessionStatus,
+  fetchConfigDocs,
   fetchProjects,
   findFiles,
   interruptSession,
@@ -583,16 +584,17 @@ async function refreshBase(): Promise<void> {
   // The workspace directory, known before any fetch when the host stamped
   // it (the extension); the v2 model catalog is location-scoped without it.
   const here = meta("opencode-workspace");
+  const configDocs = await fetchConfigDocs();
   const [statuses, page, providerList, agentList, commandList, projectList, current, config] =
     await Promise.all([
       fetchSessionStatus(),
       fetchSessions(),
-      fetchProviders(here ?? undefined),
+      fetchProviders(here ?? undefined, configDocs),
       fetchAgents(),
       fetchCommands(),
       fetchProjects(),
       fetchCurrentProject(),
-      fetchConfig(),
+      fetchConfig(configDocs),
     ]);
   if (gen !== generation) return;
   if (statuses) sessionStatus.value = statuses;
@@ -723,7 +725,9 @@ export function refreshProvidersIfStale(): void {
   const now = Date.now();
   if (now - lastStalePull < 2000) return;
   lastStalePull = now;
-  void fetchProviders(currentDir.value || undefined).then((list) => {
+  void fetchConfigDocs().then((docs) =>
+    fetchProviders(currentDir.value || undefined, docs),
+  ).then((list) => {
     if (list) providers.value = list;
   });
 }

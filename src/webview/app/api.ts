@@ -302,6 +302,7 @@ function inputRecord(list?: string[]): ModelInput | undefined {
 // the route returns an empty list when handed one.
 export async function fetchProviders(
   directory?: string,
+  configDocs?: ConfigDocs,
 ): Promise<Providers | undefined> {
   if (serverDialect !== "v2")
     return getJson<Providers>("/provider");
@@ -311,9 +312,7 @@ export async function fetchProviders(
   const [providers, models, config] = await Promise.all([
     getJson<{ data?: { id?: string; name?: string }[] }>("/api/provider"),
     getJson<{ data?: V2ModelRow[] }>(`/api/model${modelQs}`),
-    getJson<
-      { info?: { model?: { providerID?: string; model?: string } } }[]
-    >("/api/config"),
+    configDocs ?? fetchConfigDocs(),
   ]);
   if (!models) return undefined;
   // A scoped answer of zero models is the server's cold-start window (~1s
@@ -379,9 +378,22 @@ export async function fetchProviders(
 // v2's /api/config is an array of source documents; the first doc with an
 // info.model block is the user's configured default (the /api/model/default
 // route answers the built-in public default instead, which no one picked).
-function v2ConfigDefaultModel(
-  docs: { info?: { model?: { providerID?: string; model?: string } } }[] | undefined,
-): { providerID?: string; model?: string } | undefined {
+export type ConfigDocs =
+  | { info?: { model?: { providerID?: string; model?: string } } }[]
+  | undefined;
+
+// One fetch per refresh: both the provider catalog and the config default
+// read these docs — callers pull once and pass the result through.
+export async function fetchConfigDocs(): Promise<ConfigDocs> {
+  return serverDialect === "v2"
+    ? getJson<NonNullable<ConfigDocs>>("/api/config")
+    : undefined;
+}
+
+function v2ConfigDefaultModel(docs: ConfigDocs): {
+  providerID?: string;
+  model?: string;
+} | undefined {
   for (const d of docs ?? [])
     if (d?.info?.model?.providerID) return d.info.model;
   return undefined;
@@ -396,11 +408,11 @@ export interface ServerConfig {
   provider?: Record<string, unknown>;
 }
 
-export async function fetchConfig(): Promise<ServerConfig | undefined> {
+export async function fetchConfig(
+  configDocs?: ConfigDocs,
+): Promise<ServerConfig | undefined> {
   if (serverDialect === "v2") {
-    const docs = await getJson<
-      { info?: { model?: { providerID?: string; model?: string } } }[]
-    >("/api/config");
+    const docs = configDocs ?? (await fetchConfigDocs());
     const model = v2ConfigDefaultModel(docs);
     return model?.providerID && model.model
       ? { model: `${model.providerID}/${model.model}` }
