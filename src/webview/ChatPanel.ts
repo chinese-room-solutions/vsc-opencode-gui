@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import {
   AppHost,
   type HiddenModels,
+  type HiddenProviders,
   type OpenProjectHandler,
   type ProjectStore,
   type RouteStore,
@@ -37,6 +38,7 @@ export class ChatPanel implements vscode.Disposable {
     projectStore: ProjectStore,
     openProject: OpenProjectHandler,
     hiddenModels: HiddenModels,
+    hiddenProviders: HiddenProviders,
     column?: vscode.ViewColumn,
   ) {
     this._hub = hub;
@@ -48,6 +50,7 @@ export class ChatPanel implements vscode.Disposable {
       projectStore,
       openProject,
       hiddenModels,
+      hiddenProviders,
     );
     this._panel = vscode.window.createWebviewPanel(
       CHAT_VIEWTYPE,
@@ -96,6 +99,7 @@ export class ChatPanel implements vscode.Disposable {
     projectStore: ProjectStore,
     openProject: OpenProjectHandler,
     hiddenModels: HiddenModels,
+    hiddenProviders: HiddenProviders,
   ): ChatPanel {
     ChatPanel._instance?.dispose();
     ChatPanel._instance = new ChatPanel(
@@ -107,6 +111,7 @@ export class ChatPanel implements vscode.Disposable {
       projectStore,
       openProject,
       hiddenModels,
+      hiddenProviders,
       panel.viewColumn ?? vscode.ViewColumn.Active,
     );
     panel.dispose();
@@ -122,6 +127,7 @@ export class ChatPanel implements vscode.Disposable {
     projectStore: ProjectStore,
     openProject: OpenProjectHandler,
     hiddenModels: HiddenModels,
+    hiddenProviders: HiddenProviders,
   ): ChatPanel {
     ChatPanel._instance ??= new ChatPanel(
       hub,
@@ -132,6 +138,7 @@ export class ChatPanel implements vscode.Disposable {
       projectStore,
       openProject,
       hiddenModels,
+      hiddenProviders,
     );
     ChatPanel._instance._panel.reveal();
     return ChatPanel._instance;
@@ -150,6 +157,7 @@ export class ChatPanel implements vscode.Disposable {
     projectStore: ProjectStore,
     openProject: OpenProjectHandler,
     hiddenModels: HiddenModels,
+    hiddenProviders: HiddenProviders,
   ): ChatPanel {
     ChatPanel._instance?.dispose();
     return ChatPanel.show(
@@ -161,6 +169,7 @@ export class ChatPanel implements vscode.Disposable {
       projectStore,
       openProject,
       hiddenModels,
+      hiddenProviders,
     );
   }
 

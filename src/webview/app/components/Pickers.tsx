@@ -3,17 +3,22 @@ import type { Agent, ModelSelection } from "../api";
 import { CheckIcon, ChevronIcon, SearchIcon, SlidersIcon } from "../icons";
 import { postToHost } from "../host";
 import { tileFor } from "../tile";
+import { Swatches } from "./Swatches";
 import {
   agents,
   currentSelection,
   defaultAgent,
   displayModel,
   hiddenModels,
+  hiddenProviders,
   modelFree,
   modelLabel,
   modelVariants,
   popover,
+  providerColors,
   providers,
+  refreshProvidersIfStale,
+  setProviderColor,
   setPopover,
   setSelection,
 } from "../store";
@@ -32,6 +37,9 @@ interface Entry {
   hint?: string;
   badge?: string;
   active?: boolean;
+  // Present-but-unpickable (a provider whose models haven't loaded): the
+  // row stays visible and keyboard-reachable, Enter just does nothing.
+  disabled?: boolean;
 }
 
 interface Group {
@@ -100,12 +108,13 @@ function Row(props: {
     <button
       role="option"
       aria-selected={Boolean(e.active)}
+      aria-disabled={Boolean(e.disabled)}
       class={`menu-item${e.active ? " selected" : ""}${
         props.highlighted ? " active" : ""
-      }`}
+      }${e.disabled ? " disabled" : ""}`}
       onMouseDown={(ev) => {
         ev.preventDefault();
-        props.onPick();
+        if (!e.disabled) props.onPick();
       }}
     >
       <span class="menu-texts">
@@ -159,13 +168,22 @@ function Menu(props: {
 
 // Model: "Search models" field on top, then one muted header per connected
 // provider with its models under it, and a Manage models footer that hands
-// over to the native command.
+// over to the native command — scoped to the listed provider's models.
 function ModelMenu(props: {
   groups: Group[];
   onPick: (key: string) => boolean;
   onClose: () => void;
+  providerID?: string;
+  // Shown instead of "No models available" when the provider's rows are
+  // expected but not here yet (v2 discovery still filling).
+  emptyNote?: string;
 }) {
   const [query, setQuery] = useState("");
+  // Opening into loading rows is the one signal the pull schedule missed:
+  // re-pull the catalog (self-heals the fill the ladder abandoned).
+  useEffect(() => {
+    refreshProvidersIfStale();
+  }, []);
   const q = query.trim().toLowerCase();
   const groups = q
     ? props.groups
@@ -223,7 +241,9 @@ function ModelMenu(props: {
         ))}
         {flat.length === 0 && (
           <div class="menu-empty">
-            {query ? "No matching models" : "No models available"}
+            {query
+              ? "No matching models"
+              : (props.emptyNote ?? "No models available")}
           </div>
         )}
       </div>
@@ -232,7 +252,10 @@ function ModelMenu(props: {
         onMouseDown={(e) => {
           e.preventDefault();
           props.onClose();
-          postToHost({ type: "manage-models" });
+          postToHost({
+            type: "manage-models",
+            ...(props.providerID ? { provider: props.providerID } : {}),
+          });
         }}
       >
         <SlidersIcon />
@@ -244,20 +267,54 @@ function ModelMenu(props: {
 
 // Chip + popover with a click-away backdrop. The chip renders its own label;
 // nothing portals — the popover anchors to the chip (`.picker`), which is its
-// nearest positioned ancestor.
+// nearest positioned ancestor. A `tile` + `tileMenu` pair (the model chip's
+// provider picker) renders as its own button left of the chip, opening the
+// caller-supplied menu — the shared `popover` signal keeps it exclusive with
+// the chip menus.
 function Chip(props: {
   title: string;
   kind: Popover;
   entries?: Entry[];
   groups?: Group[];
   onPick: (key: string) => boolean;
+  modelProviderID?: string;
+  emptyNote?: string;
+  tile?: { key: string; color?: string };
+  tileMenu?: preact.ComponentChildren;
   children?: preact.ComponentChildren;
 }) {
   const open = popover.value === props.kind;
+  const tileOpen = popover.value === "tile";
   const close = () => setPopover(undefined);
+  const tile = props.tile && props.tileMenu ? props.tile : undefined;
+  const t = tile ? tileFor(tile.key, tile.color) : undefined;
+  useEffect(() => {
+    if (!tileOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setPopover(undefined);
+      }
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [tileOpen]);
   return (
     <div class="picker">
-      {open && <div class="backdrop" onClick={close} />}
+      {(open || tileOpen) && <div class="backdrop" onClick={close} />}
+      {tile && t && (
+        <button
+          class="comp-chip comp-tile-btn"
+          title="Provider"
+          aria-expanded={tileOpen}
+          onClick={() => setPopover(tileOpen ? undefined : "tile")}
+        >
+          <span class="tile comp-tile" style={{ background: t.color }}>
+            {t.letter}
+          </span>
+        </button>
+      )}
       <button
         class="comp-chip"
         title={props.title}
@@ -271,7 +328,13 @@ function Chip(props: {
       </button>
       {open &&
         (props.groups ? (
-          <ModelMenu groups={props.groups} onPick={props.onPick} onClose={close} />
+          <ModelMenu
+            groups={props.groups}
+            onPick={props.onPick}
+            onClose={close}
+            providerID={props.modelProviderID}
+            emptyNote={props.emptyNote}
+          />
         ) : (
           <Menu
             kind={props.kind}
@@ -280,6 +343,7 @@ function Chip(props: {
             onClose={close}
           />
         ))}
+      {tileOpen && tile && props.tileMenu}
     </div>
   );
 }
@@ -361,38 +425,159 @@ export function VariantPicker(props: { id?: string }) {
   );
 }
 
+// The provider menu (the model chip's tile button): every listed connected
+// provider as a row (hidden ones drop out; the active one always stays —
+// the user must see what they're on), the selected provider's palette
+// unfolded below, and a Manage providers footer handing to the native
+// command. Picking a provider switches the composer to that provider's
+// first model — the model chip then lists only its models.
+function ProviderMenu(props: { id?: string; onClose: () => void }) {
+  const sel = currentSelection(props.id);
+  // Same attention-driven heal as the model menu.
+  useEffect(() => {
+    refreshProvidersIfStale();
+  }, []);
+  const connected = providers.value?.connected ?? [];
+  const all = providers.value?.all ?? [];
+  // The tile displays the connected TWIN's providerID (displayModel), so the
+  // recolor and the active-row check must key on the same twin — the raw
+  // sel.model.providerID can be its unconnected counterpart and the color
+  // would land on a key the tile never reads.
+  const cur = displayModel(sel.model)?.providerID;
+  const hidden = new Set(hiddenProviders.value);
+  const hiddenModelsFor = (pid: string) => {
+    const rows = Object.keys(all.find((x) => x.id === pid)?.models ?? {});
+    return new Set(rows.filter((mid) => hiddenModels.value.includes(`${pid}/${mid}`)));
+  };
+  const entries: Entry[] = connected
+    .filter((pid) => pid === cur || !hidden.has(pid))
+    .map((pid) => {
+      const listed = Object.keys(all.find((x) => x.id === pid)?.models ?? {});
+      const visible = listed.length - hiddenModelsFor(pid).size;
+      // A provider the catalog has no rows for yet (v2 discovery fills
+      // late), or one whose every model is hidden, has nothing to switch
+      // to — the row stays but can't be picked, instead of a pick that
+      // silently closes the menu.
+      const dead = pid !== cur && visible === 0;
+      return {
+        key: pid,
+        label: all.find((x) => x.id === pid)?.name ?? pid,
+        active: pid === cur,
+        disabled: dead,
+        hint: dead
+          ? listed.length > 0
+            ? "No visible models"
+            : "Loading models…"
+          : undefined,
+      };
+    });
+  const pick = (index: number) => {
+    const e = entries[index];
+    if (!e || e.disabled) return;
+    if (e.key !== cur) {
+      const hiddenM = hiddenModelsFor(e.key);
+      const first = Object.keys(
+        all.find((x) => x.id === e.key)?.models ?? {},
+      ).find((mid) => !hiddenM.has(mid));
+      if (first) void setSelection(props.id, { model: { providerID: e.key, id: first } });
+    }
+    props.onClose();
+  };
+  const active = useMenuKeys(
+    entries.length,
+    pick,
+    props.onClose,
+    Math.max(0, entries.findIndex((e) => e.active)),
+  );
+  return (
+    <div class="menu pop pop-tile" role="listbox" aria-label="Provider">
+      <div class="menu-list">
+        {entries.map((e, i) => (
+          <Row
+            key={e.key}
+            entry={e}
+            highlighted={i === active}
+            onPick={() => pick(i)}
+          />
+        ))}
+        {entries.length === 0 && (
+          <div class="menu-empty">No providers available</div>
+        )}
+      </div>
+      {cur && (
+        <div class="menu-swatches-strip">
+          <Swatches
+            value={providerColors.value[cur]}
+            onPick={(color) => {
+              setProviderColor(cur, color);
+              props.onClose();
+            }}
+          />
+        </div>
+      )}
+      <button
+        class="menu-footer"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          props.onClose();
+          postToHost({ type: "manage-providers" });
+        }}
+      >
+        <SlidersIcon />
+        <span>Manage providers</span>
+      </button>
+    </div>
+  );
+}
+
 export function ModelPicker(props: { id?: string }) {
   const sel = currentSelection(props.id);
   const connected = providers.value?.connected ?? [];
   const all = providers.value?.all ?? [];
   const hidden = new Set(hiddenModels.value);
 
-  // One group per connected provider; a row is the model's short name, the
-  // reasoning variants it offers as the gray sub-label, and a "Free" badge
-  // when the catalog marks it free. Hidden rows (Manage models) drop out,
-  // and a provider whose rows are all hidden goes with them.
-  const groups: Group[] = connected
-    .map((pid) => {
-      const p = all.find((x) => x.id === pid);
-      return {
-        key: pid,
-        name: p?.name ?? pid,
-        rows: Object.entries(p?.models ?? {})
-          .filter(([mid]) => !hidden.has(`${pid}/${mid}`))
-          .map(([mid, m]) => {
-            const model: ModelSelection = { providerID: pid, id: mid };
-            const variants = m.variants ? Object.keys(m.variants) : [];
-            return {
-              key: `${pid}/${mid}`,
-              label: m.name ?? modelLabel(model),
-              hint: variants.length ? variants.map(cap).join(" · ") : undefined,
-              badge: modelFree(model) ? "Free" : undefined,
-              active: sel.model?.providerID === pid && sel.model?.id === mid,
-            };
-          }),
-      };
-    })
-    .filter((g) => g.rows.length > 0);
+  // Display identity, not send identity — see displayModel. The tile and
+  // label follow the connected twin so the chip keeps its color across the
+  // first pick.
+  const shown = displayModel(sel.model);
+  const pid = shown?.providerID;
+
+  // The menu lists ONLY the selected provider's models — providers are
+  // picked from the tile button's own menu. A row is the model's short
+  // name, the reasoning variants it offers as the gray sub-label, and a
+  // "Free" badge when the catalog marks it free. Hidden rows (Manage
+  // models) drop out.
+  const p = pid && connected.includes(pid)
+    ? all.find((x) => x.id === pid)
+    : undefined;
+  // The chip's provider is connected but carries no catalog rows: the
+  // staged v2 fill hasn't reached it — say so instead of "No models
+  // available", which reads as a dead end.
+  const loading =
+    pid !== undefined &&
+    connected.includes(pid) &&
+    !all.some((x) => x.id === pid);
+  const groups: Group[] = p
+    ? [
+        {
+          key: p.id,
+          name: p.name ?? p.id,
+          rows: Object.entries(p.models ?? {})
+            .filter(([mid]) => !hidden.has(`${p.id}/${mid}`))
+            .map(([mid, m]) => {
+              const model: ModelSelection = { providerID: p.id, id: mid };
+              const variants = m.variants ? Object.keys(m.variants) : [];
+              return {
+                key: `${p.id}/${mid}`,
+                label: m.name ?? modelLabel(model),
+                hint: variants.length ? variants.map(cap).join(" · ") : undefined,
+                badge: modelFree(model) ? "Free" : undefined,
+                active: sel.model?.id === mid,
+              };
+            }),
+        },
+      ]
+    : [];
 
   // Entry keys are `${providerID}/${modelID}`; provider ids never carry a
   // slash, so the FIRST one separates the pair. Splitting at the last one
@@ -420,21 +605,19 @@ export function ModelPicker(props: { id?: string }) {
     return false;
   };
 
-  // Display identity, not send identity — see displayModel. The tile and
-  // label follow the connected twin so the chip keeps its color across the
-  // first pick.
-  const shown = displayModel(sel.model);
-
   return (
-    <Chip title="Model" kind="model" groups={groups} onPick={onPick}>
-      <span
-        class="tile comp-tile"
-        style={{
-          background: tileFor(shown?.providerID ?? "?").color,
-        }}
-      >
-        {tileFor(shown?.providerID ?? "?").letter}
-      </span>
+    <Chip
+      title="Model"
+      kind="model"
+      groups={groups}
+      onPick={onPick}
+      emptyNote={loading ? "Models still loading…" : undefined}
+      modelProviderID={pid ?? undefined}
+      tile={pid ? { key: pid, color: providerColors.value[pid] } : undefined}
+      tileMenu={
+        <ProviderMenu id={props.id} onClose={() => setPopover(undefined)} />
+      }
+    >
       <span class="comp-chip-label">
         {shown ? modelLabel(shown) : "Model"}
       </span>

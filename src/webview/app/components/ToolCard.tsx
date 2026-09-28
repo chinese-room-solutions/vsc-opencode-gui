@@ -232,11 +232,12 @@ function BodyRow(props: { label: "IN" | "OUT"; text: string }) {
   );
 }
 
-// The pill text: the command for bash, the file path for edit/write, the
-// todo progress, the tool's own title or first descriptive argument otherwise.
+// The pill text: the command for bash (v2's execute passes it as `code`),
+// the file path for edit/write, the todo progress, the tool's own title or
+// first descriptive argument otherwise.
 function summary(part: ToolPart): string {
   if (isBashTool(part.tool)) {
-    return inputStr(part, "command") ?? part.state?.title ?? "";
+    return inputStr(part, "command", "code") ?? part.state?.title ?? "";
   }
   if (
     part.tool === "edit" ||
@@ -412,10 +413,11 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
   // still shows the text.
   const todos = part.tool === "todowrite" ? todoRows(part) : [];
   const outText = part.tool === "todowrite" && !failed ? "" : output;
-  // IN carries the command for shell-like calls; other tools name their
-  // target in the header pill, so only OUT applies to them.
+  // IN carries the command for shell-like calls (execute keys it `code`);
+  // other tools name their target in the header pill, so only OUT applies
+  // to them.
   const command =
-    isBashTool(part.tool) ? (inputStr(part, "command") ?? "") : "";
+    isBashTool(part.tool) ? (inputStr(part, "command", "code") ?? "") : "";
   const expandable = Boolean(command || outText || diff || todos.length);
 
   return (

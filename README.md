@@ -52,6 +52,7 @@ All commands live under the **`Open Code:`** prefix in the command palette.
 | `Open Code: Show History` | Session picker |
 | `Open Code: Add Selection to Chat` | Send the editor selection as context |
 | `Open Code: Manage Models` | Provider and model picker |
+| `Open Code: Manage Providers` | Which providers the pickers list |
 | `Open Code: Show Session Diff` | Working-tree diff of the session |
 | `Open Code: Toggle Context Breakdown` | Per-message context panel |
 | `Open Code: Open in Terminal` | Terminal bound to the session |
@@ -87,9 +88,7 @@ Requires the [opencode CLI](https://opencode.ai/) where the workspace runs
 
 Both server generations are supported: opencode 1.x (`opencode-ai`, 1.16+) and
 opencode 2.x (`@opencode/cli`). The extension detects the server's dialect at
-boot and speaks the matching routes. On 2.x the server is password-protected
-by default; the extension generates that password itself. Attachments and
-slash commands ride each generation's own prompt/command body.
+boot and speaks the matching routes.
 
 > ℹ️ On server start, the `oc-attachments` skill is installed into your
 > opencode config dir (`~/.config/opencode/skills/`) so every session gets

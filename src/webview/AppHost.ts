@@ -48,6 +48,13 @@ export interface HiddenModels {
   get(): string[];
 }
 
+// Providers the picker hides ("Manage providers" — globalState-backed in
+// main.ts, bare providerID refs). Same bake/push lifecycle as the models
+// list.
+export interface HiddenProviders {
+  get(): string[];
+}
+
 // Cap of the event-stream reconnect backoff (1s * 2^attempt).
 const MAX_BACKOFF_MS = 15_000;
 // The server heartbeats both streams every 10 s, quiet turns included. A
@@ -107,6 +114,7 @@ export class AppHost implements vscode.Disposable {
     private readonly _projectStore: ProjectStore,
     private readonly _openProject: OpenProjectHandler,
     private readonly _hiddenModels: HiddenModels,
+    private readonly _hiddenProviders: HiddenProviders,
   ) {}
 
   private _webview?: vscode.Webview;
@@ -229,9 +237,17 @@ export class AppHost implements vscode.Disposable {
           this._projectStore.tombstone(message.path);
         }
         // Model picker footer: the Manage Models QuickPick is the native
-        // command — it needs globalState and the window, not this host.
+        // command — it needs globalState and the window, not this host. The
+        // provider field scopes it to one provider's models when given.
         if (message.type === "manage-models") {
-          void vscode.commands.executeCommand("opencodeGui.manageModels");
+          void vscode.commands.executeCommand(
+            "opencodeGui.manageModels",
+            typeof message.provider === "string" ? message.provider : undefined,
+          );
+        }
+        // Provider menu footer: same hand-off for providers.
+        if (message.type === "manage-providers") {
+          void vscode.commands.executeCommand("opencodeGui.manageProviders");
         }
         // Composer "+": native multi-select dialog; the picks go back as
         // {uri, name, text} chips the next prompt sends as file parts.
@@ -422,6 +438,10 @@ export class AppHost implements vscode.Disposable {
   // value is baked into the page — a postMessage can race the first load).
   setHiddenModels(refs: string[]) {
     this._post({ type: "hidden-models", ids: refs });
+  }
+
+  setHiddenProviders(refs: string[]) {
+    this._post({ type: "hidden-providers", ids: refs });
   }
 
   // The codeCopyModifier setting changed (main.ts watches it); the boot
@@ -793,6 +813,10 @@ export class AppHost implements vscode.Disposable {
       .replaceAll(
         "{{HIDDEN_MODELS}}",
         escapeAttr(JSON.stringify(this._hiddenModels.get())),
+      )
+      .replaceAll(
+        "{{HIDDEN_PROVIDERS}}",
+        escapeAttr(JSON.stringify(this._hiddenProviders.get())),
       )
       .replaceAll(
         "{{COPY_MODIFIER}}",

@@ -45,10 +45,15 @@ import { translateV2Event } from "./v2events";
 import { judgeDialect, detectDialect } from "../../server/dialect";
 import {
   commands,
+  draftModel,
   init,
   messagesBySession,
+  providers,
+  refreshProvidersIfStale,
   resyncFromServer,
+  resetBaseRetryForTest,
   sendPrompt,
+  serverDefaultModel,
   sessionStatus,
   sessions,
 } from "./store";
@@ -1146,6 +1151,338 @@ describe("v2 lazy command registry re-pull", () => {
       { name: "init", description: "guided" },
     ]);
   });
+
+  // The v2 cold window: /api/model answers 200 with [] for ~1s after
+  // spawn. An empty catalog is not "no models" — the retry loop keeps
+  // pulling until it lands non-empty, and a session-list success must not
+  // cancel it. Lives AFTER the commands test: a full v2 refreshBase
+  // consumes the once-per-load re-pull flag it checks (its own runs leave
+  // a retry armed — the asserts below fire it).
+  it("arms the retry on an empty catalog and clears when it fills", async () => {
+    let empty = true;
+    onApi((call) => {
+      if (call.path.startsWith("/api/model"))
+        return {
+          data: empty
+            ? []
+            : [{ id: "glm-5.3", providerID: "zai-coding-plan" }],
+        };
+      if (call.path === "/api/config") return [];
+      if (call.path === "/api/provider") return { data: [] };
+      if (call.path === "/api/project") return [];
+      if (call.path === "/api/agent") return [];
+      if (call.path === "/api/command") return [];
+      if (call.path === "/api/skill") return [];
+      if (call.path === "/api/session/active") return {};
+      return undefined;
+    });
+    // Neutralize the ladder/throttle state earlier suites left behind —
+    // this test asserts exact retry delays.
+    resetBaseRetryForTest();
+    dispatchWindowMessage({
+      type: "sse-event",
+      event: { id: "evt_ce", type: "server.connected", data: {} },
+    });
+    // v2's provider pull chains three fetches — deeper settle than the
+    // default three turns, or the asserts read a stale refresh.
+    await flushEvents();
+    await settle(8);
+    // The empty catalog was accepted into the signal, but the retry
+    // armed anyway (sessions landed — the default responder serves them).
+    assert.equal(providers.value?.all.length ?? 0, 0);
+    assert.equal(fireExact(1000), 1);
+    await settle(8);
+    empty = false;
+    assert.equal(fireExact(2000), 1);
+    await settle(8);
+    assert.equal(providers.value?.all.length ?? 0, 1);
+    assert.equal(fireExact(4000), 0); // complete boot cleared the loop
+  });
+
+  // The staged fill: built-in models answer at once, configured providers
+  // only after discovery completes (network-bound, tens of seconds cold).
+  // A PARTIAL catalog missing the wanted provider (the config default
+  // here) is as much a non-answer as the empty one — the retry stays
+  // armed until that provider's rows land. A wanted provider the server
+  // doesn't even list (config drift) must not spin the loop forever.
+  it("retries while the wanted provider's rows are missing", async () => {
+    let partial = true;
+    onApi((call) => {
+      if (call.path.startsWith("/api/model"))
+        return {
+          data: [
+            { id: "code-supply", providerID: "opencode" },
+            ...(partial
+              ? []
+              : [{ id: "glm-5.3", providerID: "zai-coding-plan" }]),
+          ],
+        };
+      if (call.path === "/api/config")
+        return [
+          {
+            info: { model: { providerID: "zai-coding-plan", model: "glm-5.3" } },
+          },
+        ];
+      if (call.path === "/api/provider")
+        return { data: [{ id: "zai-coding-plan" }] };
+      if (call.path === "/api/project") return [];
+      if (call.path === "/api/agent") return [];
+      if (call.path === "/api/command") return [];
+      if (call.path === "/api/skill") return [];
+      if (call.path === "/api/session/active") return {};
+      return undefined;
+    });
+    draftModel.value = undefined;
+    resetBaseRetryForTest();
+    dispatchWindowMessage({
+      type: "sse-event",
+      event: { id: "evt_cf", type: "server.connected", data: {} },
+    });
+    await flushEvents();
+    await settle(8);
+    // The partial catalog was accepted (1 provider) and the config
+    // default parsed — but a listed provider has no rows yet, so the
+    // ladder stayed armed.
+    assert.equal(providers.value?.all.length ?? 0, 1);
+    assert.equal(serverDefaultModel.value?.providerID, "zai-coding-plan");
+    assert.equal(fireExact(1000), 1);
+    await settle(8);
+    partial = false;
+    assert.equal(fireExact(2000), 1);
+    await settle(8);
+    assert.equal(providers.value?.all.length ?? 0, 2);
+    assert.equal(fireExact(4000), 0); // wanted provider landed — cleared
+  });
+
+  it("does not wait for a wanted provider the server doesn't list", async () => {
+    onApi((call) => {
+      if (call.path.startsWith("/api/model"))
+        return { data: [{ id: "code-supply", providerID: "opencode" }] };
+      if (call.path === "/api/config")
+        return [{ info: { model: { providerID: "ghost", model: "x" } } }];
+      if (call.path === "/api/provider") return { data: [] };
+      if (call.path === "/api/project") return [];
+      if (call.path === "/api/agent") return [];
+      if (call.path === "/api/command") return [];
+      if (call.path === "/api/skill") return [];
+      if (call.path === "/api/session/active") return {};
+      return undefined;
+    });
+    draftModel.value = undefined;
+    resetBaseRetryForTest();
+    dispatchWindowMessage({
+      type: "sse-event",
+      event: { id: "evt_cg", type: "server.connected", data: {} },
+    });
+    await flushEvents();
+    await settle(8);
+    assert.equal(providers.value?.all.length ?? 0, 1);
+    // Config drift (a default naming an unconfigured provider) is now
+    // indistinguishable from a late fill — it arms; the attempt bound
+    // (proven in its own test) is what stops it, not the old guard.
+    assert.equal(fireExact(1000), 1);
+  });
+
+  // The staged route itself: /api/provider can answer with only built-ins
+  // while discovery runs, making the boot snapshot internally consistent
+  // (every listed provider has rows). `connected` — which unions the
+  // config default — must still see the gap and arm.
+  it("arms when the provider route itself is still staged", async () => {
+    let discovered = false;
+    onApi((call) => {
+      if (call.path.startsWith("/api/model"))
+        return {
+          data: [
+            { id: "tiny", providerID: "opencode" },
+            ...(discovered
+              ? [{ id: "glm-5.3", providerID: "zai-coding-plan" }]
+              : []),
+          ],
+        };
+      if (call.path === "/api/config")
+        return [
+          {
+            info: { model: { providerID: "zai-coding-plan", model: "glm-5.3" } },
+          },
+        ];
+      if (call.path === "/api/provider")
+        return { data: discovered ? [{ id: "zai-coding-plan" }] : [] };
+      if (call.path === "/api/project") return [];
+      if (call.path === "/api/agent") return [];
+      if (call.path === "/api/command") return [];
+      if (call.path === "/api/skill") return [];
+      if (call.path === "/api/session/active") return {};
+      return undefined;
+    });
+    resetBaseRetryForTest();
+    dispatchWindowMessage({
+      type: "sse-event",
+      event: { id: "evt_ck", type: "server.connected", data: {} },
+    });
+    await flushEvents();
+    await settle(8);
+    assert.equal(fireExact(1000), 1); // internally consistent ≠ complete
+    await settle(8);
+    discovered = true;
+    assert.equal(fireExact(2000), 1);
+    await settle(8);
+    assert.equal(
+      providers.value?.all.some((p) => p.id === "zai-coding-plan"),
+      true,
+    );
+    assert.equal(fireExact(4000), 0); // every connected provider landed
+  });
+
+  // The abandonment hole: the ladder used to clear on the WANTED
+  // provider alone, so switching the pick to an already-filled provider
+  // mid-fill stranded every other listed provider on "Loading models…"
+  // forever. The clear now waits for every listed provider.
+  it("keeps filling after the wanted provider switches away", async () => {
+    let zaiFilled = false;
+    onApi((call) => {
+      if (call.path.startsWith("/api/model"))
+        return {
+          data: [
+            { id: "tiny", providerID: "opencode" },
+            { id: "claude", providerID: "amazon-bedrock" },
+            ...(zaiFilled
+              ? [{ id: "glm-5.3", providerID: "zai-coding-plan" }]
+              : []),
+          ],
+        };
+      if (call.path === "/api/config") return [];
+      if (call.path === "/api/provider")
+        return {
+          data: [{ id: "amazon-bedrock" }, { id: "zai-coding-plan" }],
+        };
+      if (call.path === "/api/project") return [];
+      if (call.path === "/api/agent") return [];
+      if (call.path === "/api/command") return [];
+      if (call.path === "/api/skill") return [];
+      if (call.path === "/api/session/active") return {};
+      return undefined;
+    });
+    resetBaseRetryForTest();
+    dispatchWindowMessage({
+      type: "sse-event",
+      event: { id: "evt_ch", type: "server.connected", data: {} },
+    });
+    await flushEvents();
+    await settle(8);
+    // zai is listed and rowless — armed, even though bedrock (picked
+    // below) is fully present.
+    assert.equal(fireExact(1000), 1);
+    await settle(8);
+    draftModel.value = { providerID: "amazon-bedrock", id: "claude" };
+    // The flip must NOT have cleared anything mid-flight: the next fire
+    // still re-pulls (zai pending)…
+    assert.equal(fireExact(2000), 1);
+    await settle(8);
+    zaiFilled = true;
+    assert.equal(fireExact(4000), 1);
+    await settle(8);
+    assert.equal(
+      providers.value?.all.some((p) => p.id === "zai-coding-plan"),
+      true,
+    );
+    assert.equal(fireExact(8000), 0); // every listed provider landed
+    draftModel.value = undefined;
+  });
+
+  // A listed provider that genuinely offers no models must not spin the
+  // loop forever: the fill phase burns MAX_FILL_ATTEMPTS retries, then
+  // the ladder clears.
+  it("stops filling after the attempt bound", async () => {
+    onApi((call) => {
+      if (call.path.startsWith("/api/model"))
+        return { data: [{ id: "tiny", providerID: "opencode" }] };
+      if (call.path === "/api/config") return [];
+      if (call.path === "/api/provider")
+        return { data: [{ id: "amazon-bedrock" }] };
+      if (call.path === "/api/project") return [];
+      if (call.path === "/api/agent") return [];
+      if (call.path === "/api/command") return [];
+      if (call.path === "/api/skill") return [];
+      if (call.path === "/api/session/active") return {};
+      return undefined;
+    });
+    resetBaseRetryForTest();
+    dispatchWindowMessage({
+      type: "sse-event",
+      event: { id: "evt_ci", type: "server.connected", data: {} },
+    });
+    await flushEvents();
+    await settle(8);
+    const ladder = [1000, 2000, 4000, 8000];
+    for (const delay of ladder) {
+      assert.equal(fireExact(delay), 1);
+      await settle(8);
+    }
+    for (let i = 0; i < 6; i++) {
+      assert.equal(fireExact(10_000), 1); // attempts 5..10 at the cap
+      await settle(8);
+    }
+    assert.equal(fireExact(10_000), 0); // bound reached — ladder cleared
+  });
+
+  // Attention-driven heal: even past the ladder's bound, opening a picker
+  // re-pulls the catalog while any listed provider is rowless (the fill
+  // may have landed server-side after the last pull).
+  it("re-pulls the catalog when a picker opens onto loading rows", async () => {
+    let zaiFilled = false;
+    onApi((call) => {
+      if (call.path.startsWith("/api/model"))
+        return {
+          data: [
+            { id: "tiny", providerID: "opencode" },
+            ...(zaiFilled
+              ? [{ id: "glm-5.3", providerID: "zai-coding-plan" }]
+              : []),
+          ],
+        };
+      if (call.path === "/api/config") return [];
+      if (call.path === "/api/provider")
+        return { data: [{ id: "zai-coding-plan" }] };
+      if (call.path === "/api/project") return [];
+      if (call.path === "/api/agent") return [];
+      if (call.path === "/api/command") return [];
+      if (call.path === "/api/skill") return [];
+      if (call.path === "/api/session/active") return {};
+      return undefined;
+    });
+    resetBaseRetryForTest();
+    dispatchWindowMessage({
+      type: "sse-event",
+      event: { id: "evt_cj", type: "server.connected", data: {} },
+    });
+    await flushEvents();
+    await settle(8);
+    // Burn the ladder to its bound (zai never fills).
+    for (const delay of [1000, 2000, 4000, 8000]) {
+      fireExact(delay);
+      await settle(8);
+    }
+    for (let i = 0; i < 6; i++) {
+      fireExact(10_000);
+      await settle(8);
+    }
+    assert.equal(fireExact(10_000), 0);
+    // The user opens the picker; the server by now has zai's rows.
+    zaiFilled = true;
+    setNow(Date.now() + 3_000); // past the call's cooldown
+    refreshProvidersIfStale();
+    await settle(8);
+    assert.equal(
+      providers.value?.all.some((p) => p.id === "zai-coding-plan"),
+      true,
+    );
+    // Complete now — a second open pulls nothing.
+    setNow(Date.now() + 3_000);
+    const before = callsFor("/api/model").length;
+    refreshProvidersIfStale();
+    await settle(8);
+    assert.equal(callsFor("/api/model").length, before);
+  });
 });
 
 describe("v2 SSE → pipeline translation", () => {
@@ -1784,6 +2121,65 @@ describe("v2 turn through the store (recorded frame sequence)", () => {
     assert.equal((text as { text?: string }).text, "Hi!");
     // The step's usage also landed on the session row (running sum).
     assert.equal(sessions.value[0].tokens.input, 4999);
+  });
+
+  it("keeps the per-tool elapsed span on streamed v2 tool calls", async () => {
+    init();
+    const sid = "v2tool";
+    sessions.value = [sessRow(sid)];
+    messagesBySession.value = new Map([
+      [sid, [row("u1", "user", T0), row("msg_t", "assistant", T0)]],
+    ]);
+    const partOf = (pid: string) =>
+      (messagesBySession.value.get(sid) ?? [])
+        .flatMap((m) => m.parts)
+        .find((p) => p.id === pid) as
+      | { state?: { status?: string; time?: { start?: number; end?: number } } }
+      | undefined;
+    // Full sequence — called refines the start, success stamps the end.
+    v2sse(
+      "session.tool.input.started",
+      { sessionID: sid, assistantMessageID: "msg_t", id: "c1", name: "bash" },
+      T0 + 100,
+    );
+    v2sse(
+      "session.tool.called",
+      {
+        sessionID: sid,
+        assistantMessageID: "msg_t",
+        id: "c1",
+        input: { command: "ls" },
+      },
+      T0 + 150,
+    );
+    v2sse(
+      "session.tool.success",
+      { sessionID: sid, assistantMessageID: "msg_t", id: "c1" },
+      T0 + 900,
+    );
+    await flushEvents();
+    assert.equal(partOf("c1")?.state?.status, "completed");
+    assert.deepEqual(partOf("c1")?.state?.time, {
+      start: T0 + 150,
+      end: T0 + 900,
+    });
+    // Short-circuited tool — no called frame: the input.started stamp IS
+    // the span, so the elapsed tip survives settling.
+    v2sse(
+      "session.tool.input.started",
+      { sessionID: sid, assistantMessageID: "msg_t", id: "c2", name: "grep" },
+      T0 + 2000,
+    );
+    v2sse(
+      "session.tool.success",
+      { sessionID: sid, assistantMessageID: "msg_t", id: "c2" },
+      T0 + 2400,
+    );
+    await flushEvents();
+    assert.deepEqual(partOf("c2")?.state?.time, {
+      start: T0 + 2000,
+      end: T0 + 2400,
+    });
   });
 
   it("lands the admitted user row with attachment and mention parts", async () => {

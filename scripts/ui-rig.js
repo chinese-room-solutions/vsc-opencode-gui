@@ -216,6 +216,8 @@ const shellHtml = (serverUrl) => {
     .replaceAll("{{ORIGIN}}", serverUrl)
     // Same contract as AppHost: the probed dialect baked at boot.
     .replaceAll("{{DIALECT}}", isV2 ? "v2" : "")
+    // Rig pages run with every provider visible.
+    .replaceAll("{{HIDDEN_PROVIDERS}}", "[]")
     .replaceAll("{{ERROR_MESSAGE}}", "")
     .replaceAll("{{INSTALL_HINT}}", "")
     // Boot-restore metas honor env so Playwright can exercise restore

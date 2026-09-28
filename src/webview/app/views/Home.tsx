@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import type { Session } from "../api";
 import { postToHost } from "../host";
 import { RenameInput } from "../components/RenameInput";
+import { Swatches } from "../components/Swatches";
 import {
   CheckIcon,
   CloseIcon,
   CopyIcon,
+  DropletIcon,
   NewSessionIcon,
   PencilIcon,
   SearchIcon,
@@ -31,12 +33,13 @@ import {
   purgeState,
   renameProject,
   renameSession,
-   sessionTile,
-   sessionTitle,
-   sendError,
-   sessions,
+  sessionTile,
+  sessionTitle,
+  sendError,
+  sessions,
   sessionsNext,
   sessionStatus,
+  setProjectColor,
   tombstones,
 } from "../store";
 import { baseName, parentName, tileFor } from "../tile";
@@ -236,6 +239,7 @@ function ProjectRow(props: {
   const isCurrent = currentDir.value === props.dir;
   const [confirming, setConfirming] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [coloring, setColoring] = useState(false);
   const row = projects.value.find(
     (p) => normPath(p.worktree) === props.dir,
   );
@@ -245,6 +249,10 @@ function ProjectRow(props: {
   const commitRename = (title: string) => {
     setEditing(false);
     if (title && title !== name) void renameProject(props.dir, title);
+  };
+  const commitColor = (color: string) => {
+    setColoring(false);
+    if (color !== row?.icon?.color) void setProjectColor(props.dir, color);
   };
 
   return (
@@ -272,18 +280,43 @@ function ProjectRow(props: {
             <span class="purge-note">
               deleting {purge.done}/{purge.total}…
             </span>
+          ) : coloring ? (
+            <>
+              {/* Click-away abandons the recolor (no PATCH until a pick);
+                  the strip rides above the fixed backdrop. */}
+              <div class="backdrop" onClick={() => setColoring(false)} />
+              <span class="row-coloring">
+                <Swatches value={row?.icon?.color} onPick={commitColor} />
+              </span>
+            </>
           ) : (
             <span class="row-acts">
-              {/* Rename needs a project row to PATCH; session-only dirs
-                  (a folder the server never booted in) have none. */}
+              {/* Rename and recolor need a project row to PATCH;
+                  session-only dirs (a folder the server never booted in)
+                  have none. */}
               {row && (
-                <button
-                  class="row-act iconic"
-                  title="Rename project"
-                  onClick={() => setEditing(true)}
-                >
-                  <PencilIcon />
-                </button>
+                <>
+                  <button
+                    class="row-act iconic"
+                    title="Rename project"
+                    onClick={() => {
+                      setColoring(false);
+                      setEditing(true);
+                    }}
+                  >
+                    <PencilIcon />
+                  </button>
+                  <button
+                    class="row-act iconic"
+                    title="Project color"
+                    onClick={() => {
+                      setEditing(false);
+                      setColoring(true);
+                    }}
+                  >
+                    <DropletIcon />
+                  </button>
+                </>
               )}
               <button
                 class="row-act iconic"

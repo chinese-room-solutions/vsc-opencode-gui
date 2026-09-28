@@ -15,6 +15,9 @@ const TILE_COLORS: Record<string, string> = {
 };
 const VALUES = Object.values(TILE_COLORS);
 
+// The choosable palette, in display order — the color pickers offer these.
+export const TILE_COLOR_NAMES = Object.keys(TILE_COLORS);
+
 export function baseName(p: string): string {
   const parts = p.split(/[\\/]/).filter(Boolean);
   return parts.length ? parts[parts.length - 1] : p;

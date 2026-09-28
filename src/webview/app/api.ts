@@ -290,10 +290,10 @@ function inputRecord(list?: string[]): ModelInput | undefined {
 
 // GET /provider (v1 shape). On v2 the catalog is assembled from three
 // routes: /api/provider (connected providers — no models), /api/model
-// (the flat catalog — LOCATION-SCOPED: the bare route serves nothing, so
-// the workspace directory rides along as the object-param the official
-// client sends), and /api/model/default (the pinned default). No `limit`
-// param on /api/model: the route returns an empty list when handed one.
+// (the flat catalog — LOCATION-SCOPED, the workspace directory rides
+// along as the object-param the official client sends), and
+// /api/model/default (the pinned default). No `limit` param on /api/model:
+// the route returns an empty list when handed one.
 export async function fetchProviders(
   directory?: string,
 ): Promise<Providers | undefined> {
@@ -310,9 +310,19 @@ export async function fetchProviders(
     >("/api/config"),
   ]);
   if (!models) return undefined;
+  // A scoped answer of zero models is the server's cold-start window (~1s
+  // after spawn, 200 with []) or a non-git workspace folder (the location
+  // filter matches nothing) — while the bare route serves the full catalog
+  // in both cases, its location defaulting to the server cwd. One bare
+  // fallback keeps both from reading as "no models".
+  let rows = models.data ?? [];
+  if (rows.length === 0 && modelQs) {
+    const bare = await getJson<{ data?: V2ModelRow[] }>("/api/model");
+    if (bare?.data?.length) rows = bare.data;
+  }
   const all: Providers["all"] = [];
   const byId = new Map<string, Providers["all"][number]>();
-  for (const m of models.data ?? []) {
+  for (const m of rows) {
     if (!m?.id || !m.providerID) continue;
     let provider = byId.get(m.providerID);
     if (!provider) {
@@ -697,7 +707,9 @@ export interface Message {
     completed?: number;
     streamed?: number;
   };
-  error?: { name: string; data?: { message?: string } };
+  // v1 nests the reason ({name, data:{message}}); v2 structured errors
+  // are flat ({type, message, status}) — both reads optional.
+  error?: { name?: string; message?: string; data?: { message?: string } };
   providerID?: string;
   modelID?: string;
   // The agent that ran the turn ("build", "plan") and the message this one
@@ -959,7 +971,7 @@ interface V2MessageRow {
   model?: unknown;
   cost?: number;
   tokens?: MessageTokens;
-  error?: { name: string; data?: { message?: string } };
+  error?: { name?: string; message?: string; data?: { message?: string } };
 }
 
 // A row after intake: times as ms, the model ref as the object shape.
@@ -1481,6 +1493,39 @@ export async function renameProject(
     (await sendJson("PATCH", route(`/project/${id}`, `/api/project/${id}`), {
       name,
     }))?.ok === true
+  );
+}
+
+// PATCH /project/{id} — set the avatar color (palette name). Same wire
+// shape the host's assigner speaks: v1 scopes the write with the
+// worktree as a query param; v2 wants the SDK's full body with the
+// worktree as `canonical` and the optional fields made explicit
+// undefineds (dropped by JSON) so the PATCH touches only the icon.
+export async function setProjectColor(
+  id: string,
+  color: string,
+  worktree?: string,
+): Promise<boolean> {
+  return (
+    (await sendJson(
+      "PATCH",
+      route(
+        `/project/${id}${
+          serverDialect === "v1" && worktree
+            ? `?directory=${encodeURIComponent(worktree)}`
+            : ""
+        }`,
+        `/api/project/${id}`,
+      ),
+      serverDialect === "v2"
+        ? {
+            canonical: worktree,
+            name: undefined,
+            icon: { color },
+            commands: undefined,
+          }
+        : { icon: { color } },
+    ))?.ok === true
   );
 }
 

@@ -229,6 +229,25 @@ export function TrashIcon() {
   );
 }
 
+// A color drop — the "recolor this tile" affordance.
+export function DropletIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.4"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M8 2.2c0 0-4.4 5.2-4.4 8a4.4 4.4 0 0 0 8.8 0c0-2.8-4.4-8-4.4-8z" />
+    </svg>
+  );
+}
+
 // OpenCode's own user-message action glyphs, lifted from its web bundle's
 // icon registry (names "copy", "reset", "check") so the row reads native.
 export function OcCopyIcon() {

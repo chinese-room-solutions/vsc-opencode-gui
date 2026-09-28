@@ -1871,6 +1871,16 @@ body {
   background: var(--vscode-list-hoverBackground);
 }
 
+.menu-item.disabled {
+  cursor: default;
+  color: var(--vscode-disabledForeground);
+}
+
+.menu-item.disabled .menu-sub {
+  color: inherit;
+  opacity: 0.8;
+}
+
 .menu-texts {
   display: flex;
   flex-direction: column;
@@ -3241,6 +3251,53 @@ a.tool-pill:hover {
 .menu-footer.active {
   background: var(--vscode-list-hoverBackground);
   color: var(--oc-text);
+}
+
+/* The palette strip (components/Swatches): recolors a letter tile — the
+   model chip's tile button popover, or a project row's inline strip (which
+   rides above its click-away backdrop). */
+.swatches {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.swatch {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.swatch.on {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.row-coloring {
+  position: relative;
+  z-index: 10;
+}
+
+/* The model chip's provider tile as its own button: a quiet chip holding
+   just the tile, flush left of the model chip. */
+.comp-tile-btn {
+  padding: 3px 5px;
+}
+
+/* The provider menu it opens: provider rows, the selected provider's
+   palette unfolded below them. */
+.menu.pop.pop-tile {
+  max-width: 260px;
+}
+
+.menu-swatches-strip {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-top: 1px solid var(--oc-border);
 }
 
 /* --- parity fix: ring panel + home (pass 4) --- */

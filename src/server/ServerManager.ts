@@ -667,22 +667,28 @@ export class ServerManager {
   }
 
   // GET /provider — the raw catalog (all known providers + the connected
-  // ids), with `connected` narrowed to providers the config names (provider
-  // blocks plus the default model's provider): /provider marks every catalog
-  // provider whose env var exists as connected, so one API key lights up
-  // several lookalike storefronts the user never configured. The Manage
-  // Models quick pick and syncModelAgents both consume this. On v2 the
-  // catalog is assembled from /api/model (flat, no `limit` param: the
-  // route returns an empty list when handed one); "connected" is
-  // /api/provider's rows (often empty — it does not track credentials
-  // reliably) UNION the config default's provider, mirroring the webview
-  // picker's assembly.
+  // ids). Connected is availability, as the server reports it: one API key
+  // lighting up several lookalike storefronts is cosmetic next to hiding
+  // genuinely usable (e.g. free) models, so nothing narrows the list — the
+  // Manage Models quick pick and syncModelAgents consume it as-is, and the
+  // webview picker lists the same set. On v2 the catalog is assembled from
+  // /api/model (flat, location-scoped to the workspace exactly like the
+  // webview's fetchProviders — the bare and scoped routes can list
+  // different provider sets, and the quick pick must manage the exact
+  // catalog the picker renders; no `limit` param: the route returns an
+  // empty list when handed one); "connected" is /api/provider's rows
+  // (often empty — it does not track credentials reliably) UNION the
+  // config default's provider.
   async providerCatalog(): Promise<ProviderResponse | undefined> {
     await this.ready;
     if (this._dialect === "v2") {
+      const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const modelQs = cwd
+        ? `?location%5Bdirectory%5D=${encodeURIComponent(cwd)}`
+        : "";
       const [providers, models, config] = await Promise.all([
         this._request<{ data?: { id?: string }[] }>("GET", "/api/provider"),
-        this._request<{ data?: V2ModelRow[] }>("GET", "/api/model"),
+        this._request<{ data?: V2ModelRow[] }>("GET", `/api/model${modelQs}`),
         this._request<
           { info?: { model?: { providerID?: string } } }[]
         >("GET", "/api/config"),
@@ -721,26 +727,11 @@ export class ServerManager {
         all,
       };
     }
-    const [catalog, config] = await Promise.all([
-      this._request<ProviderResponse>("GET", "/provider"),
-      this._request<{ model?: string; provider?: Record<string, unknown> }>(
-        "GET",
-        "/config",
-      ),
-    ]);
-    if (!catalog) return undefined;
-    const named = new Set(Object.keys(config?.provider ?? {}));
-    const def = config?.model?.split("/")[0];
-    if (def) named.add(def);
-    if (named.size === 0) return catalog;
-    return {
-      ...catalog,
-      connected: catalog.connected.filter((c) => named.has(c)),
-    };
+    return this._request<ProviderResponse>("GET", "/provider");
   }
 
-  // GET /provider — configured connected providers with their
-  // toolcall-capable models (see providerCatalog for the narrowing). Polls
+  // GET /provider — connected providers with their toolcall-capable
+  // models (see providerCatalog). Polls
   // until at least one provider is connected (or timeout).
   async listProviders(): Promise<ProviderModel[] | undefined> {
     await this.ready;

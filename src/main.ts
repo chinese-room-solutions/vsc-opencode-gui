@@ -6,6 +6,7 @@ import { PeerRegistry } from "./webview/Peers";
 import type {
   AppHost,
   HiddenModels,
+  HiddenProviders,
   OpenProjectHandler,
   ProjectStore,
 } from "./webview/AppHost";
@@ -129,6 +130,20 @@ export function activate(context: vscode.ExtensionContext) {
     provider.chat.setHiddenModels(refs);
   };
 
+  // Providers the webview picker hides (Manage Providers) — bare providerID
+  // refs, same lifecycle as the hidden models list.
+  const hiddenProviders: HiddenProviders = {
+    get: () =>
+      (
+        context.globalState.get<string[]>("opencode.hiddenProviders") ?? []
+      ).filter((r) => typeof r === "string"),
+  };
+  const setHiddenProviders = (refs: string[]) => {
+    void context.globalState.update("opencode.hiddenProviders", refs);
+    ChatPanel.instance?.chat.setHiddenProviders(refs);
+    provider.chat.setHiddenProviders(refs);
+  };
+
   // Start the opencode server lazily, on first chat use: a server spawn
   // registers its cwd as a project in opencode's shared DB, so activating
   // in every window would litter the Home project list with folders the
@@ -215,6 +230,7 @@ export function activate(context: vscode.ExtensionContext) {
       projectStore,
       openProject,
       hiddenModels,
+      hiddenProviders,
     );
   };
 
@@ -229,6 +245,7 @@ export function activate(context: vscode.ExtensionContext) {
     projectStore,
     openProject,
     hiddenModels,
+    hiddenProviders,
   );
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("opencodeGui.chatView", provider, {
@@ -255,6 +272,7 @@ export function activate(context: vscode.ExtensionContext) {
           projectStore,
           openProject,
           hiddenModels,
+          hiddenProviders,
         );
         return Promise.resolve();
       },
@@ -659,6 +677,7 @@ export function activate(context: vscode.ExtensionContext) {
             projectStore,
             openProject,
             hiddenModels,
+            hiddenProviders,
           );
         }
       });
@@ -667,56 +686,111 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Manage Models: which connected-provider models the composer's picker
   // lists (checked = listed). The webview picker's footer row lands here
-  // via the "manage-models" message.
+  // via the "manage-models" message; a providerID argument (the provider
+  // menu's context) scopes the list to that provider's models.
   context.subscriptions.push(
-    vscode.commands.registerCommand("opencodeGui.manageModels", async () => {
-      ensureServer();
-      const sm = serverManager;
-      await sm?.ready;
-      const catalog = await sm?.providerCatalog();
-      if (!catalog) {
-        vscode.window.showErrorMessage(
-          "Could not load models — the opencode server is not reachable. Try Open Code: Restart.",
-        );
-        return;
-      }
-      const hidden = new Set(hiddenModels.get());
-      const items: (vscode.QuickPickItem & { ref?: string })[] = [];
-      for (const p of (catalog.all ?? []).filter((x) =>
-        catalog.connected.includes(x.id),
-      )) {
-        items.push({
-          label: p.name ?? p.id,
-          kind: vscode.QuickPickItemKind.Separator,
-        });
-        for (const [mid, m] of Object.entries(p.models ?? {})) {
-          const ref = `${p.id}/${mid}`;
-          items.push({
-            label: m.name ?? mid,
-            description: ref,
-            picked: !hidden.has(ref),
-            ref,
-          });
+    vscode.commands.registerCommand(
+      "opencodeGui.manageModels",
+      async (providerID?: string) => {
+        ensureServer();
+        const sm = serverManager;
+        await sm?.ready;
+        const catalog = await sm?.providerCatalog();
+        if (!catalog) {
+          vscode.window.showErrorMessage(
+            "Could not load models — the opencode server is not reachable. Try Open Code: Restart.",
+          );
+          return;
         }
-      }
-      const rows = items.filter((i) => i.ref);
-      if (rows.length === 0) {
-        vscode.window.showInformationMessage(
-          "No providers are connected yet — run `opencode auth login` in a terminal to connect one.",
+        const hidden = new Set(hiddenModels.get());
+        const items: (vscode.QuickPickItem & { ref?: string })[] = [];
+        for (const p of (catalog.all ?? [])
+          .filter((x) => catalog.connected.includes(x.id))
+          .filter((x) => !providerID || x.id === providerID)) {
+          items.push({
+            label: p.name ?? p.id,
+            kind: vscode.QuickPickItemKind.Separator,
+          });
+          for (const [mid, m] of Object.entries(p.models ?? {})) {
+            const ref = `${p.id}/${mid}`;
+            items.push({
+              label: m.name ?? mid,
+              description: ref,
+              picked: !hidden.has(ref),
+              ref,
+            });
+          }
+        }
+        const rows = items.filter((i) => i.ref);
+        if (rows.length === 0) {
+          vscode.window.showInformationMessage(
+            "No providers are connected yet — run `opencode auth login` in a terminal to connect one.",
+          );
+          return;
+        }
+        const picked = await vscode.window.showQuickPick(items, {
+          title: "Open Code: Manage Models",
+          placeHolder: "Checked models appear in the model picker",
+          canPickMany: true,
+        });
+        if (!picked) return;
+        const visible = new Set(picked.flatMap((i) => (i.ref ? [i.ref] : [])));
+        setHiddenModels(
+          rows.flatMap((i) => (i.ref && !visible.has(i.ref) ? [i.ref] : [])),
         );
-        return;
-      }
-      const picked = await vscode.window.showQuickPick(items, {
-        title: "Open Code: Manage Models",
-        placeHolder: "Checked models appear in the model picker",
-        canPickMany: true,
-      });
-      if (!picked) return;
-      const visible = new Set(picked.flatMap((i) => (i.ref ? [i.ref] : [])));
-      setHiddenModels(
-        rows.flatMap((i) => (i.ref && !visible.has(i.ref) ? [i.ref] : [])),
-      );
-    }),
+      },
+    ),
+  );
+
+  // Manage Providers: which connected providers the pickers list (checked =
+  // listed). The provider menu's footer lands here via the
+  // "manage-providers" message.
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "opencodeGui.manageProviders",
+      async () => {
+        ensureServer();
+        const sm = serverManager;
+        await sm?.ready;
+        const catalog = await sm?.providerCatalog();
+        if (!catalog) {
+          vscode.window.showErrorMessage(
+            "Could not load providers — the opencode server is not reachable. Try Open Code: Restart.",
+          );
+          return;
+        }
+        const hidden = new Set(hiddenProviders.get());
+        const connected = catalog.connected;
+        if (connected.length === 0) {
+          vscode.window.showInformationMessage(
+            "No providers are connected yet — run `opencode auth login` in a terminal to connect one.",
+          );
+          return;
+        }
+        const names = new Map(
+          (catalog.all ?? []).map((p) => [p.id, p.name ?? p.id]),
+        );
+        const picked = await vscode.window.showQuickPick(
+          connected.map((pid) => ({
+            label: names.get(pid) ?? pid,
+            description: pid,
+            picked: !hidden.has(pid),
+          })),
+          {
+            title: "Open Code: Manage Providers",
+            placeHolder: "Checked providers appear in the pickers",
+            canPickMany: true,
+          },
+        );
+        if (!picked) return;
+        const visible = new Set(
+          picked.flatMap((i) => (i.description ? [i.description] : [])),
+        );
+        setHiddenProviders(
+          connected.flatMap((pid) => (visible.has(pid) ? [] : [pid])),
+        );
+      },
+    ),
   );
 
   // Theme change: re-bake the editor token colors the code blocks use.

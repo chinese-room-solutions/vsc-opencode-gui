@@ -78,6 +78,9 @@ import {
   sessionTitle,
   sessionWorking,
   sessions,
+  setProviderColor,
+  providerColors,
+  setProjectColor,
   setSelection,
   status,
   stepUsage,
@@ -87,6 +90,7 @@ import {
   homeFilter,
   agents,
   hiddenModels,
+  hiddenProviders,
   peerNames,
 } from "./store";
 import { setDialect } from "./api";
@@ -863,6 +867,8 @@ describe("ghost turns after a stop (5185f17)", () => {
 
 // 443203b
 describe("reasoning-effort variant guard (443203b)", () => {
+  beforeEach(() => setDialect("v2"));
+  afterEach(() => setDialect("v1"));
   it("adopts a variant still set on the row", async () => {
     const sid = "vg1";
     await sseFlush("session.updated", {
@@ -1708,6 +1714,22 @@ describe("session.error", () => {
     assert.equal(sessionStatus.value[sid]?.type, "idle");
     assert.deepEqual(sendError.value, { for: sid, text: "boom" });
   });
+  it("reads the flat message of v2's structured error", async () => {
+    const sid = "se3";
+    open(sid, [row("u1", "user", T0)]);
+    setBusy(sid);
+    await sseFlush("session.error", {
+      sessionID: sid,
+      error: {
+        type: "AI_APICallError",
+        message: "glm-5.3 does not support image input",
+      },
+    });
+    assert.equal(
+      sendError.value?.text,
+      "glm-5.3 does not support image input",
+    );
+  });
   it("stays silent for a user-stopped turn (Interrupted tells it)", async () => {
     const sid = "se2";
     open(sid, [row("u1", "user", T0)]);
@@ -1993,11 +2015,48 @@ describe("selection", () => {
     });
   });
   it("setSelection switches agent on the server and patches the row", async () => {
-    const sid = "sel2";
-    sessions.value = [sessRow(sid)];
+    setDialect("v2");
+    try {
+      const sid = "sel2";
+      sessions.value = [sessRow(sid)];
+      await setSelection(sid, { agent: "plan" });
+      assert.equal(callsFor(`/api/session/${sid}/agent`).length, 1);
+      assert.equal(sessions.value.find((s) => s.id === sid)?.agent, "plan");
+    } finally {
+      setDialect("v1");
+    }
+  });
+  it("v1 picker switches ride the next prompt instead of the switch routes", async () => {
+    const sid = "sel3";
+    sessions.value = [
+      sessRow(sid, {
+        agent: "build",
+        model: { id: "m1", providerID: "p1" },
+      }),
+    ];
+    open(sid, []);
+    await setSelection(sid, {
+      model: { providerID: "oc", id: "free", variant: "high" },
+    });
     await setSelection(sid, { agent: "plan" });
-    assert.equal(callsFor(`/api/session/${sid}/agent`).length, 1);
+    assert.equal(callsFor(`/api/session/${sid}/model`).length, 0);
+    assert.equal(callsFor(`/api/session/${sid}/agent`).length, 0);
+    assert.deepEqual(currentSelection(sid).model, {
+      providerID: "oc",
+      id: "free",
+      variant: "high",
+    });
+    assert.equal(currentSelection(sid).agent, "plan");
     assert.equal(sessions.value.find((s) => s.id === sid)?.agent, "plan");
+    await sendPrompt(sid, "hi");
+    const body = callsFor(`/session/${sid}/prompt_async`)[0].body as {
+      agent?: string;
+      model?: { providerID?: string; modelID?: string };
+      variant?: string;
+    };
+    assert.equal(body.agent, "plan");
+    assert.deepEqual(body.model, { providerID: "oc", modelID: "free" });
+    assert.equal(body.variant, "high");
   });
 });
 
@@ -2071,8 +2130,8 @@ describe("catalog helpers", () => {
   });
 });
 
-describe("refreshBase curates providers", () => {
-  it("keeps only named providers and parses the default model", async () => {
+describe("refreshBase keeps the provider catalog as reported", () => {
+  it("lists every connected provider and parses the default model", async () => {
     onApi((call) => {
       if (call.path === "/provider")
         return {
@@ -2085,7 +2144,7 @@ describe("refreshBase curates providers", () => {
     });
     resyncFromServer(); // a full truth pull includes refreshBase
     await settle();
-    assert.deepEqual(providers.value?.connected, ["pa"]);
+    assert.deepEqual(providers.value?.connected, ["pa", "pz"]);
     assert.deepEqual(serverDefaultModel.value, { providerID: "pa", id: "m9" });
   });
 });
@@ -2241,6 +2300,10 @@ describe("hostMessage routing", () => {
     hostMessage({ type: "hidden-models", ids: ["a", 2, "b"] });
     assert.deepEqual(hiddenModels.value, ["a", "b"]);
   });
+  it("hidden-providers filters to strings", () => {
+    hostMessage({ type: "hidden-providers", ids: ["zai", 1] });
+    assert.deepEqual(hiddenProviders.value, ["zai"]);
+  });
   it("peers builds the id â†’ name/title map", () => {
     hostMessage({
       type: "peers",
@@ -2378,6 +2441,48 @@ describe("project rename", () => {
     assert.equal(
       sendError.value?.text,
       "The rename was rejected by the server.",
+    );
+  });
+});
+
+describe("project and provider tile colors", () => {
+  it("patches the color and carries it into session tiles", async () => {
+    projects.value = [
+      { id: "prjA", worktree: "C:/work/repo", icon: { color: "gray" } },
+    ];
+    currentDir.value = "C:\\work\\repo";
+    let body: unknown;
+    onApi((call) => {
+      if (call.method === "PATCH" && call.path.startsWith("/project/prjA")) {
+        body = call.body;
+        return {};
+      }
+      return undefined;
+    });
+    assert.equal(await setProjectColor("C:\\work\\repo", "pink"), true);
+    assert.equal(projects.value[0].icon?.color, "pink");
+    assert.equal(sessionTile(sessRow("s1"), "s1").color, "#d6336c");
+    assert.deepEqual(body, { icon: { color: "pink" } });
+  });
+  it("surfaces a rejection without changing the color", async () => {
+    projects.value = [{ id: "prjA", worktree: "D:/work/alpha" }];
+    onApi((call) => {
+      if (call.method === "PATCH") return API_FAIL;
+      return undefined;
+    });
+    assert.equal(await setProjectColor("D:/work/alpha", "blue"), false);
+    assert.equal(projects.value[0].icon, undefined);
+    assert.equal(
+      sendError.value?.text,
+      "The color was rejected by the server.",
+    );
+  });
+  it("setProviderColor updates the signal and persists", () => {
+    setProviderColor("zai-coding-plan", "cyan");
+    assert.equal(providerColors.value["zai-coding-plan"], "cyan");
+    assert.equal(
+      localStorageStub.getItem("opencode-provider-colors"),
+      '{"zai-coding-plan":"cyan"}',
     );
   });
 });

@@ -38,6 +38,7 @@ import {
   replyQuestion,
   runCommand,
   setDialect,
+  setProjectColor as setProjectColorApi,
   switchSessionAgent,
   switchSessionModel,
   type Agent,
@@ -246,6 +247,40 @@ export const hiddenModels = signal<string[]>(
   readStringList("opencode-hidden-models"),
 );
 
+// Providers the pickers hide (bare providerIDs). Same lifecycle as the
+// hidden models list, driven by the Manage Providers QuickPick.
+export const hiddenProviders = signal<string[]>(
+  readStringList("opencode-hidden-providers"),
+);
+
+// Provider tile colors ("providerID" → palette name). Webview-local by
+// nature — the server has no field for it — so they live in localStorage
+// and the composer chip keeps its palette across reloads on the same
+// origin (a server port change resets it, like every local setting).
+export const providerColors = signal<Record<string, string>>(
+  readLocalRecord("opencode-provider-colors"),
+);
+
+export function setProviderColor(pid: string, color: string): void {
+  const next = { ...providerColors.value, [pid]: color };
+  providerColors.value = next;
+  localStorage.setItem("opencode-provider-colors", JSON.stringify(next));
+}
+
+// A localStorage key read as string→string; malformed content reads empty.
+function readLocalRecord(key: string): Record<string, string> {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(key) ?? "{}");
+    if (!parsed || typeof parsed !== "object") return {};
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed))
+      if (typeof v === "string") out[k] = v;
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 // Live peer registry (opencode-plugin-peers): endpoint id → display name
 // and current session title. The host polls the plugin's registry and
 // pushes "peers" messages; peer-card headers resolve senders through it.
@@ -414,7 +449,7 @@ export function fmtDur(secs: number): string {
 // context panel ("ctx"). Mutually exclusive:
 // opening one dismisses the others instead of stacking panels. The panel is
 // also toggled from the host command.
-export type Popover = "model" | "variant" | "agent" | "ctx";
+export type Popover = "model" | "variant" | "agent" | "ctx" | "tile";
 export const popover = signal<Popover | undefined>(undefined);
 
 export function setPopover(p: Popover | undefined): void {
@@ -463,16 +498,19 @@ export function modelVariants(model?: ModelSelection): string[] {
 // What a chip should display. The same model id can be served under two
 // provider ids (e.g. the config default "zhipuai/glm-5.3" vs the connected
 // "zai-coding-plan" the picker lists it under), and hashing the raw id for
-// the tile color made the chip change color on the first pick. Display the
-// provider the picker would list the model under — the first connected
-// provider whose catalog offers the id, which is also the group order the
-// picker builds; sends keep the literal ids.
+// the tile color made the chip change color on the first pick. The model's
+// OWN provider wins when it is connected — an explicit provider pick keeps
+// its provider; only an unconnected pid (a config twin) maps to the first
+// connected provider whose catalog offers the id, which is also the group
+// order the picker builds. Sends keep the literal ids.
 export function displayModel(
   model?: ModelSelection,
 ): ModelSelection | undefined {
   if (!model) return undefined;
-  const pid = providers.value?.connected.find(
-    (c) => providers.value?.all.find((p) => p.id === c)?.models[model.id],
+  const connected = providers.value?.connected ?? [];
+  if (connected.includes(model.providerID)) return model;
+  const pid = connected.find((c) =>
+    providers.value?.all.find((p) => p.id === c)?.models[model.id],
   );
   return pid ? { providerID: pid, id: model.id } : model;
 }
@@ -495,23 +533,6 @@ export function attachInputs(id: string | undefined): ModelInput | undefined {
   return model && catalogModel(model.providerID, model.id)?.capabilities?.input;
 }
 
-// /provider marks every catalog provider whose env var exists as
-// "connected" — one ZHIPU_API_KEY lights up four z.ai-family storefronts the
-// user never configured. The picker (and the host's Manage Models) list only
-// providers the config names: provider blocks plus the default model's
-// provider. Nothing named (no config) keeps every connected provider.
-function curateProviders(
-  list: Providers | undefined,
-  config: { model?: string; provider?: Record<string, unknown> } | undefined,
-): Providers | undefined {
-  if (!list) return undefined;
-  const named = new Set(Object.keys(config?.provider ?? {}));
-  const def = config?.model?.split("/")[0];
-  if (def) named.add(def);
-  if (named.size === 0) return list;
-  return { ...list, connected: list.connected.filter((c) => named.has(c)) };
-}
-
 // Monotonic token so a stale refresh (slow response racing a
 // server.connected-triggered one) can't clobber fresher data.
 let generation = 0;
@@ -524,6 +545,11 @@ let commandsSettled = false;
 // clears it.
 let baseRetryTimer: number | undefined;
 let baseRetryDelay = 0;
+// Fill-phase retries spent waiting for listed providers whose catalog
+// rows haven't landed (see refreshBase) — bounds the loop when a listed
+// provider genuinely offers no models.
+let fillAttempts = 0;
+const MAX_FILL_ATTEMPTS = 10;
 function scheduleBaseRetry(): void {
   if (baseRetryTimer !== undefined) return;
   baseRetryDelay = Math.min(baseRetryDelay ? baseRetryDelay * 2 : 1000, 10_000);
@@ -531,6 +557,25 @@ function scheduleBaseRetry(): void {
     baseRetryTimer = undefined;
     void refreshBase();
   }, baseRetryDelay);
+}
+
+// Test hook: the boot-retry ladder, the resync throttle, and the
+// once-per-load re-pull flags are module state — suites that exercise
+// refreshBase behavior need them neutralized, or results depend on test
+// order.
+export function resetBaseRetryForTest(): void {
+  if (baseRetryTimer !== undefined) {
+    clearTimeout(baseRetryTimer);
+    baseRetryTimer = undefined;
+  }
+  baseRetryDelay = 0;
+  fillAttempts = 0;
+  if (resyncTimer !== undefined) {
+    clearTimeout(resyncTimer);
+    resyncTimer = undefined;
+  }
+  resyncAt = 0;
+  commandsSettled = false;
 }
 
 async function refreshBase(): Promise<void> {
@@ -564,24 +609,59 @@ async function refreshBase(): Promise<void> {
     ].sort((a, b) => b.time.updated - a.time.updated);
     for (const s of page.sessions) guardVariant(s.id, s.model);
     sessionsNext.value = page.next;
+    sessionsStalled.value = false;
+  } else {
+    sessionsStalled.value = true;
+  }
+  if (providerList) providers.value = providerList;
+  // "providerID/modelID" — the provider is the first segment.
+  const cfgModel = config?.model?.match(/^([^/]+)\/(.+)$/);
+  if (cfgModel)
+    serverDefaultModel.value = { providerID: cfgModel[1], id: cfgModel[2] };
+  // The catalog is as boot-critical as the list: a failed pull leaves the
+  // model picker at "No models available" (the session's own model still
+  // runs — only switching dies). One retry loop covers both — and on v2
+  // both an EMPTY and a PARTIAL catalog are non-answers. Empty is the
+  // ~1s cold window (200 with []). Partial is the staged fill: built-ins
+  // answer at once, configured providers only after discovery completes
+  // — network-bound, tens of seconds cold. The completeness read must
+  // NOT come from the pull's own /api/provider snapshot: that route
+  // fills in stages too, and an early pull can be internally consistent
+  // (every listed provider has rows) while the configured providers are
+  // still absent. `connected` is the union the menus render — catalog
+  // ids + provider rows + the config default — so a rowless connected
+  // provider is exactly a menu that would sit on "Loading models…"
+  // forever; the ladder clears only when every one of them has rows.
+  // Bounded, because a connected provider that genuinely offers no
+  // models (config drift) is indistinguishable from a late fill.
+  const catalogEmpty =
+    providerList !== undefined &&
+    dialect() === "v2" &&
+    providerList.all.length === 0;
+  const connectedPending =
+    providerList !== undefined &&
+    dialect() === "v2" &&
+    providerList.all.length > 0 &&
+    providerList.connected.some(
+      (pid) => !providerList.all.some((p) => p.id === pid),
+    );
+  if (page === undefined || providerList === undefined || catalogEmpty)
+    scheduleBaseRetry();
+  else if (connectedPending && fillAttempts < MAX_FILL_ATTEMPTS) {
+    fillAttempts++;
+    scheduleBaseRetry();
+  } else {
+    // Complete boot (or the fill bound gave up): the page landed and the
+    // catalog is usable. The clear lives here, not under the page alone,
+    // or a session-list success would cancel a still-empty catalog's
+    // retry.
     if (baseRetryTimer !== undefined) {
       clearTimeout(baseRetryTimer);
       baseRetryTimer = undefined;
     }
     baseRetryDelay = 0;
-    sessionsStalled.value = false;
-  } else {
-    sessionsStalled.value = true;
+    fillAttempts = 0;
   }
-  // The catalog is as boot-critical as the list: a failed pull leaves the
-  // model picker at "No models available" (the session's own model still
-  // runs — only switching dies). One retry loop covers both.
-  if (page === undefined || providerList === undefined) scheduleBaseRetry();
-  if (providerList)
-    providers.value =
-      dialect() === "v2"
-        ? providerList
-        : curateProviders(providerList, config);
   if (agentList) agents.value = agentList;
   if (commandList) commands.value = commandList;
   // v2 fills its command/skill registries per location lazily after boot —
@@ -611,9 +691,6 @@ async function refreshBase(): Promise<void> {
       });
     }, 2500);
   }
-  // "providerID/modelID" — the provider is the first segment.
-  const m = config?.model?.match(/^([^/]+)\/(.+)$/);
-  if (m) serverDefaultModel.value = { providerID: m[1], id: m[2] };
   baseLoaded.value = true;
   void resolveBlankSessions();
 }
@@ -626,6 +703,31 @@ export function defaultAgent(): string {
 }
 
 // What the composer footer shows for a draft (undefined id) or a session.
+// v1 picker switches on a live session land in v1Picks (its session-scoped
+// switch routes 500 on live 1.x servers — agent and model alike); the next
+// prompt carries the pick on its body, and the row converges with its turn.
+const v1Picks = new Map<string, { agent?: string; model?: ModelSelection }>();
+
+// Attention-driven catalog heal: a picker opening while a connected
+// provider still has no rows re-pulls the catalog once — the fill ladder
+// may have cleared at its attempt bound (or the server's discovery
+// finished after the last pull), and the moment the user looks at the
+// menu is exactly when fresh data pays. `connected`, not the snapshot's
+// own listed set, for the same staged-snapshot reason as refreshBase.
+// Cooled down so menu toggling can't spam fetches.
+let lastStalePull = 0;
+export function refreshProvidersIfStale(): void {
+  const p = providers.value;
+  if (!p || dialect() !== "v2" || p.all.length === 0) return;
+  if (!p.connected.some((pid) => !p.all.some((x) => x.id === pid))) return;
+  const now = Date.now();
+  if (now - lastStalePull < 2000) return;
+  lastStalePull = now;
+  void fetchProviders(currentDir.value || undefined).then((list) => {
+    if (list) providers.value = list;
+  });
+}
+
 export function currentSelection(id: string | undefined): {
   agent: string;
   model?: ModelSelection;
@@ -637,16 +739,18 @@ export function currentSelection(id: string | undefined): {
     };
   }
   const s = sessions.value.find((x) => x.id === id);
+  const pick = dialect() === "v1" ? v1Picks.get(id) : undefined;
   // A session never switched still runs on the server's default model.
   return {
-    agent: s?.agent ?? defaultAgent(),
-    model: s?.model ?? serverDefaultModel.value,
+    agent: pick?.agent ?? s?.agent ?? defaultAgent(),
+    model: pick?.model ?? s?.model ?? serverDefaultModel.value,
   };
 }
 
 // Picker switch. On a draft it just updates the held selection; on a session
 // it hits the switch endpoints and patches the row (the SSE switched events
-// carry the same truth).
+// carry the same truth) — except on v1, whose switch routes 500: the pick is
+// recorded in v1Picks and the next prompt carries it.
 export async function setSelection(
   id: string | undefined,
   sel: { agent?: string; model?: ModelSelection },
@@ -654,6 +758,19 @@ export async function setSelection(
   if (!id) {
     if (sel.agent) draftAgent.value = sel.agent;
     if (sel.model) draftModel.value = sel.model;
+    return;
+  }
+  if (dialect() === "v1") {
+    const prev = v1Picks.get(id);
+    v1Picks.set(id, {
+      agent: sel.agent ?? prev?.agent,
+      model: sel.model ?? prev?.model,
+    });
+    patchSession(id, (s) =>
+      sel.agent !== undefined
+        ? { ...s, agent: sel.agent }
+        : { ...s, model: sel.model },
+    );
     return;
   }
   const ok =
@@ -728,6 +845,9 @@ const restoringVariants = new Set<string>();
 
 function guardVariant(id: string, model: Session["model"] | undefined): void {
   if (!model) return;
+  // v1's restore path is the same broken switch route; a picked variant
+  // rides v1Picks into the next prompt instead.
+  if (dialect() === "v1") return;
   const pick = pickedVariants.get(id);
   if (!pick?.variant) {
     // A row arriving with the variant still set IS the standing pick —
@@ -838,6 +958,29 @@ export async function renameProject(
   return true;
 }
 
+// Recolor a project's avatar (Home tile and every session tile of its
+// folders). Server-side, next to the name it shows with.
+export async function setProjectColor(
+  dir: string,
+  color: string,
+): Promise<boolean> {
+  const row = projects.value.find(
+    (p) => normPath(p.worktree) === normPath(dir),
+  );
+  if (!row) {
+    setSendError("That project is not in the server's project list.");
+    return false;
+  }
+  if (!(await setProjectColorApi(row.id, color, row.worktree))) {
+    setSendError("The color was rejected by the server.");
+    return false;
+  }
+  projects.value = projects.value.map((p) =>
+    p === row ? { ...p, icon: { ...(p.icon ?? {}), color } } : p,
+  );
+  return true;
+}
+
 // Drop one session's cached transcript: rows, computed view, older-page
 // cursor/pool, truncation markers.
 function dropTranscript(id: string): void {
@@ -882,6 +1025,7 @@ function dropSessionLocal(id: string): void {
   cancelRing(id);
   sessions.value = sessions.value.filter((s) => s.id !== id);
   if (pickedVariants.delete(id)) savePickedVariants();
+  v1Picks.delete(id);
   restoringVariants.delete(id);
   const map = new Map(messagesBySession.value);
   map.delete(id);
@@ -1541,7 +1685,11 @@ function applyEvent(event: ServerEvent): void {
         const stoppedLast = lastUserPrompt(data.sessionID)?.info.id;
         if (!stoppedLast || !stoppedPrompts.value.has(stoppedLast)) {
           setSendError(
+            // v1 nests the reason (error.data.message); v2's structured
+            // error carries it flat ({type, message}) — without the flat
+            // read every v2 turn failure collapsed to "The turn failed."
             data.error?.data?.message ??
+              data.error?.message ??
               (data.error?.name
                 ? `${data.error.name} — the turn failed.`
                 : "The turn failed."),
@@ -2114,7 +2262,15 @@ function applyEvent(event: ServerEvent): void {
           sessionID: sid,
           type: "tool",
           tool: data.name ?? "",
-          state: { status: "pending" },
+          // The stamp rides along as the span's start: `called` refines
+          // it, but a tool that settles without a called frame must not
+          // lose its elapsed tip with an end and no start.
+          state: {
+            status: "pending",
+            ...(data.timestamp !== undefined
+              ? { time: { start: data.timestamp } }
+              : {}),
+          },
         });
       }
       break;
@@ -2595,6 +2751,12 @@ export function hostMessage(msg: unknown) {
   // Manage Models ran host-side; the picker re-filters from the new list.
   if (m.type === "hidden-models" && Array.isArray(m.ids)) {
     hiddenModels.value = m.ids.filter((x): x is string => typeof x === "string");
+  }
+  // Manage Providers ran host-side; same re-filter for provider rows.
+  if (m.type === "hidden-providers" && Array.isArray(m.ids)) {
+    hiddenProviders.value = m.ids.filter(
+      (x): x is string => typeof x === "string",
+    );
   }
   // Peer registry snapshot (PeerRegistry poll). Replaces the map whole:
   // renames and departures both land as a fresh snapshot.
@@ -3200,6 +3362,8 @@ async function postPrompt(
     setSendError(withReason("The message could not be sent", sent.error));
   } else {
     clearComposerFiles(id);
+    // A v1 pick rode this prompt's body; the row converges on its turn.
+    if (dialect() === "v1") v1Picks.delete(id);
     // v2 replies the admitted user row with the POST — land it in place of
     // the optimistic echo (v1 hears it as message.updated on /event). The
     // row lands BEFORE the echo clears: the echo is the group separator,

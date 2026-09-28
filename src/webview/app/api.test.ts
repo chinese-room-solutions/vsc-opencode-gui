@@ -15,12 +15,14 @@ import {
   clampToolOutput,
   createSession,
   fetchMessages,
+  fetchProviders,
   fetchSessions,
   forgetTruncatedParts,
   isTruncatedPart,
   normalizePermission,
   normalizeSession,
   promptSession,
+  setDialect,
   sniffsText,
   stringifyError,
   toolName,
@@ -325,6 +327,40 @@ describe("api", () => {
       );
       const good = await promptSession("s1", []);
       assert.equal(good.ok, true);
+    });
+  });
+
+  describe("fetchProviders", () => {
+    beforeEach(() => setDialect("v2"));
+    afterEach(() => setDialect("v1"));
+    it("falls back to the bare route when the scoped pull is empty", async () => {
+      const pulls: string[] = [];
+      onApi((call) => {
+        if (call.path === "/api/config") return [];
+        if (call.path === "/api/provider") return { data: [] };
+        if (!call.path.startsWith("/api/model")) return undefined;
+        pulls.push(call.path);
+        return {
+          data: call.path.includes("location")
+            ? []
+            : [{ id: "glm-5.3", providerID: "zai-coding-plan" }],
+        };
+      });
+      const list = await fetchProviders("C:\\work\\repo");
+      assert.equal(list!.all.length, 1);
+      assert.equal(pulls.length, 2); // scoped, then bare
+      assert.equal(pulls[0].includes("location"), true);
+      assert.equal(pulls[1].includes("location"), false);
+    });
+    it("keeps the empty answer when the bare route is empty too", async () => {
+      onApi((call) => {
+        if (call.path === "/api/config") return [];
+        if (call.path === "/api/provider") return { data: [] };
+        if (call.path.startsWith("/api/model")) return { data: [] };
+        return undefined;
+      });
+      const list = await fetchProviders("C:\\work\\repo");
+      assert.equal(list!.all.length, 0);
     });
   });
 

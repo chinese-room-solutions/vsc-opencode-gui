@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import {
   AppHost,
   type HiddenModels,
+  type HiddenProviders,
   type OpenProjectHandler,
   type ProjectStore,
   type RouteStore,
@@ -27,6 +28,7 @@ export class OpencodeViewProvider implements vscode.WebviewViewProvider {
     projectStore: ProjectStore,
     openProject: OpenProjectHandler,
     hiddenModels: HiddenModels,
+    hiddenProviders: HiddenProviders,
   ) {
     this._chat = new AppHost(
       extensionUri,
@@ -35,6 +37,7 @@ export class OpencodeViewProvider implements vscode.WebviewViewProvider {
       projectStore,
       openProject,
       hiddenModels,
+      hiddenProviders,
     );
     hub.register(this._chat);
   }
