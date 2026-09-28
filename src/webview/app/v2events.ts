@@ -7,7 +7,7 @@
 // ahead of the queue; unknown events pass through (the store ignores what
 // it doesn't know).
 import type { ServerEvent } from "./events";
-import { formToQuestion, toMs, v2ModelRef } from "./api";
+import { formToQuestion, toMs, v2CompactionTrigger, v2ModelRef } from "./api";
 
 // v2 addresses a part as (assistantMessageID, ordinal); the durable fetch
 // names content elements `${row.id}:${index}`. The stream's ordinal counts
@@ -25,7 +25,7 @@ const partID = (
 // events evt_*-named — the official client mints row ids from event ids
 // by swapping the prefix, and the durable fetch serves the same id (the
 // streamed row merges with it instead of duplicating).
-const v2RowID = (rowID: unknown, eventID: string | undefined): string | undefined =>
+export const v2RowID = (rowID: unknown, eventID: string | undefined): string | undefined =>
   typeof rowID === "string" && rowID
     ? rowID
     : eventID
@@ -488,24 +488,17 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
     case "session.compaction.started": {
       const rowID = v2RowID(d.inputID, event.id);
       if (!sid || !rowID) return [];
-      const trigger = `${rowID}:c`;
+      const trigger = v2CompactionTrigger(
+        rowID,
+        sid,
+        { created: at ?? Date.now() },
+        d.reason,
+      );
       return [
         // The store gates message events on data.sessionID (the v1 frames
         // carry it at the top level) — both synths stamp it.
-        synth("message.updated", {
-          sessionID: sid,
-          info: { id: trigger, role: "user", time: { created: at ?? Date.now() } },
-        }),
-        synth("message.part.updated", {
-          sessionID: sid,
-          part: {
-            id: `${trigger}:0`,
-            messageID: trigger,
-            sessionID: sid,
-            type: "compaction",
-            ...(d.reason === "auto" ? { auto: true } : {}),
-          },
-        }),
+        synth("message.updated", { sessionID: sid, info: trigger.info }),
+        synth("message.part.updated", { sessionID: sid, part: trigger.part }),
         synth("session.next.step.started", {
           sessionID: sid,
           assistantMessageID: rowID,

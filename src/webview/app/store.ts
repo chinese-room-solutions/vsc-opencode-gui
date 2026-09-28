@@ -67,7 +67,7 @@ import {
   tokensTotal,
 } from "./api";
 import { connectEvents, type ServerEvent } from "./events";
-import { translateV2Event } from "./v2events";
+import { translateV2Event, v2RowID } from "./v2events";
 import { postToHost } from "./host";
 import { parseMentions } from "./mentions";
 import { setCopyModifier } from "./markdown";
@@ -2147,8 +2147,7 @@ function applyEvent(event: ServerEvent): void {
     // part, the same way the official client resolves by shell id.
     case "session.shell.started": {
       const shell = data.shell;
-      const rowID =
-        event.id !== undefined ? event.id.replace(/^evt_/, "msg_") : undefined;
+      const rowID = v2RowID(undefined, event.id);
       if (!shell?.id || !rowID) break;
       upsertMessage(sid, {
         id: rowID,

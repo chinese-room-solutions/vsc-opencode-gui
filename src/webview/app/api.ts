@@ -1143,6 +1143,28 @@ const MESSAGE_PAGE = 50;
 // The server clamps the limit at 400.
 const MESSAGE_PAGE_CAP = 400;
 
+// The trigger pair both compaction paths serve — this fetch and the live
+// translation in v2events — under the same `:c`-derived ids, so streamed
+// and fetched rows merge by id instead of duplicating.
+export function v2CompactionTrigger(
+  rowID: string,
+  sessionID: string,
+  time: Message["time"],
+  reason: unknown,
+): { info: Message; part: Part } {
+  const trigger = `${rowID}:c`;
+  return {
+    info: { id: trigger, role: "user", time },
+    part: {
+      id: `${trigger}:0`,
+      messageID: trigger,
+      sessionID,
+      type: "compaction",
+      ...(reason === "auto" ? { auto: true } : {}),
+    },
+  };
+}
+
 export async function fetchMessages(
   id: string,
   opts?: { cursor?: string; asc?: boolean; size?: number },
@@ -1201,20 +1223,9 @@ export async function fetchMessages(
         recent?: string;
         reason?: string;
       };
-      const auto = c.reason === "auto";
+      const trigger = v2CompactionTrigger(r.id, id, r.time, c.reason);
       return [
-        {
-          info: { id: `${r.id}:c`, role: "user", time: r.time },
-          parts: [
-            {
-              id: `${r.id}:c:0`,
-              messageID: `${r.id}:c`,
-              sessionID: id,
-              type: "compaction",
-              ...(auto ? { auto: true } : {}),
-            },
-          ],
-        },
+        { info: trigger.info, parts: [trigger.part] },
         {
           info: {
             id: r.id,
