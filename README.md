@@ -47,10 +47,12 @@ All commands live under the **`Open Code:`** prefix in the command palette.
 | | |
 | --- | --- |
 | `Open Code: Open in Primary Editor` | Open the chat in an editor tab |
+| `Open Code: Toggle Chat` | Open or close the chat editor tab (`Ctrl+Esc`) |
 | `Open Code: Toggle Side Panel` | Sidebar view |
 | `Open Code: New Session` | Start a session |
 | `Open Code: Show History` | Session picker |
 | `Open Code: Add Selection to Chat` | Send the editor selection as context |
+| `Open Code: Add to Chat` | Insert the file's relative path into the chat input |
 | `Open Code: Manage Models` | Provider and model picker |
 | `Open Code: Manage Providers` | Which providers the pickers list, and per-row plug toggles a provider on the server (config denylist) |
 | `Open Code: Show Session Diff` | Working-tree diff of the session |
