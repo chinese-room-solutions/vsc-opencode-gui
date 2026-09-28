@@ -2,6 +2,7 @@
 import { strict as assert } from "node:assert";
 import {
   apiLog,
+  ApiCall,
   bellRang,
   callsFor,
   dispatchWindowMessage,
@@ -10,12 +11,15 @@ import {
   flushEvents,
   hostPosted,
   localStorageStub,
+  messageMock,
   onApi,
   API_FAIL,
   apiFailWith,
   pendingTimers,
+  sessRow,
   setNow,
   settle,
+  T0,
 } from "./setup.test";
 import {
   baseLoaded,
@@ -104,20 +108,6 @@ import type {
   Session,
 } from "./api";
 import { activeTab, navigate, route, unreadTabs } from "./router";
-
-const T0 = 1_750_000_000_000;
-
-function sessRow(id: string, over: Partial<Session> = {}): Session {
-  return {
-    id,
-    title: `t-${id}`,
-    cost: 0,
-    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-    time: { created: T0, updated: T0 },
-    location: { directory: "C:\\work\\repo" },
-    ...over,
-  };
-}
 
 function row(
   id: string,
@@ -403,19 +393,18 @@ describe("reconnect resync heals a mis-typed reasoning part", () => {
       delta: "leaked thought",
     });
     assert.equal(findPart(sid, "p1")?.type, "text"); // the leak premise
-    onApi((call) => {
-      if (call.method !== "GET") return undefined;
-      if (call.path.startsWith(`/api/session/${sid}/message`))
-        return { data: [], cursor: {} };
-      if (call.path === `/session/${sid}/message`)
-        return [
+    onApi(
+      messageMock(
+        sid,
+        { data: [], cursor: {} },
+        [
           {
             info: { id: "m1", role: "assistant", time: { created: T0 } },
             parts: [textPart("p1", "m1", sid, "", "reasoning")],
           },
-        ];
-      return undefined;
-    });
+        ],
+      ),
+    );
     await refreshMessages(sid);
     const healed = findPart(sid, "p1");
     assert.equal(healed?.type, "reasoning");
@@ -612,21 +601,22 @@ describe("transcript windowing and Load older (5185f17)", () => {
     parts: i % 2 === 0 ? [textPart(`l${i}:text`, `l${i}`, sid, `q${i}`)] : [],
   }));
   beforeEach(() => {
-    onApi((call) => {
-      if (call.method !== "GET") return undefined;
-      if (call.path.startsWith(`/api/session/${sid}/message`)) {
-        // The older-row walk: page 1 is order=asc (no cursor), then cursor
-        // pages — here the asc page holds only rows we already have (all
-        // dups, short page) and the cursor page is empty: the v2 transcript
-        // is exhausted, the legacy pool still holds rows.
-        if (call.path.includes("cursor=c2"))
-          return { data: [], cursor: { next: "c3" } };
-        if (call.path.includes("order=asc")) return { data: v2 };
-        return { data: v2, cursor: { next: "c1" } };
-      }
-      if (call.path === `/session/${sid}/message`) return legacy;
-      return undefined;
-    });
+    onApi(
+      messageMock(
+        sid,
+        (call: ApiCall) => {
+          // The older-row walk: page 1 is order=asc (no cursor), then cursor
+          // pages — here the asc page holds only rows we already have (all
+          // dups, short page) and the cursor page is empty: the v2 transcript
+          // is exhausted, the legacy pool still holds rows.
+          if (call.path.includes("cursor=c2"))
+            return { data: [], cursor: { next: "c3" } };
+          if (call.path.includes("order=asc")) return { data: v2 };
+          return { data: v2, cursor: { next: "c1" } };
+        },
+        legacy,
+      ),
+    );
   });
 
   it("cold open shows only the newest window", async () => {
@@ -665,9 +655,8 @@ describe("transcript windowing and Load older (5185f17)", () => {
       type: i % 2 === 0 ? "user" : "assistant",
       time: { created: T0 + i * 10 },
     }));
-    onApi((call) => {
-      if (call.method !== "GET") return undefined;
-      if (call.path.startsWith(`/api/session/${sid}/message`)) {
+    onApi(
+      messageMock(sid, (call: ApiCall) => {
         if (call.path.includes("cursor=w2"))
           return { data: older.slice(50), cursor: { next: "w3" } };
         if (call.path.includes("cursor=w1"))
@@ -675,10 +664,8 @@ describe("transcript windowing and Load older (5185f17)", () => {
         if (call.path.includes("order=asc"))
           return { data: older, cursor: { next: "w1" } };
         return { data: v2, cursor: { next: "c1" } };
-      }
-      if (call.path === `/session/${sid}/message`) return [];
-      return undefined;
-    });
+      }),
+    );
     await refreshMessages(sid);
     assert.equal(await loadOlderMessages(sid), true);
     assert.equal(listOf(sid).length, 150);
@@ -708,18 +695,14 @@ describe("queued echo and command lines survive refreshes (50cba2d)", () => {
       `opencode-cmd-${sid}`,
       JSON.stringify([{ cid: "cmd:7", text: "/foo", created: T0 + 5 }]),
     );
-    onApi((call) => {
-      if (call.method !== "GET") return undefined;
-      if (call.path.startsWith(`/api/session/${sid}/message`))
-        return {
-          data: [
-            { id: "u1", type: "user", time: { created: T0 - 10 }, text: "real row" },
-          ],
-          cursor: {},
-        };
-      if (call.path === `/session/${sid}/message`) return [];
-      return undefined;
-    });
+    onApi(
+      messageMock(sid, {
+        data: [
+          { id: "u1", type: "user", time: { created: T0 - 10 }, text: "real row" },
+        ],
+        cursor: {},
+      }),
+    );
     await refreshMessages(sid);
     const ids = listOf(sid).map((m) => m.info.id);
     assert.deepEqual(ids, ["u1", "pending:1", "cmd:7"]);
@@ -1019,12 +1002,7 @@ describe("message identity across refreshes (da0d298)", () => {
       ],
       cursor: {},
     });
-    onApi((call) => {
-      if (call.method !== "GET") return undefined;
-      if (call.path.startsWith(`/api/session/${sid}/message`)) return fetchPage();
-      if (call.path === `/session/${sid}/message`) return [];
-      return undefined;
-    });
+    onApi(messageMock(sid, fetchPage));
     await refreshMessages(sid);
     const echoRow = findRow(sid, "cmd:3");
     assert.strictEqual(echoRow, localEcho);
@@ -1040,23 +1018,19 @@ describe("message identity across refreshes (da0d298)", () => {
         parts: [textPart("p1", "a1", sid, "0123456789")],
       },
     ]);
-    onApi((call) => {
-      if (call.method !== "GET") return undefined;
-      if (call.path.startsWith(`/api/session/${sid}/message`))
-        return {
-          data: [
-            {
-              id: "a1",
-              type: "assistant",
-              time: { created: 2 },
-              content: [{ type: "text", id: "p1", text: "012" }],
-            },
-          ],
-          cursor: {},
-        };
-      if (call.path === `/session/${sid}/message`) return [];
-      return undefined;
-    });
+    onApi(
+      messageMock(sid, {
+        data: [
+          {
+            id: "a1",
+            type: "assistant",
+            time: { created: 2 },
+            content: [{ type: "text", id: "p1", text: "012" }],
+          },
+        ],
+        cursor: {},
+      }),
+    );
     await refreshMessages(sid);
     assert.equal(
       (findPart(sid, "p1") as { text?: string }).text,
@@ -1963,16 +1937,12 @@ describe("sendPrompt", () => {
       row("old", "user", T0),
       row("live1", "user", now),
     ]);
-    onApi((call) => {
-      const p = call.path.split("?")[0];
-      if (p === `/api/session/${sid}/message`)
-        return {
-          data: [{ id: "old", type: "user", time: { created: T0 }, text: "a" }],
-          cursor: {},
-        };
-      if (p === `/session/${sid}/message`) return [];
-      return undefined;
-    });
+    onApi(
+      messageMock(sid, {
+        data: [{ id: "old", type: "user", time: { created: T0 }, text: "a" }],
+        cursor: {},
+      }),
+    );
     await refreshMessages(sid);
     const ids = listOf(sid).map((m) => m.info.id);
     assert.ok(ids.includes("live1"), "the streamed row must survive");
@@ -2258,21 +2228,17 @@ describe("revert fold", () => {
   it("folds the transcript at the pending revert marker", async () => {
     const sid = "rv1";
     sessions.value = [sessRow(sid, { revert: { messageID: "u2" } })];
-    onApi((call) => {
-      if (call.method !== "GET") return undefined;
-      if (call.path.startsWith(`/api/session/${sid}/message`))
-        return {
-          data: [
-            { id: "u1", type: "user", time: { created: 1 }, text: "one" },
-            { id: "a1", type: "assistant", time: { created: 2 } },
-            { id: "u2", type: "user", time: { created: 3 }, text: "two" },
-            { id: "a2", type: "assistant", time: { created: 4 } },
-          ],
-          cursor: {},
-        };
-      if (call.path === `/session/${sid}/message`) return [];
-      return undefined;
-    });
+    onApi(
+      messageMock(sid, {
+        data: [
+          { id: "u1", type: "user", time: { created: 1 }, text: "one" },
+          { id: "a1", type: "assistant", time: { created: 2 } },
+          { id: "u2", type: "user", time: { created: 3 }, text: "two" },
+          { id: "a2", type: "assistant", time: { created: 4 } },
+        ],
+        cursor: {},
+      }),
+    );
     await refreshMessages(sid);
     assert.deepEqual(
       listOf(sid).map((m) => m.info.id),
@@ -2595,12 +2561,13 @@ describe("transcript load retry (9c1f2e7)", () => {
   it("marks the failed load, retries, and clears on success", async () => {
     navigate({ view: "session", id: "rl1" });
     let failing = true;
-    onApi((call) => {
-      const p = call.path.split("?")[0];
-      if (p === "/api/session/rl1/message" || p === "/session/rl1/message")
-        return failing ? API_FAIL : undefined;
-      return undefined;
-    });
+    onApi(
+      messageMock(
+        "rl1",
+        () => (failing ? API_FAIL : undefined),
+        () => (failing ? API_FAIL : undefined),
+      ),
+    );
     await refreshMessages("rl1");
     assert.equal(failedMsgLoads.value.has("rl1"), true);
     assert.equal(messagesBySession.value.has("rl1"), false);
@@ -2613,12 +2580,7 @@ describe("transcript load retry (9c1f2e7)", () => {
 
   it("stops retrying once the session leaves the screen", async () => {
     navigate({ view: "session", id: "rl2" });
-    onApi((call) => {
-      const p = call.path.split("?")[0];
-      if (p === "/api/session/rl2/message" || p === "/session/rl2/message")
-        return API_FAIL;
-      return undefined;
-    });
+    onApi(messageMock("rl2", API_FAIL, API_FAIL));
     await refreshMessages("rl2");
     assert.equal(failedMsgLoads.value.has("rl2"), true);
     // The open tab alone keeps the retry alive — close it, not just route away.

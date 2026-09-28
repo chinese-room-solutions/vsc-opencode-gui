@@ -9,8 +9,10 @@ import {
   fireExact,
   bellRang,
   onApi,
+  sessRow,
   setNow,
   settle,
+  T0,
 } from "./setup.test";
 import {
   compactSession,
@@ -60,26 +62,35 @@ import {
 } from "./store";
 import type { ChatMessage } from "./store";
 
-const T0 = 1_750_000_000_000;
-
-function sessRow(id: string, over: Partial<Session> = {}): Session {
-  return {
-    id,
-    title: `t-${id}`,
-    cost: 0,
-    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-    time: { created: T0, updated: T0 },
-    location: { directory: "C:\\work\\repo" },
-    ...over,
-  };
-}
-
 function row(
   id: string,
   role: "user" | "assistant",
   created: number,
 ): ChatMessage {
   return { info: { id, role, time: { created } }, parts: [] };
+}
+
+// v2 form row: one option field; the field title is the capitalized key.
+function formRow(
+  id: string,
+  title: string,
+  key: string,
+  options: [value: string, label: string][],
+  sessionID?: string,
+): Record<string, unknown> {
+  return {
+    id,
+    ...(sessionID !== undefined ? { sessionID } : {}),
+    title,
+    fields: [
+      {
+        key,
+        type: "string",
+        title: key[0].toUpperCase() + key.slice(1),
+        options: options.map(([value, label]) => ({ value, label })),
+      },
+    ],
+  };
 }
 
 let evSeq = 0;
@@ -1077,20 +1088,7 @@ describe("v2 transcript normalization (fetchMessages)", () => {
         };
       if (call.path === "/api/session/ses_1/form")
         return {
-          data: [
-            {
-              id: "frm_1",
-              title: "Proceed?",
-              fields: [
-                {
-                  key: "go",
-                  type: "string",
-                  title: "Go",
-                  options: [{ value: "yes", label: "Yes" }],
-                },
-              ],
-            },
-          ],
+          data: [formRow("frm_1", "Proceed?", "go", [["yes", "Yes"]])],
         };
       if (call.method === "POST" && call.path === "/api/session/ses_1/form/frm_1/reply")
         return {};
@@ -1939,22 +1937,16 @@ describe("v2 SSE → pipeline translation", () => {
     const asked = translateV2Event(
       ev("form.created", {
         sessionID: "s",
-        form: {
-          id: "frm_1",
-          sessionID: "s",
-          title: "Continue?",
-          fields: [
-            {
-              key: "choice",
-              type: "string",
-              title: "Choice",
-              options: [
-                { value: "yes", label: "Yes" },
-                { value: "no", label: "No" },
-              ],
-            },
+        form: formRow(
+          "frm_1",
+          "Continue?",
+          "choice",
+          [
+            ["yes", "Yes"],
+            ["no", "No"],
           ],
-        },
+          "s",
+        ),
       }),
     );
     assert.equal(asked.length, 1);

@@ -7,6 +7,22 @@
 // first, and every test file re-imports it (cached) before app modules.
 import { captureApi } from "./host";
 import { openTabs, route, unreadTabs } from "./router";
+import type { Session } from "./api";
+
+// Shared row fixtures.
+export const T0 = 1_750_000_000_000;
+
+export function sessRow(id: string, over: Partial<Session> = {}): Session {
+  return {
+    id,
+    title: `t-${id}`,
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: T0, updated: T0 },
+    location: { directory: "C:\\work\\repo" },
+    ...over,
+  };
+}
 
 type MessageListener = (e: { data: unknown }) => void;
 const messageListeners = new Set<MessageListener>();
@@ -164,7 +180,7 @@ export interface ApiFailWith {
 export function apiFailWith(error: string): ApiFailWith {
   return { fail: true, error };
 }
-type Responder = (call: ApiCall) => unknown;
+export type Responder = (call: ApiCall) => unknown;
 let responders: Responder[] = [];
 
 function defaultResponder({ method, path }: ApiCall): unknown {
@@ -228,6 +244,24 @@ captureApi({
 // body, or API_FAIL to make the call fail.
 export function onApi(fn: Responder): void {
   responders.push(fn);
+}
+
+// Serves both transcript routes of one session (v2 paginated + v1 legacy
+// list); page/legacy may be a value or a (call) => value thunk.
+export function messageMock(
+  sid: string,
+  page: unknown | ((call: ApiCall) => unknown),
+  legacy: unknown | ((call: ApiCall) => unknown) = [],
+): Responder {
+  const answer = (v: unknown, call: ApiCall): unknown =>
+    typeof v === "function" ? (v as (call: ApiCall) => unknown)(call) : v;
+  return (call) => {
+    if (call.method !== "GET") return undefined;
+    if (call.path.startsWith(`/api/session/${sid}/message`))
+      return answer(page, call);
+    if (call.path === `/session/${sid}/message`) return answer(legacy, call);
+    return undefined;
+  };
 }
 
 // --- Drivers ---
