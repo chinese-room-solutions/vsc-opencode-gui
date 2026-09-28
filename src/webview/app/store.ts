@@ -1776,21 +1776,29 @@ function applyEvent(event: ServerEvent): void {
         void refreshMessages(data.sessionID).catch(() => undefined);
       }
       break;
+    // The TUI's permission bell: live asks ring once — a repeated event
+    // for a docked ask, and asks re-docked by refreshPermissions on
+    // session open, stay silent. Same facts on the v1 stream under the
+    // un-suffixed names (the v2 turn never emits those): without this
+    // dock a v1 bash ask pends forever — the server holds the turn busy
+    // and runs nothing.
     case "permission.v2.asked":
-      // The TUI's permission bell: live asks ring once — a repeated event
-      // for a docked ask, and asks re-docked by refreshPermissions on
-      // session open, stay silent.
+    case "permission.asked":
       if (data.id) {
         if (!pendingPermissions.value.some((p) => p.id === data.id)) {
           playPermissionSound();
         }
         pendingPermissions.value = [
           ...pendingPermissions.value.filter((p) => p.id !== data.id),
-          normalizePermission(data as unknown as PermissionRequest, false),
+          normalizePermission(
+            data as unknown as PermissionRequest,
+            event.type === "permission.asked",
+          ),
         ];
       }
       break;
     case "permission.v2.replied":
+    case "permission.replied":
       if (data.requestID) {
         pendingPermissions.value = pendingPermissions.value.filter(
           (p) => p.id !== data.requestID,
@@ -1799,30 +1807,6 @@ function applyEvent(event: ServerEvent): void {
       // A rejected permission aborts the turn: the stream carries the tool
       // failure, then goes quiet — no step.ended ever fires, so without
       // this the busy composer sticks over a dead turn.
-      if (data.reply === "reject" && data.sessionID) {
-        retireTurn(data.sessionID);
-      }
-      break;
-    // Same facts on the v1 stream, under the un-suffixed names (the v2
-    // turn never emits these): without this dock a v1 bash ask pends
-    // forever — the server holds the turn busy and runs nothing.
-    case "permission.asked":
-      if (data.id) {
-        if (!pendingPermissions.value.some((p) => p.id === data.id)) {
-          playPermissionSound();
-        }
-        pendingPermissions.value = [
-          ...pendingPermissions.value.filter((p) => p.id !== data.id),
-          normalizePermission(data as unknown as PermissionRequest, true),
-        ];
-      }
-      break;
-    case "permission.replied":
-      if (data.requestID) {
-        pendingPermissions.value = pendingPermissions.value.filter(
-          (p) => p.id !== data.requestID,
-        );
-      }
       if (data.reply === "reject" && data.sessionID) {
         retireTurn(data.sessionID);
       }
