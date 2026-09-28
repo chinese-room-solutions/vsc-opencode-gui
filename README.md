@@ -52,7 +52,7 @@ All commands live under the **`Open Code:`** prefix in the command palette.
 | `Open Code: Show History` | Session picker |
 | `Open Code: Add Selection to Chat` | Send the editor selection as context |
 | `Open Code: Manage Models` | Provider and model picker |
-| `Open Code: Manage Providers` | Which providers the pickers list |
+| `Open Code: Manage Providers` | Which providers the pickers list, and per-row plug toggles a provider on the server (config denylist) |
 | `Open Code: Show Session Diff` | Working-tree diff of the session |
 | `Open Code: Toggle Context Breakdown` | Per-message context panel |
 | `Open Code: Open in Terminal` | Terminal bound to the session |

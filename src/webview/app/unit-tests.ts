@@ -7,3 +7,4 @@ import "./markdown.test";
 import "./store.test";
 import "./v2.test";
 import "./stuck.test";
+import "./disabledProviders.test";

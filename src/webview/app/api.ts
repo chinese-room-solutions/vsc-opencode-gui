@@ -577,10 +577,16 @@ export interface QuestionRequest {
   // /api/session/{id}/form, answers on /api/session/{id}/form/{id}/reply
   // with {answer}). The other route 404s (QuestionNotFoundError).
   v1?: boolean;
-  // A v2 form ask: per-field names, in question order — a multi-field
-  // reply keys its answer object by them (single-field answers go as the
-  // scalar).
-  formFieldNames?: string[];
+  // A v2 form ask: reply specs in question order — the server keys every
+  // answer by the field's `key` (wire-verified 2.0.18: the reply body is
+  // ALWAYS {answer: {<key>: value}} — scalars 400 with Expected
+  // Form.Answer), a multiselect field takes the chosen option VALUES as a
+  // string[], and option labels may differ from their values.
+  formFields?: {
+    key: string;
+    multiple: boolean;
+    optionValues?: Record<string, string>;
+  }[];
 }
 
 // Pending questions for one session, both pipelines merged: v2 asks are
@@ -630,8 +636,9 @@ export async function fetchSessionQuestions(
 
 // v2 form row → v1 QuestionRequest. Field shape is only partially known
 // (Form.Field: name/label/type/options); option-like fields list their
-// options, everything else offers the free-text row. Field names ride
-// along so a multi-field reply can key its answer object.
+// options, everything else offers the free-text row. Reply specs (key,
+// multiple, label→value) ride along so the reply can key by `key` and send
+// option values.
 export function formToQuestion(
   raw: Record<string, unknown>,
   sessionID: string,
@@ -643,19 +650,40 @@ export function formToQuestion(
     (f): f is Record<string, unknown> =>
       typeof f === "object" && f !== null,
   );
-  const names = fields.map((f, i) =>
-    typeof f.name === "string" ? f.name : `field${i}`,
-  );
+  const formFields = fields.map((f, i) => {
+    const optionValues: Record<string, string> = {};
+    if (Array.isArray(f.options)) {
+      for (const o of f.options as Record<string, unknown>[]) {
+        if (typeof o !== "object" || o === null) continue;
+        const value =
+          typeof o.value === "string"
+            ? o.value
+            : typeof o.value === "number"
+              ? String(o.value)
+              : undefined;
+        if (value === undefined) continue;
+        const label = typeof o.label === "string" ? o.label : value;
+        optionValues[label] = value;
+      }
+    }
+    return {
+      key: typeof f.key === "string" ? f.key : `field${i}`,
+      multiple: f.type === "multiselect" || f.multiple === true,
+      optionValues,
+    };
+  });
   const questions: QuestionInfo[] =
     fields.length === 0
       ? [{ question: title, header: "", options: [], custom: true }]
       : fields.map((f, i) => {
           const label =
-            typeof f.label === "string"
-              ? f.label
-              : typeof f.name === "string"
-                ? f.name
-                : `Field ${i + 1}`;
+            typeof f.title === "string"
+              ? f.title
+              : typeof f.label === "string"
+                ? f.label
+                : typeof f.key === "string"
+                  ? f.key
+                  : `Field ${i + 1}`;
           const options = Array.isArray(f.options)
             ? (f.options as Record<string, unknown>[])
                 .map((o) =>
@@ -684,7 +712,7 @@ export function formToQuestion(
                 : title || label,
             header: label,
             options,
-            multiple: f.multiple === true,
+            multiple: f.type === "multiselect" || f.multiple === true,
             // Free-text row: explicit on the field, or the only offering
             // of an option-less (input) field.
             custom:
@@ -692,7 +720,13 @@ export function formToQuestion(
               (options.length === 0 && f.custom !== false),
           };
         });
-  return { id, sessionID, questions, formFieldNames: names, v1: false };
+  return {
+    id,
+    sessionID,
+    questions,
+    formFields: fields.length > 0 ? formFields : undefined,
+    v1: false,
+  };
 }
 
 // Chat message. Only the fields the UI reads; the server sends more.
@@ -1330,10 +1364,14 @@ export async function fetchMessages(
       if (typeof p.state.error === "object" && p.state.error !== null) {
         p.state = { ...p.state, error: stringifyError(p.state.error) };
       }
-      // v2 stamps tool runs {created, ran, completed}; the live dialect
-      // (and ToolState) speaks {start, end}. A mid-stream reload's
-      // "streaming" status is a still-writing input — reads as running.
-      const t = p.state.time as
+      // Tool timing: v2's durable rows carry NO state.time — the span
+      // lives part-level as {created, completed} (wire-verified 2.0.18;
+      // only live-streamed tools get state.time from the SSE events).
+      // Without lifting it, every fetched row loses its elapsed tip.
+      // Older shapes that did stamp the run keep working: {created, ran,
+      // completed} → the live dialect's {start, end}.
+      const t = (p.state.time ??
+        (p as unknown as { time?: Record<string, unknown> }).time) as
         | {
             created?: number;
             ran?: number;
@@ -1341,7 +1379,7 @@ export async function fetchMessages(
             start?: number;
             end?: number;
           }
-        | undefined;
+          | undefined;
       if (
         t &&
         (t.created !== undefined ||
@@ -2038,22 +2076,26 @@ export async function replyPermissionV1(
 // POST .../reply — one label array per question, in order. The pipeline
 // split runs through the reply too: a v1 ask answers on the global
 // /question/{id}/reply; a v2 ask is a form — /api/session/{sid}/form/{id}/reply
-// with {answer} (the scalar for a single-field form, an object keyed by
-// field name for more).
+// with {answer: {<field.key>: value}} (wire-verified 2.0.18: ALWAYS an
+// object, never a scalar; multiselect fields take the option values as a
+// string[]).
 export async function replyQuestion(
   sessionID: string,
   id: string,
   answers: string[][],
   v1 = false,
-  formFieldNames?: string[],
+  form?: QuestionRequest,
 ): Promise<boolean> {
   if (!v1) {
-    const answer =
-      formFieldNames && formFieldNames.length > 1
-        ? Object.fromEntries(
-            formFieldNames.map((n, i) => [n, answers[i]?.[0] ?? ""]),
-          )
-        : (answers[0]?.[0] ?? "");
+    const specs = form?.formFields ?? [];
+    const answer = Object.fromEntries(
+      specs.map((f, i) => {
+        const picked = (answers[i] ?? []).map(
+          (label) => f.optionValues?.[label] ?? label,
+        );
+        return [f.key, f.multiple ? picked : (picked[0] ?? "")];
+      }),
+    );
     return (
       (await sendJson("POST", `/api/session/${sessionID}/form/${id}/reply`, {
         answer,

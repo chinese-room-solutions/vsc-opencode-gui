@@ -197,6 +197,11 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
           ]
         : [];
     }
+    // The server re-read its config (a file edit — ours included, when a
+    // provider gets disabled): the catalog may have changed shape, so
+    // re-pull the base exactly like a reconnect would.
+    case "config.updated":
+      return [synth("server.connected", {})];
     // --- tools → the 1.18 tool-call family (callID-keyed state machine) ---
     case "session.tool.input.started":
       return d.assistantMessageID && d.id

@@ -35,6 +35,7 @@ import {
   isTaskTool,
   promptSession,
   replyPermission,
+  replyQuestion,
   renameSession,
   revertSession,
   runCommand,
@@ -1032,6 +1033,38 @@ describe("v2 transcript normalization (fetchMessages)", () => {
     assert.ok(isBashTool(tool.tool));
   });
 
+  it("lifts part-level {created,completed} into state.time when the row has none", async () => {
+    // v2.0.18 durable rows: the span lives PART-level, state carries no
+    // time — without the lift every fetched tool loses its elapsed tip.
+    onApi((call) =>
+      call.path.startsWith("/api/session/ses_1/message")
+        ? {
+            data: [
+              {
+                id: "msg_a",
+                time: { created: 1, completed: 9 },
+                type: "assistant",
+                content: [
+                  {
+                    type: "tool",
+                    id: "cal_2",
+                    name: "bash",
+                    state: { status: "completed", input: "{}" },
+                    time: { created: 2, completed: 7 },
+                  },
+                ],
+              },
+            ],
+            cursor: { next: null },
+          }
+        : undefined,
+    );
+    const page = await fetchMessages("ses_1");
+    const tool = page?.messages[0]?.parts[0]!;
+    assert.ok(isTool(tool));
+    assert.deepEqual(tool.state?.time, { start: 2, end: 7 });
+  });
+
   it("asks: v2 permission replies send {decision}; asks list via /api/permission/request; questions are forms", async () => {
     onApi((call) => {
       if (call.method === "POST" && call.path === "/api/session/ses_1/permission/per_1/reply")
@@ -1048,10 +1081,19 @@ describe("v2 transcript normalization (fetchMessages)", () => {
             {
               id: "frm_1",
               title: "Proceed?",
-              fields: [{ name: "go", label: "Go", options: [{ label: "Yes" }] }],
+              fields: [
+                {
+                  key: "go",
+                  type: "string",
+                  title: "Go",
+                  options: [{ value: "yes", label: "Yes" }],
+                },
+              ],
             },
           ],
         };
+      if (call.method === "POST" && call.path === "/api/session/ses_1/form/frm_1/reply")
+        return {};
       return undefined;
     });
     assert.equal(
@@ -1068,9 +1110,37 @@ describe("v2 transcript normalization (fetchMessages)", () => {
     const row = questions?.rows[0];
     assert.equal(row?.id, "frm_1");
     assert.equal(row?.v1, false);
-    assert.deepEqual(row?.formFieldNames, ["go"]);
+    assert.deepEqual(row?.formFields, [
+      { key: "go", multiple: false, optionValues: { Yes: "yes" } },
+    ]);
     assert.equal(row?.questions[0].question, "Proceed?");
     assert.equal(row?.questions[0].options?.[0].label, "Yes");
+    // The reply is always keyed by the field key, values not labels.
+    assert.equal(
+      await replyQuestion("ses_1", "frm_1", [["Yes"]], false, row),
+      true,
+    );
+    assert.deepEqual(
+      callsFor("/api/session/ses_1/form/frm_1/reply")[0].body,
+      { answer: { go: "yes" } },
+    );
+    // Multiselect: chosen labels map to values and go as a string[].
+    assert.equal(
+      await replyQuestion("ses_1", "frm_1", [["Yes", "No"]], false, {
+        id: "frm_1",
+        sessionID: "ses_1",
+        v1: false,
+        questions: [],
+        formFields: [
+          { key: "go", multiple: true, optionValues: { Yes: "yes", No: "no" } },
+        ],
+      }),
+      true,
+    );
+    assert.deepEqual(
+      callsFor("/api/session/ses_1/form/frm_1/reply")[1].body,
+      { answer: { go: ["yes", "no"] } },
+    );
     assert.equal(isTaskTool("subagent"), true);
     assert.equal(isTaskTool("task"), true);
     assert.equal(isTaskTool("bash"), false);
@@ -1874,7 +1944,15 @@ describe("v2 SSE → pipeline translation", () => {
           sessionID: "s",
           title: "Continue?",
           fields: [
-            { name: "choice", label: "Choice", options: [{ label: "Yes" }, { label: "No" }] },
+            {
+              key: "choice",
+              type: "string",
+              title: "Choice",
+              options: [
+                { value: "yes", label: "Yes" },
+                { value: "no", label: "No" },
+              ],
+            },
           ],
         },
       }),
@@ -1883,11 +1961,13 @@ describe("v2 SSE → pipeline translation", () => {
     assert.equal(asked[0].type, "question.v2.asked");
     const q = asked[0].data as {
       id?: string;
-      formFieldNames?: string[];
+      formFields?: { key: string; multiple: boolean; optionValues?: Record<string, string> }[];
       questions?: { question?: string; options?: { label: string }[]; custom?: boolean }[];
     };
     assert.equal(q.id, "frm_1");
-    assert.deepEqual(q.formFieldNames, ["choice"]);
+    assert.deepEqual(q.formFields, [
+      { key: "choice", multiple: false, optionValues: { Yes: "yes", No: "no" } },
+    ]);
     assert.equal(q.questions?.[0].question, "Continue?");
     assert.deepEqual(q.questions?.[0].options, [{ label: "Yes" }, { label: "No" }]);
     assert.equal(q.questions?.[0].custom, false);
@@ -2028,6 +2108,15 @@ describe("v2 SSE → pipeline translation", () => {
       translateV2Event(ev("session.inbox.enqueued", { sessionID: "s" })),
       [ev("session.inbox.enqueued", { sessionID: "s" })],
     );
+  });
+
+  it("maps a config re-read to a base refresh", () => {
+    // The disable toggle writes the config file; the server watcher
+    // emits config.updated — the catalog may have changed shape, so the
+    // app re-pulls exactly like a reconnect.
+    assert.deepEqual(translateV2Event(ev("config.updated", {})), [
+      { id: "evt_x", type: "server.connected", data: {} },
+    ]);
   });
 });
 

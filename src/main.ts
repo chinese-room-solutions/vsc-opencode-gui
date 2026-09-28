@@ -742,8 +742,10 @@ export function activate(context: vscode.ExtensionContext) {
     ),
   );
 
-  // Manage Providers: which connected providers the pickers list (checked =
-  // listed). The provider menu's footer lands here via the
+  // Manage Providers: which connected providers the pickers list (checked
+  // = listed), plus a per-row plug button that disables/re-enables a
+  // provider on the SERVER (config denylist — its models stop being
+  // usable). The provider menu's footer lands here via the
   // "manage-providers" message.
   context.subscriptions.push(
     vscode.commands.registerCommand(
@@ -753,15 +755,15 @@ export function activate(context: vscode.ExtensionContext) {
         const sm = serverManager;
         await sm?.ready;
         const catalog = await sm?.providerCatalog();
-        if (!catalog) {
+        if (!catalog || !sm) {
           vscode.window.showErrorMessage(
             "Could not load providers — the opencode server is not reachable. Try Open Code: Restart.",
           );
           return;
         }
-        const hidden = new Set(hiddenProviders.get());
         const connected = catalog.connected;
-        if (connected.length === 0) {
+        const disabled = new Set(await sm.disabledProviders());
+        if (connected.length === 0 && disabled.size === 0) {
           vscode.window.showInformationMessage(
             "No providers are connected yet — run `opencode auth login` in a terminal to connect one.",
           );
@@ -770,24 +772,64 @@ export function activate(context: vscode.ExtensionContext) {
         const names = new Map(
           (catalog.all ?? []).map((p) => [p.id, p.name ?? p.id]),
         );
-        const picked = await vscode.window.showQuickPick(
-          connected.map((pid) => ({
-            label: names.get(pid) ?? pid,
-            description: pid,
-            picked: !hidden.has(pid),
-          })),
-          {
-            title: "Open Code: Manage Providers",
-            placeHolder: "Checked providers appear in the pickers",
-            canPickMany: true,
+        type Row = vscode.QuickPickItem & { pid: string };
+        const row = (pid: string): Row => ({
+          pid,
+          label: names.get(pid) ?? pid,
+          description: pid,
+          ...(disabled.has(pid)
+            ? { detail: "$(circle-slash) Disabled on the server" }
+            : {}),
+          picked: !disabled.has(pid) && !hiddenProviders.get().includes(pid),
+          buttons: [
+            {
+              iconPath: new vscode.ThemeIcon("plug"),
+              tooltip: disabled.has(pid)
+                ? "Enable on the server"
+                : "Disable on the server",
+            },
+          ],
+        });
+        const qp = vscode.window.createQuickPick<Row>();
+        qp.title = "Open Code: Manage Providers";
+        qp.canSelectMany = true;
+        qp.placeholder =
+          "Checked providers appear in the pickers — the plug toggles one on the server";
+        qp.items = [...new Set([...connected, ...disabled])].map(row);
+        qp.onDidTriggerItemButton((e) => {
+          const pid = (e.item as Row).pid;
+          void (async () => {
+            const next = new Set(await sm.disabledProviders());
+            if (next.has(pid)) next.delete(pid);
+            else next.add(pid);
+            if (!(await sm.setDisabledProviders([...next]))) {
+              vscode.window.showErrorMessage(
+                `Could not ${next.has(pid) ? "disable" : "enable"} ${pid} — the opencode config file is not writable.`,
+              );
+              return;
+            }
+            disabled.clear();
+            for (const p of next) disabled.add(p);
+            qp.items = qp.items.map((i) => (i.pid === pid ? row(pid) : i));
+            // The webview won't hear about it otherwise on v1 (v2's
+            // config.updated SSE maps to a base refresh server-side).
+            hub.noteVisible();
+          })();
+        });
+        const chosen = await new Promise<readonly Row[] | undefined>(
+          (resolve) => {
+            qp.onDidAccept(() => resolve(qp.selectedItems));
+            qp.onDidHide(() => resolve(undefined));
+            qp.show();
           },
         );
-        if (!picked) return;
-        const visible = new Set(
-          picked.flatMap((i) => (i.description ? [i.description] : [])),
-        );
+        qp.dispose();
+        if (!chosen) return;
+        const visible = new Set(chosen.map((i) => i.pid));
         setHiddenProviders(
-          connected.flatMap((pid) => (visible.has(pid) ? [] : [pid])),
+          [...new Set([...connected, ...disabled])].flatMap((pid) =>
+            visible.has(pid) || disabled.has(pid) ? [] : [pid],
+          ),
         );
       },
     ),

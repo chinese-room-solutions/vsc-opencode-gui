@@ -8,6 +8,11 @@ import * as fs from "fs";
 import { ChatHub } from "../webview/ChatHub";
 import { serverAuthHeaders, setSpawnedServerPassword } from "./serverAuth";
 import { detectDialect, type Dialect } from "./dialect";
+import {
+  globalConfigPath,
+  readDisabledProviders,
+  setDisabledProvidersInText,
+} from "./disabledProviders";
 import { log } from "../log";
 
 const execFile = promisify(execFileCb);
@@ -840,6 +845,7 @@ export class ServerManager {
   private async _request<T>(
     method: string,
     path: string,
+    body?: unknown,
   ): Promise<T | undefined> {
     if (!this._apiBaseUrl) return undefined;
     try {
@@ -848,13 +854,79 @@ export class ServerManager {
       const res = await fetch(`${this._apiBaseUrl}${path}`, {
         method,
         signal: AbortSignal.timeout(10_000),
-        headers: serverAuthHeaders(),
+        headers: {
+          ...(body !== undefined
+            ? { "Content-Type": "application/json" }
+            : {}),
+          ...serverAuthHeaders(),
+        },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       });
       if (!res.ok) return undefined;
       return (await res.json()) as T;
     } catch {
       return undefined;
     }
+  }
+
+  // The global opencode config dir the server reads (providers are
+  // disabled there — see disabledProviders.ts).
+  private _configRoot(): string {
+    return path.join(
+      process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config"),
+      "opencode",
+    );
+  }
+
+  // The provider denylist as the server sees it: v1 serves the merged
+  // config from GET /config; v2 has no such read, so the global config
+  // file is the truth (the file the toggle below writes).
+  async disabledProviders(): Promise<string[]> {
+    await this.ready;
+    if (this._dialect === "v2") {
+      try {
+        return readDisabledProviders(
+          fs.readFileSync(globalConfigPath(this._configRoot()), "utf8"),
+        );
+      } catch {
+        return [];
+      }
+    }
+    const cfg = await this._request<{ disabled_providers?: string[] }>(
+      "GET",
+      "/config",
+    );
+    return cfg?.disabled_providers ?? [];
+  }
+
+  // Toggle support (see disabledProviders.ts): v1 PATCHes the merged
+  // config (applies immediately, comment-preserving server-side); v2 has
+  // no write route — we edit the global file, the watcher hot-reloads,
+  // and the reload route hurries it along. Returns false when the write
+  // path failed (read-only config dir, say).
+  async setDisabledProviders(ids: string[]): Promise<boolean> {
+    await this.ready;
+    if (this._dialect === "v2") {
+      const file = globalConfigPath(this._configRoot());
+      let prev = "";
+      try {
+        prev = fs.readFileSync(file, "utf8");
+      } catch {
+        // No config file yet — start one.
+      }
+      try {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, setDisabledProvidersInText(prev, ids));
+      } catch {
+        return false;
+      }
+      await this._request("POST", "/api/location/reload");
+      return true;
+    }
+    const res = await this._request<unknown>("PATCH", "/config", {
+      disabled_providers: ids,
+    });
+    return res !== undefined;
   }
 
   // True only when the server behind baseUrl reports the given folder as

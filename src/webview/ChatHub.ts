@@ -74,6 +74,12 @@ export class ChatHub {
     for (const chat of this._chats) chat.setPeers(peers);
   }
 
+  // Server truth changed outside the stream (the provider disable
+  // toggle): pull it in every live chat.
+  noteVisible() {
+    for (const chat of this._chats) chat.noteVisible();
+  }
+
   private _broadcast() {
     for (const chat of this._chats) this._push(chat, this._state);
   }

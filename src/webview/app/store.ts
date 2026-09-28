@@ -3684,10 +3684,10 @@ export async function answerQuestion(
   answers: string[][],
   v1 = false,
 ): Promise<void> {
-  const formFieldNames = pendingQuestions.value.find(
+  const form = pendingQuestions.value.find(
     (q) => q.id === id && q.v1 !== true,
-  )?.formFieldNames;
-  const done = replyQuestion(sessionID, id, answers, v1, formFieldNames);
+  );
+  const done = replyQuestion(sessionID, id, answers, v1, form);
   markSettled(settledQuestions, id);
   pendingQuestions.value = pendingQuestions.value.filter((q) => q.id !== id);
   if (!(await done)) {
