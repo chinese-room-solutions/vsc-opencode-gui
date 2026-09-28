@@ -32,6 +32,12 @@ export function setDialect(d: Dialect): void {
 const route = (v1: string, v2: string): string =>
   serverDialect === "v2" ? v2 : v1;
 
+// v2 wraps single-row responses in a {data} envelope; v1 serves the row.
+const unwrapRow = <T>(json: unknown): T | undefined =>
+  serverDialect === "v2"
+    ? (json as { data?: T } | undefined)?.data
+    : (json as T | undefined);
+
 
 
 // Row of GET /api/session.
@@ -1486,16 +1492,11 @@ export type FetchedSession = Session | "missing" | undefined;
 export async function fetchSession(id: string): Promise<FetchedSession> {
   const res = await apiRequest(
     "GET",
-    serverDialect === "v2" ? `/api/session/${id}` : `/session/${id}`,
+    route(`/session/${id}`, `/api/session/${id}`),
   );
   if (!res.ok)
     return res.error?.startsWith("HTTP 404") ? "missing" : undefined;
-  const row = (
-    serverDialect === "v2"
-      ? (res.json as { data?: Session & { directory?: string } } | undefined)
-          ?.data
-      : (res.json as (Session & { directory?: string }) | undefined)
-  );
+  const row = unwrapRow<Session & { directory?: string }>(res.json);
   return row ? normalizeSession(row) : undefined;
 }
 
@@ -1632,25 +1633,13 @@ export async function createSession(
         }
       : {}),
   };
-  const res =
-    serverDialect === "v2"
-      ? await sendJson<{ data?: Session & { directory?: string } }>(
-          "POST",
-          "/api/session",
-          body,
-        )
-      : await sendJson<Session & { directory?: string }>(
-          "POST",
-          "/session",
-          body,
-        );
-  const row = (
-    serverDialect === "v2"
-      ? (res?.data as { data?: Session & { directory?: string } } | undefined)
-          ?.data
-      : res?.data
-  ) as (Session & { directory?: string }) | undefined;
-  return res?.ok && row
+  const res = await sendJson<unknown>(
+    "POST",
+    route("/session", "/api/session"),
+    body,
+  );
+  const row = res?.ok ? unwrapRow<Session & { directory?: string }>(res.data) : undefined;
+  return row
     ? { session: normalizeSession(row) }
     : { error: res?.error };
 }
@@ -1857,16 +1846,8 @@ export async function promptSession(
   // — {text, files, agents} — mapped from our parts below; the schema is
   // additionalProperties:false, so nothing else may ride along.
   if (serverDialect === "v2") {
-    if (agent)
-      await sendJson("POST", `/api/session/${id}/agent`, { agent });
-    if (model)
-      await sendJson("POST", `/api/session/${id}/model`, {
-        model: {
-          providerID: model.providerID,
-          id: model.id,
-          ...(model.variant ? { variant: model.variant } : {}),
-        },
-      });
+    if (agent) await switchSessionAgent(id, agent);
+    if (model) await switchSessionModel(id, model.providerID, model.id, model.variant);
     const text = parts
       .filter((p): p is { type: "text"; text: string } => p.type === "text")
       .map((p) => p.text)
