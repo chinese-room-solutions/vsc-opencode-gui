@@ -1005,6 +1005,9 @@ interface V2MessageRow {
     streamed?: number | string;
   };
   text?: string;
+  // synthetic rows: the injector's metadata (opencode-plugin-peers tags its
+  // messages metadata.peerMessage — the peer card's provenance).
+  metadata?: Record<string, unknown>;
   payload?: { text?: string; files?: V2RowFile[] };
   content?: { type: string; id?: string; time?: { created?: number | string; completed?: number | string } }[];
   // shell rows: their own run, keyed by shellID.
@@ -1278,6 +1281,31 @@ export async function fetchMessages(
     // assistant row (a user row would entangle the echo retirement and
     // the ghost-turn abort).
     if (r.type === "synthetic") {
+      // A peer injection (opencode-plugin-peers) carries its provenance in
+      // the row's metadata — served as v1's shape (a user row with a
+      // synthetic part tagged metadata.peerMessage) so the peer card
+      // renders and the row heads its own turn. Other synthetic notes
+      // stay plain assistant rows.
+      const peer = (r.metadata as { peerMessage?: unknown } | undefined)
+        ?.peerMessage;
+      if (peer) {
+        return [
+          {
+            info: { id: r.id, role: "user", time: r.time },
+            parts: [
+              {
+                id: `${r.id}:text`,
+                messageID: r.id,
+                sessionID: id,
+                type: "text",
+                text: clampPartText(`${r.id}:text`, r.text ?? ""),
+                synthetic: true,
+                metadata: { peerMessage: peer },
+              },
+            ],
+          },
+        ];
+      }
       return [
         {
           info: { id: r.id, role: "assistant", time: r.time },

@@ -64,6 +64,9 @@ interface V2Data {
   // session.retry.scheduled
   attempt?: number;
   at?: number;
+  // session.synthetic: the injector's metadata (peer messages tag
+  // metadata.peerMessage — the peer card's provenance).
+  metadata?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -405,9 +408,13 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
     // A server-injected note (compaction bookkeeping, notices). The
     // official client renders it like a user bubble; ours lands it as a
     // plain assistant row — role "user" would entangle it with the echo
-    // retirement and the ghost-turn abort, which watch user rows.
+    // retirement and the ghost-turn abort, which watch user rows. A peer
+    // injection keeps its provenance on the part (synthetic +
+    // metadata.peerMessage) so the peer card renders live; the durable
+    // fetch later serves the row as the v1-shaped user row (same id).
     case "session.synthetic": {
       const rowID = v2RowID(undefined, event.id);
+      const peer = d.metadata?.peerMessage;
       return sid && rowID && typeof d.text === "string"
         ? [
             synth("message.updated", {
@@ -426,6 +433,7 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
                 sessionID: sid,
                 type: "text",
                 text: d.text,
+                ...(peer ? { synthetic: true, metadata: { peerMessage: peer } } : {}),
               },
             }),
           ]

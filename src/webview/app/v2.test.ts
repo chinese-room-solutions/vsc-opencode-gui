@@ -746,6 +746,20 @@ describe("v2 transcript normalization (fetchMessages)", () => {
                 text: "Context trimmed",
               },
               {
+                id: "msg_peer",
+                time: { created: 6 },
+                type: "synthetic",
+                text: "Ping from a peer",
+                metadata: {
+                  peerMessage: {
+                    version: 2,
+                    messageId: "m1",
+                    fromEndpointId: "ses_a",
+                    toSessionId: "ses_mix",
+                  },
+                },
+              },
+              {
                 id: "msg_u",
                 time: { created: 5 },
                 type: "user",
@@ -777,6 +791,22 @@ describe("v2 transcript normalization (fetchMessages)", () => {
     const synText = syn?.parts[0] as { type?: string; text?: string } | undefined;
     assert.equal(synText?.type, "text");
     assert.equal(synText?.text, "Context trimmed");
+    // A peer-tagged synthetic row keeps v1's shape: user row + synthetic
+    // part carrying metadata.peerMessage (the peer card's provenance).
+    const peer = list.find((m) => m.info.id === "msg_peer");
+    assert.equal(peer?.info.role, "user");
+    const peerText = peer?.parts[0] as
+      | {
+          type?: string;
+          text?: string;
+          synthetic?: boolean;
+          metadata?: { peerMessage?: { fromEndpointId?: string } };
+        }
+      | undefined;
+    assert.equal(peerText?.type, "text");
+    assert.equal(peerText?.text, "Ping from a peer");
+    assert.equal(peerText?.synthetic, true);
+    assert.equal(peerText?.metadata?.peerMessage?.fromEndpointId, "ses_a");
   });
   it("maps a completed compaction row as the foldable v1 pair", async () => {
     onApi((call) =>
@@ -1674,6 +1704,49 @@ describe("v2 SSE → pipeline translation", () => {
         sessionID: "s",
         type: "text",
         text: "Context trimmed",
+      },
+    );
+    // A peer-tagged injection: the row stays assistant (a streamed user row
+    // would trip the echo retirement / ghost-turn abort), the part carries
+    // the synthetic + metadata.peerMessage tag so the peer card renders.
+    const p = translateV2Event(
+      ev("session.synthetic", {
+        sessionID: "s",
+        text: "Ping from a peer",
+        metadata: {
+          peerMessage: {
+            version: 2,
+            messageId: "m1",
+            fromEndpointId: "ses_a",
+            toSessionId: "s",
+          },
+        },
+      }),
+    );
+    assert.equal(p.length, 2);
+    assert.equal(p[0].type, "message.updated");
+    assert.equal(
+      (p[0].data as { info?: { role?: string } }).info?.role,
+      "assistant",
+    );
+    assert.equal(p[1].type, "message.part.updated");
+    assert.deepEqual(
+      (p[1].data as { part?: unknown }).part,
+      {
+        id: "msg_x:text",
+        messageID: "msg_x",
+        sessionID: "s",
+        type: "text",
+        text: "Ping from a peer",
+        synthetic: true,
+        metadata: {
+          peerMessage: {
+            version: 2,
+            messageId: "m1",
+            fromEndpointId: "ses_a",
+            toSessionId: "s",
+          },
+        },
       },
     );
     assert.deepEqual(
