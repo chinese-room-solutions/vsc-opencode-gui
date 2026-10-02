@@ -2170,6 +2170,13 @@ describe("display helpers", () => {
     );
     assert.equal(sessionTitle(undefined, "raw-id"), "raw-id");
   });
+  it("sessionTitle labels untitled v2 rows, never with the id", () => {
+    assert.equal(sessionTitle({ title: "" } as Session, "ses_raw"), "New session");
+    assert.equal(
+      sessionTitle({ parentID: "ses_parent" } as Session, "ses_raw"),
+      "Child session",
+    );
+  });
   it("isSubagentSession recognizes both markers", () => {
     assert.ok(isSubagentSession(sessRow("s", { parentID: "p" })));
     assert.ok(isSubagentSession(sessRow("s", { title: "t (@x subagent)" })));

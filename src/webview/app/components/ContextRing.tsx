@@ -18,6 +18,7 @@ import {
   providers,
   sessions,
   setPopover,
+  sessionTitle,
   stepUsage,
 } from "../store";
 import type { ChatMessage } from "../store";
@@ -288,7 +289,7 @@ function exportSession(
   list: ChatMessage[],
 ): void {
   const slug =
-    (session?.title || id)
+    sessionTitle(session, id)
       .replace(/[^\w.-]+/g, "-")
       .replace(/^-+|-+$/g, "")
       .slice(0, 60) || shortId(id);
@@ -378,7 +379,7 @@ export function ContextRing(props: { sessionId: string }) {
   // token rows come from the last assistant message (t), counts and cost
   // from the session.
   const cells: { k: string; v: string; title?: string }[] = [
-    { k: "Session", v: dash(session?.title || shortId(id)), title: id },
+    { k: "Session", v: dash(sessionTitle(session, id)), title: id },
     { k: "Messages", v: list ? fmtNum(list.length) : "—" },
     { k: "Provider", v: dash(providerName) },
     { k: "Model", v: dash(modelSel ? modelLabel(modelSel) : undefined) },

@@ -1227,13 +1227,15 @@ function resolveBlankSessions(): Promise<void> {
   ).then();
 }
 
-// Display title. The server names fresh sessions "New session - <ISO
-// timestamp>"; the timestamp is noise on screen — display drops it, and the
-// row's time.created keeps the moment for the sessions-list hover. Sub-agent
-// sessions are titled "<description> (@agent subagent)" — the parenthetical
-// is bookkeeping, the description is the task.
+// Display title. v1's server names fresh rows "New session - <ISO
+// timestamp>"; v2 leaves the title empty (its own clients label such rows
+// "New session"/"Child session" — the auto-titler fills both after the
+// first prompt). The timestamped form collapses; the id is never a display
+// name. Sub-agent sessions are titled "<description> (@agent subagent)" —
+// the parenthetical is bookkeeping, the description is the task.
 export function sessionTitle(s: Session | undefined, id: string): string {
-  const raw = s?.title || id;
+  const raw =
+    s?.title || (s ? (s.parentID ? "Child session" : "New session") : id);
   if (/^(?:New|Child) session - /.test(raw)) return raw.replace(/ - .*/, "");
   return raw.replace(/\s+\(@\S+ subagent\)$/, "");
 }
