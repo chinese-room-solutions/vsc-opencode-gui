@@ -45,7 +45,7 @@ import {
 } from "./api";
 import type { FilePart, Session } from "./api";
 import { translateV2Event } from "./v2events";
-import { judgeDialect, detectDialect } from "../../server/dialect";
+import { judgeDialect, detectDialect, awaitDialect } from "../../server/dialect";
 import {
   commands,
   draftModel,
@@ -102,8 +102,10 @@ function v2sse(type: string, data: Record<string, unknown>, created?: number): v
 }
 
 // The fake fetch detectDialect consumes: scripted replies per URL suffix.
+// A reply of {err: true} rejects (an unreachable server); mutating the
+// script between awaits changes what the next probe round sees.
 function fetchScript(
-  replies: Record<string, { status: number; json?: unknown; ct?: string }>,
+  replies: Record<string, { status?: number; json?: unknown; ct?: string; err?: boolean }>,
 ): {
   calls: string[];
   fetch: (url: string, init?: Record<string, unknown>) => Promise<Response>;
@@ -114,6 +116,7 @@ function fetchScript(
     const hit = Object.entries(replies).find(([suffix]) =>
       url.endsWith(suffix),
     )?.[1];
+    if (hit?.err) return Promise.reject(new Error("unreachable"));
     return Promise.resolve(
       new Response(hit?.json === undefined ? "" : JSON.stringify(hit.json), {
         status: hit?.status ?? 404,
@@ -178,6 +181,74 @@ describe("dialect detection (probe logic)", () => {
     });
     assert.equal(await detectDialect(origin, {}, fetch), "v1");
     assert.deepEqual(calls, [`${origin}/api/health`]);
+  });
+  it("both probes unreachable is unknown, not a guess", () => {
+    assert.equal(judgeDialect("error", "error"), "unknown");
+  });
+  it("health answering SPA HTML (200, no JSON) is not a v1 signal", () => {
+    assert.equal(
+      judgeDialect({ status: 200, json: undefined }, { status: 200, json: [] }),
+      "v2",
+    );
+  });
+  it("config 200 with a non-JSON body (SPA fallback) is unknown", () => {
+    assert.equal(
+      judgeDialect({ status: 404, json: undefined }, { status: 200, json: undefined }),
+      "unknown",
+    );
+    assert.equal(
+      judgeDialect(
+        { status: 200, json: undefined },
+        { status: 200, json: undefined },
+      ),
+      "unknown",
+    );
+  });
+  it("an unknown verdict falls back to v1 but is not cached", async () => {
+    const origin = `http://unk-${Math.random().toString(36).slice(2)}:1`;
+    const replies: Record<string, { status: number; json?: unknown }> = {
+      "/api/health": { status: 404 },
+      "/api/config": { status: 404 },
+    };
+    const { calls, fetch } = fetchScript(replies);
+    assert.equal(await detectDialect(origin, {}, fetch), "v1");
+    // The routes come up between the calls: a re-detection must re-probe
+    // (an "unknown" was never written to the cache) and see v2.
+    replies["/api/config"] = { status: 200, json: [] };
+    assert.equal(await detectDialect(origin, {}, fetch), "v2");
+    assert.ok(calls.length >= 4, "the second detection probed again");
+  });
+  it("awaitDialect polls until a probe round is conclusive", async () => {
+    const origin = `http://wait-${Math.random().toString(36).slice(2)}:1`;
+    const replies: Record<string, { status?: number; json?: unknown; err?: boolean }> = {
+      "/api/health": { status: 404 },
+      "/api/config": { err: true },
+    };
+    const { calls, fetch } = fetchScript(replies);
+    const sleeps: number[] = [];
+    const verdict = await awaitDialect(origin, {}, fetch, {
+      deadlineMs: 5000,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        // The server finishes initializing during the first wait.
+        replies["/api/config"] = { status: 200, json: [] };
+      },
+    });
+    assert.equal(verdict, "v2");
+    assert.equal(sleeps.length, 1, "one wait between the two rounds");
+    assert.ok(calls.length >= 3, "at least two probe rounds ran");
+  });
+  it("awaitDialect gives up with the v1 fallback past the deadline", async () => {
+    const origin = `http://dl-${Math.random().toString(36).slice(2)}:1`;
+    const { fetch } = fetchScript({
+      "/api/health": { status: 404 },
+      "/api/config": { err: true },
+    });
+    const verdict = await awaitDialect(origin, {}, fetch, {
+      deadlineMs: 0,
+      sleep: async () => {},
+    });
+    assert.equal(verdict, "v1");
   });
 });
 

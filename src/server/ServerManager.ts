@@ -7,7 +7,7 @@ import * as os from "os";
 import * as fs from "fs";
 import { ChatHub } from "../webview/ChatHub";
 import { serverAuthHeaders, setSpawnedServerPassword } from "./serverAuth";
-import { detectDialect, type Dialect } from "./dialect";
+import { awaitDialect, type Dialect } from "./dialect";
 import {
   globalConfigPath,
   readDisabledProviders,
@@ -315,7 +315,11 @@ export class ServerManager {
       // call; AppHost relays for it instead.
       const parsed = new URL(serverUrl);
       this._apiBaseUrl = `http://localhost:${parsed.port}`;
-      this._dialect = await detectDialect(
+      // Poll until the probes are conclusive: a freshly-printed URL can
+      // predate the routes being ready (early-init v2 answers with the SPA
+      // fallback), and a wrong verdict is sticky — cached per origin and
+      // baked into the webview page for this server's whole lifetime.
+      this._dialect = await awaitDialect(
         this._apiBaseUrl,
         serverAuthHeaders(),
       );

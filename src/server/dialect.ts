@@ -7,6 +7,12 @@
 // exercise the judge directly.
 export type Dialect = "v1" | "v2";
 
+// A verdict of "unknown" means no route answered with a shape that names a
+// dialect — every probe was unreachable, or an early-init v2 answered with
+// its SPA fallback (200 + HTML) instead of the route. Transitional, not a
+// fact: the caller re-probes (awaitDialect) instead of acting on it.
+export type DialectOrUnknown = Dialect | "unknown";
+
 // One probe reply: an HTTP status plus whatever JSON the body parsed to
 // (undefined for non-JSON), or "error" when the fetch itself failed.
 export interface ProbeReply {
@@ -16,17 +22,39 @@ export interface ProbeReply {
 }
 
 // The decision core, split out for tests: a healthy /api/health is v1
-// outright; anything else falls through to the config shape.
+// outright; a config array is v2, a config object is v1; anything
+// answer-shaped but discriminated by neither (SPA HTML, 404, unreachable)
+// is "unknown" — never a dialect guess.
 export function judgeDialect(
   health: ProbeReply | "error",
   config: ProbeReply | "error",
-): Dialect {
-  if (health !== "error" && health.status === 200) return "v1";
-  if (config !== "error" && config.status === 200 && Array.isArray(config.json))
-    return "v2";
-  // Unreachable health + non-array config: a v1 server that merely changed
-  // its health route is the safer guess — every v2 discriminator failed.
-  return "v1";
+): DialectOrUnknown {
+  // v1's health route; a JSON body must actually say healthy (a v2 in
+  // early init serves the SPA HTML fallback for unknown paths — 200, but
+  // not a health reply).
+  if (
+    health !== "error" &&
+    health.status === 200 &&
+    (health.json as { healthy?: unknown } | undefined)?.healthy === true
+  )
+    return "v1";
+  if (config !== "error") {
+    if (config.status === 200) {
+      if (Array.isArray(config.json)) return "v2";
+      // v1's merged config object. A non-JSON body (json undefined) is the
+      // SPA fallback — unknown, not v1.
+      if (config.json && typeof config.json === "object") return "v1";
+      return "unknown";
+    }
+    // v2's config route exists; anything but 200 means the route has not
+    // mounted yet (404/5xx mid-boot) or the reply never arrived — retry
+    // rather than guess. 401 is an auth wall: a real (if foreign) server
+    // is behind it, and the attach path's workspace check has already
+    // rejected it — the historic v1 verdict only keeps that final answer.
+    if (config.status === 401) return "v1";
+    return "unknown";
+  }
+  return "unknown";
 }
 
 const cache = new Map<string, Dialect>();
@@ -63,12 +91,13 @@ async function probe(
   }
 }
 
-export async function detectDialect(
+// One probe round: the cached verdict, else judge a fresh probe pair. An
+// "unknown" verdict is never cached — the next caller re-probes.
+async function probeDialect(
   baseUrl: string,
-  headers: Record<string, string> = {},
-  fetchLike: FetchLike = (url, init) =>
-    fetch(url, init as RequestInit) as Promise<Response>,
-): Promise<Dialect> {
+  headers: Record<string, string>,
+  fetchLike: FetchLike,
+): Promise<DialectOrUnknown> {
   const origin = new URL(baseUrl).origin;
   const cached = cache.get(origin);
   if (cached) return cached;
@@ -78,6 +107,39 @@ export async function detectDialect(
       ? { status: 0, json: undefined }
       : await probe(fetchLike, `${origin}/api/config`, headers);
   const dialect = judgeDialect(health, config);
-  cache.set(origin, dialect);
+  if (dialect !== "unknown") cache.set(origin, dialect);
   return dialect;
+}
+
+export async function detectDialect(
+  baseUrl: string,
+  headers: Record<string, string> = {},
+  fetchLike: FetchLike = (url, init) =>
+    fetch(url, init as RequestInit) as Promise<Response>,
+): Promise<Dialect> {
+  const verdict = await probeDialect(baseUrl, headers, fetchLike);
+  // No conclusive answer: keep the historic v1 guess, but leave the cache
+  // empty so a later (healthy) detection wins.
+  return verdict === "unknown" ? "v1" : verdict;
+}
+
+// Poll until a probe round is conclusive — a server that just printed its
+// URL can still be mid-init (routes not mounted, SPA fallback answering),
+// and a dialect guess baked into the webview page is sticky for the
+// server's whole lifetime. Returns the fallback v1 past the deadline.
+export async function awaitDialect(
+  baseUrl: string,
+  headers: Record<string, string> = {},
+  fetchLike: FetchLike = (url, init) =>
+    fetch(url, init as RequestInit) as Promise<Response>,
+  opts: { deadlineMs?: number; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<Dialect> {
+  const deadline = Date.now() + (opts.deadlineMs ?? 60_000);
+  const sleep = opts.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+  for (;;) {
+    const verdict = await probeDialect(baseUrl, headers, fetchLike);
+    if (verdict !== "unknown") return verdict;
+    if (Date.now() >= deadline) return "v1";
+    await sleep(250);
+  }
 }
