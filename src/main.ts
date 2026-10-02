@@ -158,8 +158,17 @@ export function activate(context: vscode.ExtensionContext) {
       log.error("model agent sync failed:", err);
     }
     if (changed && serverManager === sm) {
-      // Agent files were written/removed — restart so the server picks
-      // them up. The next start finds the files up-to-date: no loop.
+      // v2 watches the config directories — agent files hot-apply, and
+      // the reload route hurries the watcher. A restart here killed the
+      // server right after every boot: the staged v2 catalog made each
+      // sync rewrite the file set, reconnecting the UI several times per
+      // startup before the files settled.
+      if (sm.dialect === "v2") {
+        await sm.hurryConfigReload();
+        return;
+      }
+      // v1 reads agents at boot only — restart so the server picks them
+      // up. The next start finds the files up-to-date: no loop.
       serverManager = undefined;
       await sm.dispose();
       hub.setLoading();

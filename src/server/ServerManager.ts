@@ -645,6 +645,17 @@ export class ServerManager {
       : undefined;
   }
 
+  // Dialect of the attached server; undefined until detected.
+  get dialect(): Dialect | undefined {
+    return this._dialect;
+  }
+
+  // Ask a v2 server to re-scan its config now. The file watcher applies
+  // agent/config file changes on its own; this hurries it along.
+  async hurryConfigReload(): Promise<void> {
+    await this._request("POST", "/api/location/reload");
+  }
+
   // GET /session — all sessions for the server's project.
   async listSessions(): Promise<SessionSummary[] | undefined> {
     await this.ready;
@@ -736,14 +747,27 @@ export class ServerManager {
   }
 
   // GET /provider — connected providers with their toolcall-capable
-  // models (see providerCatalog). Polls
-  // until at least one provider is connected (or timeout).
+  // models (see providerCatalog). Polls until at least one provider is
+  // connected (or timeout). On v2, "connected" alone is not usable: the
+  // catalog fills in stages (empty ~1s cold, providers then landing over
+  // the network), and a sync against a partial catalog would rewrite the
+  // agent files from an accidental subset — deleting good files in the
+  // empty window. Wait there until every connected provider has catalog
+  // rows, or the deadline skips the sync.
   async listProviders(): Promise<ProviderModel[] | undefined> {
     await this.ready;
     const deadline = Date.now() + 15000;
     while (Date.now() < deadline) {
       const data = await this.providerCatalog();
-      if (data && data.connected && data.connected.length > 0) {
+      const usable =
+        !!data &&
+        !!data.connected &&
+        data.connected.length > 0 &&
+        (this._dialect !== "v2" ||
+          data.connected.every((pid) =>
+            data.all.some((p) => p.id === pid),
+          ));
+      if (usable) {
         const models: ProviderModel[] = [];
         for (const provider of data.all ?? []) {
           if (!data.connected.includes(provider.id)) continue;
@@ -920,7 +944,7 @@ export class ServerManager {
       } catch {
         return false;
       }
-      await this._request("POST", "/api/location/reload");
+      await this.hurryConfigReload();
       return true;
     }
     const res = await this._request<unknown>("PATCH", "/config", {
