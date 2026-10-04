@@ -405,14 +405,15 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
   };
 
   // The mirror paints the text the textarea renders transparent; it must
-  // track the textarea's scroll or long drafts drift apart. The mirror box
-  // rides 5px above and beside the textarea (chip-frame headroom), so its
-  // scroll leads by the same offsets.
+  // track the textarea's scroll 1:1 or long drafts drift apart. The box
+  // rides 5px above and beside the textarea (chip-frame headroom) but its
+  // own 5px padding cancels that offset, so the scroll must NOT lead —
+  // a lead here paints every line a few px off the caret's truth.
   const syncScroll = (el: HTMLTextAreaElement) => {
     const m = mirrorRef.current;
     if (m) {
-      m.scrollTop = el.scrollTop + 5;
-      m.scrollLeft = el.scrollLeft + 5;
+      m.scrollTop = el.scrollTop;
+      m.scrollLeft = el.scrollLeft;
     }
   };
   useEffect(() => {
