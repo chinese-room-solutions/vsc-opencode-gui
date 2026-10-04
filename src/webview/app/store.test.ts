@@ -2013,6 +2013,54 @@ describe("sendPrompt", () => {
     assert.ok(!ids.includes("gone"), "nothing stale is kept");
     assert.ok(ids.includes("old"));
   });
+
+  it("v2: an undelivered inbox row survives a refresh that can't serve it", async () => {
+    setDialect("v2");
+    try {
+      const sid = "sp7";
+      sessions.value = [sessRow(sid, { agent: "build" })];
+      open(sid, []);
+      const created = Date.now() - 30_000;
+      onApi((call) => {
+        if (call.method === "POST" && call.path === `/api/session/${sid}/prompt`)
+          return {
+            data: {
+              id: "usr_v2",
+              sessionID: sid,
+              time: { created },
+              type: "user",
+              payload: { text: "still in the inbox" },
+              delivery: "steer",
+            },
+          };
+        return messageMock(sid, { data: [], cursor: {} })(call);
+      });
+      await sendPrompt(sid, "still in the inbox");
+      // The POST reply landed the row and retired the echo.
+      assert.ok(findRow(sid, "usr_v2"));
+      assert.ok(!listOf(sid).some((m) => m.info.id.startsWith("pending:")));
+      // v2 serves the admitted row only at first step start — the refresh
+      // mid-gap must not read its absence as a server-side deletion.
+      await refreshMessages(sid);
+      assert.ok(findRow(sid, "usr_v2"), "the young user row must survive");
+    } finally {
+      setDialect("v1");
+    }
+  });
+  it("an old user row missing from the fetch is still dropped", async () => {
+    const sid = "sp8";
+    open(sid, [row("dead", "user", T0)]);
+    onApi(messageMock(sid, { data: [], cursor: {} }));
+    await refreshMessages(sid);
+    assert.ok(!findRow(sid, "dead"), "server-side deletion must clear it");
+  });
+  it("a young assistant row missing from the fetch is still dropped", async () => {
+    const sid = "sp9";
+    open(sid, [row("a9", "assistant", Date.now() - 30_000)]);
+    onApi(messageMock(sid, { data: [], cursor: {} }));
+    await refreshMessages(sid);
+    assert.ok(!findRow(sid, "a9"), "the user-row grace covers user rows only");
+  });
 });
 
 describe("newSession and blank hiding", () => {

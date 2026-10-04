@@ -2969,10 +2969,15 @@ export async function refreshMessages(id: string): Promise<void> {
           // A row the stream delivered while this fetch was in flight
           // (message.updated mid-await) is newer than the snapshot — keep
           // it; the next refresh confirms it. Anything older the fetch
-          // doesn't serve was deleted server-side.
+          // doesn't serve was deleted server-side — except a young user
+          // row on v2: the prompt sits in the inbox and only reaches the
+          // message fetch at first step start, so absent-but-young is
+          // undelivered, not deleted.
           return (
             !merged.has(m.info.id) &&
-            (m.info.time.created ?? 0) >= fetchStart - 2000
+            ((m.info.time.created ?? 0) >= fetchStart - 2000 ||
+              (m.info.role === "user" &&
+                (m.info.time.created ?? 0) >= fetchStart - 60_000))
           );
         }
         const text = partText(m);
