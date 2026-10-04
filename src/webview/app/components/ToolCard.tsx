@@ -1,7 +1,13 @@
 import { useEffect, useState } from "preact/hooks";
 import hljs from "highlight.js/lib/common";
 import type { ToolPart } from "../api";
-import { isBashTool, isTaskTool, isTool, toolName } from "../api";
+import {
+  isBashTool,
+  isTaskTool,
+  isTool,
+  streamingArg,
+  toolName,
+} from "../api";
 import { openFile, openUrl } from "../host";
 import { route, navigate } from "../router";
 import {
@@ -26,7 +32,9 @@ function inputStr(part: ToolPart, ...keys: string[]): string | undefined {
     const v = input?.[k];
     if (typeof v === "string" && v) return v;
   }
-  return undefined;
+  // Still streaming — the raw args text carries the key's value even
+  // before the JSON closes.
+  return streamingArg(part.state?.inputText, keys);
 }
 
 // The todo rows a todowrite call recorded — live in the call input until the

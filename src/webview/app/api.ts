@@ -824,6 +824,11 @@ export interface TextPart extends PartBase {
 export interface ToolState {
   status: "pending" | "running" | "completed" | "error";
   input?: Record<string, unknown>;
+  // The raw args JSON while it streams — the model spends seconds writing
+  // a call's input, and the preview reads it live instead of waiting for
+  // the parsed object execution confirms (tool.called). Dropped once
+  // `input` lands.
+  inputText?: string;
   output?: string;
   title?: string;
   // The machine-readable result, present in BOTH dialects (live SSE
@@ -896,6 +901,32 @@ export function toolName(tool: string): string {
   return tool.charAt(0).toUpperCase() + tool.slice(1);
 }
 
+// The streaming preview for the first of `keys` found in the raw partial
+// args JSON — the value can still be arriving, so this scans for the key's
+// string value without needing the JSON to be complete (a parse only
+// succeeds once the whole object closes, i.e. after the stream ends).
+export function streamingArg(
+  inputText: string | undefined,
+  keys: string[],
+): string | undefined {
+  if (!inputText) return undefined;
+  for (const k of keys) {
+    const m = inputText.match(
+      new RegExp(`(?:^|[,{]\\s*)"${k}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)`),
+    );
+    if (m?.[1]) {
+      try {
+        const v = JSON.parse(`"${m[1]}"`) as string;
+        if (v) return v;
+      } catch {
+        // The buffer cut an escape sequence mid-flight — the next frame
+        // completes it.
+      }
+    }
+  }
+  return undefined;
+}
+
 // Part text is display-only — the server keeps the durable copy — so giant
 // parts (multi-MB tool dumps) clamp to head + marker + tail before they
 // enter state: one multi-MB part arriving in every open window at once is
@@ -962,6 +993,10 @@ export function clampToolState(
   }
   if (typeof next.output === "string")
     next.output = clampToolOutput(partID, next.output);
+  if (typeof next.inputText === "string")
+    next.inputText = clampPartText(partID, next.inputText);
+  // The parsed args supersede the streamed raw — free the buffer.
+  if (next.input) delete next.inputText;
   next.input = clampStringsDeep(next.input) as ToolState["input"];
   next.structured = clampStringsDeep(next.structured) as ToolState["structured"];
   next.metadata = clampStringsDeep(next.metadata) as ToolState["metadata"];

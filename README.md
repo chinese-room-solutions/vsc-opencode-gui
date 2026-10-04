@@ -73,7 +73,7 @@ All commands live under the **`Open Code:`** prefix in the command palette.
 | `opencodeGui.permissionSound` | `true` | Chime on permission asks. |
 | `opencodeGui.questionSound` | `true` | Chime on questions. |
 | `opencodeGui.stuckToolSeconds` | `300` | Silence before a tool counts as stuck (gates auto-abort). `0` disables. |
-| `opencodeGui.stuckAutoAbortSeconds` | `0` | Silence past the stuck threshold before the turn is stopped automatically (sends nothing into the session). `0` disables. Tool rows show elapsed time on hover - ticking while running, the total once settled. |
+| `opencodeGui.stuckAutoAbortSeconds` | `0` | Silence past the stuck threshold before the turn is stopped automatically (sends nothing into the session). `0` disables. Tool rows show elapsed time on hover - ticking while running, the total once settled - and preview a call's arguments live while the model streams them. |
 
 ## 📦 Install
 

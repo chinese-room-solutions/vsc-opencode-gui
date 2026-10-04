@@ -2268,6 +2268,47 @@ function applyEvent(event: ServerEvent): void {
         });
       }
       break;
+    case "session.next.tool.input.delta":
+      // Args stream while the model writes them — append the raw text so
+      // the preview renders live (streamingArg). The truncation tracker
+      // stops a clamped buffer from regrowing.
+      if (
+        data.assistantMessageID &&
+        data.callID &&
+        typeof data.delta === "string" &&
+        !isTruncatedPart(data.callID)
+      ) {
+        patchToolState(sid, data.assistantMessageID, data.callID, (s) => ({
+          ...s,
+          inputText: (s.inputText ?? "") + data.delta,
+        }));
+      }
+      break;
+    case "session.next.tool.input.ended":
+      // The raw args are whole before execution starts — parse now so the
+      // preview (and the IN body) don't wait for tool.called to confirm
+      // what the text already says.
+      if (
+        data.assistantMessageID &&
+        data.callID &&
+        typeof data.text === "string"
+      ) {
+        const text: string = data.text;
+        patchToolState(sid, data.assistantMessageID, data.callID, (s) => {
+          const next = { ...s, inputText: text };
+          if (!s.input) {
+            try {
+              const parsed: unknown = JSON.parse(text);
+              if (parsed && typeof parsed === "object")
+                next.input = parsed as Record<string, unknown>;
+            } catch {
+              // Not JSON-complete — the raw scan still previews.
+            }
+          }
+          return next;
+        });
+      }
+      break;
     case "session.next.tool.called":
       if (data.assistantMessageID && data.callID) {
         patchToolState(sid, data.assistantMessageID, data.callID, (s) => ({
@@ -2431,6 +2472,8 @@ function deltaKey(event: ServerEvent): string | undefined {
       return `t ${d.sessionID} ${d.assistantMessageID} ${d.textID}`;
     case "session.next.reasoning.delta":
       return `r ${d.sessionID} ${d.assistantMessageID} ${d.reasoningID}`;
+    case "session.next.tool.input.delta":
+      return `i ${d.sessionID} ${d.assistantMessageID} ${d.callID}`;
   }
 }
 

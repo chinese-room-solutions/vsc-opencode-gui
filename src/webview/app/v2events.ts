@@ -221,10 +221,32 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
             }),
           ]
         : [];
-    // Input streams as deltas but lands whole in tool.called — drop the
-    // incremental frames (also session.tool.progress, below).
+    // Input streams as deltas; the preview reads them live off the raw
+    // text (streamingArg), the completed text parses at input.ended, and
+    // tool.called re-stamps with the server's parsed object. Progress
+    // frames carry no display facts — still dropped.
     case "session.tool.input.delta":
+      return d.assistantMessageID && d.id && typeof d.delta === "string"
+        ? [
+            synth("session.next.tool.input.delta", {
+              sessionID: sid,
+              assistantMessageID: d.assistantMessageID,
+              callID: d.id,
+              delta: d.delta,
+            }),
+          ]
+        : [];
     case "session.tool.input.ended":
+      return d.assistantMessageID && d.id && typeof d.text === "string"
+        ? [
+            synth("session.next.tool.input.ended", {
+              sessionID: sid,
+              assistantMessageID: d.assistantMessageID,
+              callID: d.id,
+              text: d.text,
+            }),
+          ]
+        : [];
     case "session.tool.progress":
       return [];
     case "session.tool.called":

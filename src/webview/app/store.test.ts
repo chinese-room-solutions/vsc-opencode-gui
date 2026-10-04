@@ -99,7 +99,7 @@ import {
 } from "./store";
 import { setDialect } from "./api";
 import type { ChatMessage, Status } from "./store";
-import { clampPartText, isTruncatedPart, PART_TEXT_CAP } from "./api";
+import { clampPartText, isTruncatedPart, PART_TEXT_CAP, streamingArg } from "./api";
 import type {
   Message,
   MessageTokens,
@@ -1173,6 +1173,70 @@ describe("turn projection from stream events", () => {
     };
     assert.equal(f.state?.status, "error");
     assert.equal(f.state?.error, "boom");
+  });
+
+  it("tool args stream: deltas preview live, ended parses, called supersedes", async () => {
+    const sid = "tpq";
+    open(sid, [row("a1", "assistant", T0)]);
+    await sseFlush("session.next.tool.input.started", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      callID: "c1",
+      name: "write",
+    });
+    await sseFlush("session.next.tool.input.delta", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      callID: "c1",
+      delta: '{"filePath":"src/a',
+    });
+    let st = findPart(sid, "c1") as {
+      state?: { status?: string; inputText?: string; input?: unknown };
+    };
+    // Pre-execution: pending status, but the raw args already preview.
+    assert.equal(st.state?.status, "pending");
+    assert.equal(st.state?.input, undefined);
+    assert.equal(st.state?.inputText, '{"filePath":"src/a');
+    assert.equal(
+      streamingArg(st.state?.inputText, ["filePath", "file", "path"]),
+      "src/a",
+    );
+    await sseFlush("session.next.tool.input.delta", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      callID: "c1",
+      delta: '.ts","content":"hi"}',
+    });
+    st = findPart(sid, "c1") as {
+      state?: { inputText?: string };
+    };
+    assert.equal(st.state?.inputText, '{"filePath":"src/a.ts","content":"hi"}');
+    // The whole text parses before execution confirms it.
+    await sseFlush("session.next.tool.input.ended", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      callID: "c1",
+      text: '{"filePath":"src/a.ts","content":"hi"}',
+    });
+    st = findPart(sid, "c1") as {
+      state?: { status?: string; inputText?: string; input?: unknown };
+    };
+    assert.equal(st.state?.status, "pending");
+    assert.deepEqual(st.state?.input, { filePath: "src/a.ts", content: "hi" });
+    await sseFlush("session.next.tool.called", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      callID: "c1",
+      input: { filePath: "src/a.ts", content: "hi" },
+      timestamp: T0 + 1,
+    });
+    st = findPart(sid, "c1") as {
+      state?: { status?: string; inputText?: string; input?: unknown };
+    };
+    assert.equal(st.state?.status, "running");
+    assert.deepEqual(st.state?.input, { filePath: "src/a.ts", content: "hi" });
+    // The parsed args supersede the streamed raw — the buffer is freed.
+    assert.equal(st.state?.inputText, undefined);
   });
 
   it("tool.success folds content items when there is no result string", async () => {

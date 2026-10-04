@@ -24,6 +24,7 @@ import {
   promptSession,
   setDialect,
   sniffsText,
+  streamingArg,
   stringifyError,
   toolName,
   PART_TEXT_CAP,
@@ -115,6 +116,37 @@ describe("api", () => {
       assert.equal(toolName("read"), "Read");
       assert.equal(toolName("grep"), "Grep");
       assert.equal(toolName("custom_tool"), "Custom_tool");
+    });
+  });
+
+  describe("streamingArg", () => {
+    it("reads a value from complete args JSON", () => {
+      assert.equal(
+        streamingArg('{"command":"ls -la"}', ["command", "code"]),
+        "ls -la",
+      );
+    });
+    it("reads a value still streaming — unterminated JSON", () => {
+      assert.equal(
+        streamingArg('{"filePath":"src/ape', ["filePath", "file", "path"]),
+        "src/ape",
+      );
+      assert.equal(streamingArg('{"file', ["filePath", "file", "path"]), undefined);
+    });
+    it("tries keys in order and skips other keys' values", () => {
+      const raw = '{"content":"big body \\"quoted\\"","filePath":"a.ts"';
+      assert.equal(streamingArg(raw, ["filePath", "file", "path"]), "a.ts");
+      assert.equal(streamingArg(raw, ["file", "path"]), undefined);
+    });
+    it("unescapes JSON escapes in the value", () => {
+      assert.equal(
+        streamingArg('{"query":"a \\"b\\" \\u00e9"}', ["query"]),
+        'a "b" é',
+      );
+    });
+    it("ignores the same key nested in a string value", () => {
+      const raw = '{"content":"{\\"filePath\\":\\"decoy\\"}","filePath":"real.ts"';
+      assert.equal(streamingArg(raw, ["filePath", "file", "path"]), "real.ts");
     });
   });
 

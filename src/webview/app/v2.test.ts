@@ -2010,6 +2010,49 @@ describe("v2 SSE → pipeline translation", () => {
     });
   });
 
+  it("translates tool input streaming frames for live previews", () => {
+    const [d] = translateV2Event(
+      ev("session.tool.input.delta", {
+        sessionID: "s",
+        assistantMessageID: "msg_a",
+        id: "call_1",
+        delta: '{"filePath":"src/a',
+      }),
+    );
+    assert.equal(d.type, "session.next.tool.input.delta");
+    assert.equal((d.data as { callID?: string }).callID, "call_1");
+    assert.equal((d.data as { delta?: string }).delta, '{"filePath":"src/a');
+    const [e] = translateV2Event(
+      ev("session.tool.input.ended", {
+        sessionID: "s",
+        assistantMessageID: "msg_a",
+        id: "call_1",
+        text: '{"filePath":"src/a.ts"}',
+      }),
+    );
+    assert.equal(e.type, "session.next.tool.input.ended");
+    assert.equal((e.data as { callID?: string }).callID, "call_1");
+    assert.equal((e.data as { text?: string }).text, '{"filePath":"src/a.ts"}');
+    // Frames without the ids or the payload are dropped, not mistranslated.
+    assert.deepEqual(
+      translateV2Event(
+        ev("session.tool.input.delta", { sessionID: "s", id: "call_1" }),
+      ),
+      [],
+    );
+    assert.deepEqual(
+      translateV2Event(
+        ev("session.tool.input.ended", {
+          sessionID: "s",
+          assistantMessageID: "msg_a",
+          id: "call_1",
+          text: 42,
+        }),
+      ),
+      [],
+    );
+  });
+
   it("maps selection events and content sync; passes unknowns through", () => {
     assert.deepEqual(
       translateV2Event(
