@@ -213,6 +213,21 @@ export function queueCommand(target: string, text: string): void {
   ];
   appendCommandEcho(target, line);
 }
+
+// Take back a prompt still waiting in the local queue: its turn never
+// reached the server, so "reverting" is a dequeue — the echo goes and the
+// text returns to the composer. False when no queued prompt matches (an
+// already-POSTed steer can't be unsent).
+export function revertQueuedTurn(id: string, text: string): boolean {
+  const t = text.trim();
+  const hit = queuedTurns.value.find(
+    (q) => q.id === id && q.kind === "prompt" && q.text.trim() === t,
+  );
+  if (!hit) return false;
+  queuedTurns.value = queuedTurns.value.filter((q) => q !== hit);
+  retirePending(id, t);
+  return true;
+}
 export const providers = signal<Providers | undefined>(undefined);
 export const agents = signal<Agent[]>([]);
 export const commands = signal<Command[]>([]);

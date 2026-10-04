@@ -12,9 +12,11 @@ import {
   modelLabel,
   peerNames,
   resolveFileRef,
+  revertQueuedTurn,
   revertSession,
   sessionStatus,
   sessions,
+  queuedTurns,
 } from "../store";
 import { extOf, isText, isTool, tokensTotal, attachMime, type FilePart, type Part, type TextPart, type ToolPart } from "../api";
 import { pillifyOwnText, resourcedParts } from "../mentions";
@@ -248,8 +250,16 @@ function dotState(m: ChatMessage, live: boolean): "error" | "running" | "done" {
 // Hover row under a user pill (OpenCode's own glyph pair): copy the
 // prompt, or revert the session to before it — the server drops the prompt,
 // its reply, and everything after. A command line ("cmd:" id) keeps copy
-// but never reverts: the server stores no row for it to rewind to.
-function UserActions(props: { sid: string; id: string; text: string; revert?: boolean }) {
+// but never reverts: the server stores no row for it to rewind to. A
+// queued echo ("queued") reverts locally: the turn never reached the
+// server, so the dequeue is the whole rewind.
+function UserActions(props: {
+  sid: string;
+  id: string;
+  text: string;
+  revert?: boolean;
+  queued?: boolean;
+}) {
   const [copied, setCopied] = useState(false);
   const copy = (e: MouseEvent) => {
     e.stopPropagation();
@@ -259,6 +269,11 @@ function UserActions(props: { sid: string; id: string; text: string; revert?: bo
   };
   const revert = (e: MouseEvent) => {
     e.stopPropagation();
+    if (props.queued) {
+      if (revertQueuedTurn(props.sid, props.text))
+        insertComposerText(props.text, true);
+      return;
+    }
     // A running turn can't be rewound under itself.
     if (sessionStatus.value[props.sid]?.type === "busy") return;
     void revertSession(props.sid, props.id).then((ok) => {
@@ -809,9 +824,11 @@ function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
     );
   }
   if (info.role === "user") {
-    // The optimistic echo carries a "pending:" id — no server row yet, so
-    // nothing to revert; the real row replaces it within a beat. A "cmd:"
-    // id is a command line's durable local echo — same no-revert rule.
+    // The optimistic echo carries a "pending:" id — only a QUEUED turn can
+    // act on it (the dequeue is local); an already-POSTed steer has no
+    // server row to rewind and its actions stay hidden until the row
+    // replaces the echo. A "cmd:" id is a command line's durable local
+    // echo — copy, but never revert.
     const sid = parts[0]?.sessionID;
     const pending = info.id.startsWith("pending:");
     const command = info.id.startsWith("cmd:");
@@ -854,13 +871,20 @@ function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
           )}
           base="markdown msg-text user-text"
           foot={
-            !pending &&
-            sid && (
+            sid &&
+            (!pending ||
+              queuedTurns.value.some(
+                (q) =>
+                  q.id === sid &&
+                  q.kind === "prompt" &&
+                  q.text.trim() === ownText(parts).trim(),
+              )) && (
               <UserActions
                 sid={sid}
                 id={info.id}
                 text={ownText(parts)}
-                revert={!command}
+                revert={!command || pending}
+                queued={pending}
               />
             )
           }

@@ -29,7 +29,8 @@ HTTP/SSE.
   waits on you and green when a turn finishes. Chimes cover ready,
   permission, and question events.
 - **Steer mid-turn** - a prompt sent while the agent works lands at the next
-  step boundary.
+  step boundary. Prompts still waiting in the queue can be reverted (hover
+  the bubble, Revert) - the text returns to the composer unposted.
 - **Peer messages** - messages from other opencode sessions show the
   sender's name and live session title (opencode-plugin-peers).
 - **Attachments become real files** - images, PDFs, and documents are saved

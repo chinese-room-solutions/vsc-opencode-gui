@@ -70,6 +70,7 @@ import {
   renameProject,
   resyncFromServer,
   resolveFileRef,
+  revertQueuedTurn,
   revertSession,
   runSlashCommand,
   failedMsgLoads,
@@ -763,6 +764,29 @@ describe("queued turns apply in publish order (0382677)", () => {
     assert.ok(
       listOf(sid).some((m) => m.info.id.startsWith("pending:")),
     );
+  });
+
+  it("revertQueuedTurn takes back a queued prompt without posting it", async () => {
+    const sid = "q2r";
+    commands.value = [{ name: "foo" }];
+    setBusy(sid);
+    queueCommand(sid, "/foo");
+    await sendPrompt(sid, "held back");
+    assert.equal(queuedTurns.value.length, 2);
+    assert.equal(callsFor(`/session/${sid}/prompt_async`).length, 0);
+    // Nothing queued under that text — the take-back refuses.
+    assert.equal(revertQueuedTurn(sid, "never queued"), false);
+    assert.equal(revertQueuedTurn(sid, "held back"), true);
+    assert.equal(queuedTurns.value.length, 1);
+    assert.equal(queuedTurns.value[0].kind, "command");
+    assert.equal(
+      listOf(sid).some((m) => m.info.id.startsWith("pending:")),
+      false,
+    );
+    // The dequeued prompt must never fire — the command still does.
+    await sseFlush("session.idle", { sessionID: sid });
+    assert.equal(callsFor(`/session/${sid}/prompt_async`).length, 0);
+    assert.equal(callsFor(`/session/${sid}/command`).length, 1);
   });
 
   it("queueCommand rejects unknown commands", () => {
