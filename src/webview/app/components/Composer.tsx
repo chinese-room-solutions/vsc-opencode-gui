@@ -912,6 +912,11 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
               the styles) so the caret and selection stay truthful. */}
           <div class="composer-mirror" ref={mirrorRef} aria-hidden="true">
             {mirrorSegments}
+            {/* A pre-wrap div collapses a trailing newline while the
+                textarea renders it as a real empty line — one <br> buys
+                the missing line back so the layers (and their scroll
+                ranges) stay identical, whatever the trailing run. */}
+            {text.endsWith("\n") ? <br /> : null}
           </div>
           <textarea
             ref={ref}

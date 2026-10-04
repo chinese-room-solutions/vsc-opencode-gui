@@ -1438,7 +1438,11 @@ body {
   color: var(--oc-text);
   font: inherit;
   line-height: 1.45;
-  padding: 5px 5px 0;
+  /* Bottom padding matches the top: the box rides 5px above the textarea
+     and the scroll sync leads by the same 5 (syncScroll) — without the
+     matching bottom padding the mirror's max scroll fell 5px short of that
+     lead, and at the bottom of a capped draft the paint sat offset. */
+  padding: 5px 5px 5px;
   white-space: pre-wrap;
   overflow-wrap: break-word;
 }
