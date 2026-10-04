@@ -65,6 +65,9 @@ const NO_FRAME_MS = 30_000;
 // process is dead (VS Code's grey placeholder) — Restart rebuilds the chat
 // tab on this signal.
 const PING_TIMEOUT_MS = 45_000;
+// A freshly attached page pings within one cadence; four cadences without
+// a single ping means the page never booted (see isUnresponsive).
+const BOOT_GRACE_MS = 60_000;
 
 // One compact line of why a relayed call failed, for the app's error banners
 // and the deduped relay log line. The server's own message when it sent one
@@ -139,6 +142,10 @@ export class AppHost implements vscode.Disposable {
   // page reaches that within 15 s, so a just-loaded webview never reads
   // as dead).
   private _lastPingAt?: number;
+  // When the current page was attached — feeds the never-pinged half of
+  // isUnresponsive: a page that never booted (blank grey tab) has no
+  // heartbeat to go quiet, so silence-since-attach is its only signal.
+  private _attachedAt?: number;
   // Last peer registry snapshot (replayed on ping; see setPeers).
   private _peers: PeerInfo[] = [];
 
@@ -149,6 +156,7 @@ export class AppHost implements vscode.Disposable {
     // A fresh page pings within 15 s; a stale timestamp from a previous
     // page must not read as dead in the meantime.
     this._lastPingAt = undefined;
+    this._attachedAt = Date.now();
 
     webview.options = {
       enableScripts: true,
@@ -482,12 +490,17 @@ export class AppHost implements vscode.Disposable {
   }
 
   // True when the app's heartbeat has gone quiet — its renderer process is
-  // almost certainly dead (a live app pings every 15 s; see main.tsx).
-  // Never true before the first ping, so a fresh webview is safe.
+  // almost certainly dead (a live app pings every 15 s; see main.tsx) — or
+  // when a page attached long ago and never pinged at all: the app boots
+  // and pings synchronously, so that page never loaded and the tab shows
+  // VS Code's grey placeholder. BOOT_GRACE_MS (4x the ping cadence) keeps
+  // a slow load from reading as dead.
   get isUnresponsive(): boolean {
+    if (this._lastPingAt !== undefined)
+      return Date.now() - this._lastPingAt > PING_TIMEOUT_MS;
     return (
-      this._lastPingAt !== undefined &&
-      Date.now() - this._lastPingAt > PING_TIMEOUT_MS
+      this._attachedAt !== undefined &&
+      Date.now() - this._attachedAt > BOOT_GRACE_MS
     );
   }
 
@@ -889,11 +902,13 @@ export class AppHost implements vscode.Disposable {
   }
 
   private _readTemplate(name: string): string {
-    // __dirname is out/ — the host bundle (scripts/build-extension.js)
-    // inlines the compiled sources, while the templates stay asset files
-    // under out/webview/templates/.
-    const templatePath = path.join(__dirname, "webview", "templates", name);
-    return fs.readFileSync(templatePath, "utf-8");
+    // Bundled (scripts/build-extension.js) the host sits at out/ and the
+    // templates at out/webview/templates/; the plain tsc intermediate sits
+    // in out/webview/ right next to them. Resolve whichever layout loaded.
+    const dir = fs.existsSync(path.join(__dirname, "webview", "templates"))
+      ? path.join(__dirname, "webview", "templates")
+      : path.join(__dirname, "templates");
+    return fs.readFileSync(path.join(dir, name), "utf-8");
   }
 }
 

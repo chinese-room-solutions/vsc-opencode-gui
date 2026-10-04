@@ -657,6 +657,21 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
+  // Build a fresh chat panel over the same stores — the recovery path for
+  // a dead tab, shared by the restart command and the watchdog below.
+  const recreateChatPanel = () =>
+    ChatPanel.recreate(
+      hub,
+      context.extensionUri,
+      onPanelDispose,
+      routeStore,
+      tabsStore,
+      projectStore,
+      openProject,
+      hiddenModels,
+      hiddenProviders,
+    );
+
   // Register the restart command to kill the server and start fresh
   context.subscriptions.push(
     vscode.commands.registerCommand("opencodeGui.restart", async () => {
@@ -675,23 +690,21 @@ export function activate(context: vscode.ExtensionContext) {
       // heartbeat (AppHost.isUnresponsive) has stopped. A live tab is
       // left alone; the sidebar re-renders from hub state changes.
       void sm?.ready.then(() => {
-        const panel = ChatPanel.instance;
-        if (panel?.chat.isUnresponsive) {
-          ChatPanel.recreate(
-            hub,
-            context.extensionUri,
-            onPanelDispose,
-            routeStore,
-            tabsStore,
-            projectStore,
-            openProject,
-            hiddenModels,
-            hiddenProviders,
-          );
-        }
+        if (ChatPanel.instance?.chat.isUnresponsive) recreateChatPanel();
       });
     }),
   );
+
+  // Dead-tab watchdog: a page can die (renderer crash, boot that never
+  // finished) while the server stays healthy, and then nothing else ever
+  // rebuilds the tab — the grey placeholder sits until a manual Restart.
+  // Poll the heartbeat and recreate the panel when it reads dead. A
+  // genuinely unloadable app (broken install) keeps recycling the tab,
+  // which is the same retry VS Code itself does for crashed webviews.
+  const watchdog = setInterval(() => {
+    if (ChatPanel.instance?.chat.isUnresponsive) recreateChatPanel();
+  }, 30_000);
+  context.subscriptions.push({ dispose: () => clearInterval(watchdog) });
 
   // Manage Models: which connected-provider models the composer's picker
   // lists (checked = listed). The webview picker's footer row lands here

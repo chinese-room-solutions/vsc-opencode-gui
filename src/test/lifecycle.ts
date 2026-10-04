@@ -139,6 +139,65 @@ suite("opencode GUI lifecycle", function () {
     assert.ok(dead, "server port closed after deactivate");
   });
 
+  test("isUnresponsive catches a page that never pinged, then a ping revives it", async function () {
+    // The grey-tab watchdog (activate) rebuilds the panel on this signal,
+    // so its logic matters beyond Restart: a page that booted pings within
+    // 15 s; one that never loaded (blank tab) has silence-since-attach as
+    // its only symptom. Ages the private stamps directly — 60 s of real
+    // waiting would dwarf the suite.
+    const { AppHost } = await import("../webview/AppHost");
+    // The real extensionUri: attach() renders the shell from its template.
+    const extUri = vscode.extensions.getExtension(
+      "chinese-room-solutions.vsc-opencode-gui",
+    )!.extensionUri;
+    const noopStore = { get: () => undefined, set: () => {} };
+    const host = new AppHost(
+      extUri,
+      noopStore as never,
+      { get: () => [] } as never,
+      {
+        list: () => [],
+        tombstoned: () => false,
+        tombstone: () => {},
+      } as never,
+      () => Promise.resolve(),
+      { get: () => [] },
+      { get: () => [] },
+    );
+    let onMessage: ((m: unknown) => void) | undefined;
+    const webview = {
+      options: undefined,
+      onDidReceiveMessage: (cb: (m: unknown) => void) => {
+        onMessage = cb;
+        return { dispose: () => {} };
+      },
+      postMessage: () => Promise.resolve(true),
+      asWebviewUri: (u: vscode.Uri) => u,
+      cspSource: "https://test",
+    };
+    host.attach(webview as never);
+    const stamps = host as unknown as {
+      _attachedAt?: number;
+      _lastPingAt?: number;
+    };
+    assert.strictEqual(host.isUnresponsive, false, "boot grace holds");
+    stamps._attachedAt = Date.now() - 120_000;
+    assert.strictEqual(
+      host.isUnresponsive,
+      true,
+      "never-pinged page reads dead past the grace",
+    );
+    onMessage?.({ type: "ping" });
+    assert.strictEqual(host.isUnresponsive, false, "a ping revives it");
+    stamps._lastPingAt = Date.now() - 120_000;
+    assert.strictEqual(
+      host.isUnresponsive,
+      true,
+      "pings gone quiet reads dead",
+    );
+    host.dispose();
+  });
+
   suiteTeardown(function () {
     assert.deepStrictEqual(
       uncaught,
