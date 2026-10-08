@@ -181,6 +181,9 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
   // below the mirror, so selected chips repaint themselves in the same
   // selection color to keep the band unbroken.
   const [composing, setComposing] = useState(false);
+  // Ref twin of `composing`: placeCaret runs from listeners that capture a
+  // stale closure (selectionchange), where the state read would be frozen.
+  const composingRef = useRef(false);
   const [sel, setSel] = useState<[number, number] | null>(null);
   // Re-read the textarea's selection. The "select" event only fires for
   // range-making changes — collapsing a selection by a plain click (caret
@@ -204,6 +207,122 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
         : [el.selectionStart, el.selectionEnd],
     );
   };
+  // The native caret is laid out by the textarea's internal editor, whose
+  // line breaks no div can reproduce exactly (Electron reserves a hidden
+  // scrollbar gutter inside it and gives its text a layout of its own).
+  // Hiding it and drawing the caret in the mirror — at the collapsed
+  // range of the caret's text offset — puts it on the painted glyphs by
+  // construction. IME composition falls back to the native caret (the
+  // mirror is hidden while composing).
+  const [caret, setCaret] = useState<{ x: number; y: number; h: number } | null>(null);
+  const [focused, setFocused] = useState(false);
+  const placeCaret = () => {
+    const el = ref.current;
+    const m = mirrorRef.current;
+    if (!el || !m || document.activeElement !== el) return;
+    // The mirror lags the value while an IME composition is in flight —
+    // offsets into it would be garbage. The native caret is shown then.
+    if (composingRef.current) return;
+    if (el.selectionStart !== el.selectionEnd) {
+      setCaret(null);
+      return;
+    }
+    const off = el.selectionStart ?? 0;
+    const value = el.value;
+    const cs = getComputedStyle(m);
+    const line = parseFloat(cs.lineHeight) || 18.85;
+    const mr = m.getBoundingClientRect();
+    const set = (x: number, y: number, h: number) =>
+      setCaret({
+        x: x - mr.left + m.scrollLeft,
+        y: y - mr.top + m.scrollTop,
+        h,
+      });
+    // Resolve a text offset into the mirror's DOM (the segments
+    // reproduce the value exactly, chip spans included).
+    const resolve = (o: number): [Text, number] | null => {
+      let seen = 0;
+      let hit: [Text, number] | null = null;
+      const walk = (node: Node) => {
+        if (hit) return;
+        if (node.nodeType === Node.TEXT_NODE) {
+          const len = node.textContent?.length ?? 0;
+          if (o <= seen + len) hit = [node as Text, o - seen];
+          else seen += len;
+        } else node.childNodes.forEach(walk);
+      };
+      walk(m);
+      return hit;
+    };
+    const range = document.createRange();
+    // The value can run ahead of the mirror (selectionchange fires before
+    // a pending render commits), so offsets can land at — never past — a
+    // node's end: clamp, or setEnd throws length+1.
+    const rectOf = (t: Text, from: number, to?: number) => {
+      range.setStart(t, from);
+      range.setEnd(t, Math.min(to ?? from, t.length));
+      const r = range.getBoundingClientRect();
+      return r.height > 0 || r.width > 0 ? r : null;
+    };
+    const at = resolve(off);
+    if (at) {
+      const r = rectOf(at[0], at[1]);
+      // A collapsed range at a node's end past a newline reports the
+      // pre-break position; the walk-back below places it on the line
+      // the break opens.
+      const pastNodeNewline =
+        at[1] === at[0].length && (at[0].textContent ?? "").endsWith("\n");
+      if (r && !pastNodeNewline) {
+        set(r.left, r.top, r.height || line);
+        return;
+      }
+    }
+    // No rect at the offset: the caret sits past trailing newlines (or
+    // the draft is empty). Drop to the last char that paints, then one
+    // line down per break after it; an empty draft starts at the text
+    // origin.
+    let j = off - 1;
+    let jr: DOMRect | null = null;
+    while (j >= 0) {
+      // Newlines paint rects but sit on the line they end; anchoring on
+      // one drops the caret back a line.
+      if (value[j] === "\n" || value[j] === "\r") {
+        j--;
+        continue;
+      }
+      const t = resolve(j);
+      if (t) {
+        const r = rectOf(t[0], t[1], t[1] + 1);
+        if (r) {
+          jr = r;
+          break;
+        }
+      }
+      j--;
+    }
+    if (!jr) {
+      setCaret({ x: parseFloat(cs.paddingLeft), y: parseFloat(cs.paddingTop), h: line });
+      return;
+    }
+    const breaks = value.slice(j + 1, off).split("\n").length - 1;
+    if (breaks === 0) set(jr.right, jr.top, jr.height || line);
+    else
+      setCaret({
+        x: parseFloat(cs.paddingLeft),
+        y: jr.top - mr.top + m.scrollTop + breaks * line,
+        h: jr.height || line,
+      });
+  };
+  useEffect(() => {
+    const m = mirrorRef.current;
+    const onScroll = () => placeCaret();
+    m?.addEventListener("scroll", onScroll);
+    window.addEventListener("resize", onScroll);
+    return () => {
+      m?.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, []);
   // Open while the text is a bare "/query" — closed once a space (args)
   // follows. `slashIndex` is the highlighted match.
   const [slashQuery, setSlashQuery] = useState<string | undefined>();
@@ -419,6 +538,7 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
   useEffect(() => {
     const el = ref.current;
     if (el) syncScroll(el);
+    placeCaret();
   }, [text]);
 
   // The textarea's blur never fires when focus leaves the webview iframe
@@ -441,7 +561,10 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
   useEffect(() => {
     const onChange = () => {
       const el = ref.current;
-      if (el && document.activeElement === el) syncSel(el);
+      if (el && document.activeElement === el) {
+        syncSel(el);
+        placeCaret();
+      }
     };
     document.addEventListener("selectionchange", onChange);
     return () => document.removeEventListener("selectionchange", onChange);
@@ -918,6 +1041,12 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
                 the missing line back so the layers (and their scroll
                 ranges) stay identical, whatever the trailing run. */}
             {text.endsWith("\n") ? <br /> : null}
+            {focused && !composing && caret ? (
+              <div
+                class="mirror-caret"
+                style={{ left: `${caret.x}px`, top: `${caret.y}px`, height: `${caret.h}px` }}
+              />
+            ) : null}
           </div>
           <textarea
             ref={ref}
@@ -943,14 +1072,26 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
             onKeyDown={onKeyDown}
             onPaste={onPaste}
             onScroll={(e) => syncScroll(e.currentTarget)}
-            onCompositionStart={() => setComposing(true)}
-            onCompositionEnd={() => setComposing(false)}
+            onCompositionStart={() => {
+              composingRef.current = true;
+              setComposing(true);
+            }}
+            onCompositionEnd={() => {
+              composingRef.current = false;
+              setComposing(false);
+            }}
+            onFocus={() => {
+              setFocused(true);
+              placeCaret();
+            }}
             // Leaving the editor closes the mention menu (the slash menu is
             // input-driven only; the mention menu would otherwise survive a
             // click-away with a stale caret) and drops the selection tint —
             // the textarea keeps its selection through blur without firing
             // "select", so the chips would stay lit.
             onBlur={() => {
+              setFocused(false);
+              setCaret(null);
               setAtQuery(undefined);
               setSel(null);
             }}

@@ -1399,9 +1399,17 @@ body {
   border: none;
   background: none;
   color: transparent;
-  caret-color: var(--vscode-editor-foreground);
+  /* The native caret follows the textarea's internal layout, which no
+     div can mirror exactly (see .mirror-caret) — the caret is drawn in
+     the paint layer instead. */
+  caret-color: transparent;
   font: inherit;
   line-height: 1.45;
+  /* The textarea's internal soft-wrap follows no CSS rule a div can
+     copy (it fits a "word head" on a line then breaks); word-break on a
+     textarea IS honored, so both layers run the same engine rule and
+     wrap identically. */
+  word-break: break-all;
   outline: none;
 }
 
@@ -1411,9 +1419,10 @@ body {
 
 /* While an IME composition is in flight the mirror lags the value (the
    composing string is not in it yet) — the textarea shows its own text
-   until the composition commits. */
+   and its own caret until the composition commits. */
 .composer-input.composing textarea {
   color: var(--oc-text);
+  caret-color: var(--vscode-editor-foreground);
 }
 
 .composer-input.composing .composer-mirror {
@@ -1440,7 +1449,36 @@ body {
   line-height: 1.45;
   padding: 5px 5px 0;
   white-space: pre-wrap;
+  /* The textarea soft-wraps like break-all — it fills a line and breaks
+     mid-word rather than moving the word down, and gives "/" no break
+     privilege. A word-wrapped mirror paints different lines than the
+     caret's truth whenever a word straddles the fill point; matching the
+     engine keeps the glyphs and the caret on the same lines. */
+  word-break: break-all;
   overflow-wrap: break-word;
+  /* The mirror's own (phantom 0.x-px) overflow must not buy it a
+     scrollbar: that would wrap the paint narrower than the selection
+     band the textarea draws below it. */
+  scrollbar-width: none;
+}
+
+/* The caret, drawn in the mirror at the caret's text offset so it rides
+   the painted glyphs no matter how the textarea's internal layout
+   differs (hidden gutter, its own text metrics). Coordinates are the
+   mirror's content space — it scrolls with the text. */
+.mirror-caret {
+  position: absolute;
+  width: 1.5px;
+  background: var(--vscode-editor-foreground);
+  pointer-events: none;
+  z-index: 2;
+  animation: caret-blink 1.06s steps(1, end) infinite;
+}
+
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
 }
 
 /* Attached-file chips between the textarea and the composer bar. */
