@@ -27,7 +27,9 @@ window.addEventListener("error", (e) => showCrashCard(e.error));
 window.addEventListener("unhandledrejection", (e) => showCrashCard(e.reason));
 
 // Liveness heartbeat: the host times these to notice a dead renderer
-// process — Restart rebuilds the chat tab when they stop.
+// process — Restart rebuilds the chat tab when they stop. One ping at boot
+// so a loaded page is never mistaken for one that never started.
+postToHost({ type: "ping" });
 window.setInterval(() => postToHost({ type: "ping" }), 15_000);
 
 // The route the host baked into the page wins over the default; validated

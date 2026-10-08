@@ -703,7 +703,7 @@ export function activate(context: vscode.ExtensionContext) {
   // which is the same retry VS Code itself does for crashed webviews.
   const watchdog = setInterval(() => {
     if (ChatPanel.instance?.chat.isUnresponsive) recreateChatPanel();
-  }, 30_000);
+  }, 5_000);
   context.subscriptions.push({ dispose: () => clearInterval(watchdog) });
 
   // Manage Models: which connected-provider models the composer's picker

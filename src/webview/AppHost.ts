@@ -61,13 +61,13 @@ const MAX_BACKOFF_MS = 15_000;
 // stream silent for this long is dead-but-open (standby, network switch) —
 // `read()` would pend forever without this, wedging the app mid-turn.
 const NO_FRAME_MS = 30_000;
-// The app pings every 15 s. Silence past three cadences means the renderer
-// process is dead (VS Code's grey placeholder) — Restart rebuilds the chat
-// tab on this signal.
+// The app pings at boot, then every 15 s. Silence past three cadences
+// means the renderer process is dead (VS Code's grey placeholder) —
+// Restart rebuilds the chat tab on this signal.
 const PING_TIMEOUT_MS = 45_000;
-// A freshly attached page pings within one cadence; four cadences without
-// a single ping means the page never booted (see isUnresponsive).
-const BOOT_GRACE_MS = 60_000;
+// A freshly attached page pings within seconds of load; silence this long
+// means it never booted (see isUnresponsive).
+const BOOT_GRACE_MS = 20_000;
 
 // One compact line of why a relayed call failed, for the app's error banners
 // and the deduped relay log line. The server's own message when it sent one
@@ -139,8 +139,7 @@ export class AppHost implements vscode.Disposable {
   private _pumps: AbortController[] = [];
   private _pumpTimers: NodeJS.Timeout[] = [];
   // Last heartbeat from the app; undefined until its first ping (a fresh
-  // page reaches that within 15 s, so a just-loaded webview never reads
-  // as dead).
+  // page pings at boot, so a just-loaded webview never reads as dead).
   private _lastPingAt?: number;
   // When the current page was attached — feeds the never-pinged half of
   // isUnresponsive: a page that never booted (blank grey tab) has no
@@ -153,8 +152,8 @@ export class AppHost implements vscode.Disposable {
     for (const d of this._attachments) d.dispose();
     this._attachments = [];
     this._webview = webview;
-    // A fresh page pings within 15 s; a stale timestamp from a previous
-    // page must not read as dead in the meantime.
+    // A fresh page pings at boot; a stale timestamp from a previous page
+    // must not read as dead in the meantime.
     this._lastPingAt = undefined;
     this._attachedAt = Date.now();
 
@@ -491,10 +490,9 @@ export class AppHost implements vscode.Disposable {
 
   // True when the app's heartbeat has gone quiet — its renderer process is
   // almost certainly dead (a live app pings every 15 s; see main.tsx) — or
-  // when a page attached long ago and never pinged at all: the app boots
-  // and pings synchronously, so that page never loaded and the tab shows
-  // VS Code's grey placeholder. BOOT_GRACE_MS (4x the ping cadence) keeps
-  // a slow load from reading as dead.
+  // when a page attached long ago and never pinged at all: the app pings
+  // at boot, so that page never loaded and the tab shows VS Code's grey
+  // placeholder. BOOT_GRACE_MS keeps a slow load from reading as dead.
   get isUnresponsive(): boolean {
     if (this._lastPingAt !== undefined)
       return Date.now() - this._lastPingAt > PING_TIMEOUT_MS;
