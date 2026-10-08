@@ -1892,6 +1892,131 @@ describe("/compact (store side of ff714f0)", () => {
     assert.equal((echo?.parts[0] as { text?: string }).text, "/compact");
     assert.equal(sessionStatus.value[sid]?.type, "idle");
   });
+  it("a /compact queued behind a running turn fires when it idles", async () => {
+    const sid = "cp4";
+    open(sid, [
+      row("u1", "user", T0),
+      row("a1", "assistant", T0 + 1, { providerID: "pp", modelID: "mm" }),
+    ]);
+    setBusy(sid);
+    queueCommand(sid, "/compact");
+    assert.equal(queuedTurns.value.length, 1);
+    await sseFlush("session.idle", { sessionID: sid });
+    await settle(4);
+    // The flush effect's own optimistic busy must not refuse the compact.
+    assert.equal(queuedTurns.value.length, 0);
+    assert.equal(callsFor(`/session/${sid}/summarize`).length, 1);
+    assert.equal(sendError.value?.text, undefined);
+    // The run completed — its queue-time echo retires with it. One run,
+    // one local row gone: nothing doubles.
+    const echoes = listOf(sid).filter((m) =>
+      m.info.id.startsWith("pending:") || m.info.id.startsWith("cmd:"),
+    );
+    assert.equal(echoes.length, 0);
+  });
+  it("three queued compacts fire head-first without duplicate echoes", async () => {
+    const sid = "cp5";
+    open(sid, [
+      row("u1", "user", T0),
+      row("a1", "assistant", T0 + 1, { providerID: "pp", modelID: "mm" }),
+    ]);
+    setBusy(sid);
+    queueCommand(sid, "/compact");
+    queueCommand(sid, "/compact");
+    queueCommand(sid, "/compact");
+    assert.equal(queuedTurns.value.length, 3);
+    await sseFlush("session.idle", { sessionID: sid });
+    await settle(10);
+    assert.equal(queuedTurns.value.length, 0);
+    assert.equal(callsFor(`/session/${sid}/summarize`).length, 3);
+    // Each run retires its own queue-time echo — three runs, zero local
+    // rows left.
+    const bubbles = listOf(sid).filter(
+      (m) =>
+        m.info.role === "user" &&
+        (m.info.id.startsWith("pending:") || m.info.id.startsWith("cmd:")),
+    );
+    assert.equal(bubbles.length, 0);
+  });
+  it("a queued compact's echo retires when its run completes", async () => {
+    const sid = "cp6";
+    open(sid, [
+      row("u1", "user", T0),
+      row("a1", "assistant", T0 + 1, { providerID: "pp", modelID: "mm" }),
+    ]);
+    setBusy(sid);
+    queueCommand(sid, "/compact");
+    assert.ok(queuedTurns.value[0].echoCid);
+    // The real server writes the run's rows with no "/compact" text: a
+    // trigger user row (a lone `compaction` part) and the summary. Serve
+    // them on the legacy route the post-run refresh reads.
+    onApi(
+      messageMock(
+        sid,
+        () => ({ data: [] }),
+        () => [
+          {
+            info: { id: "srv_t", role: "user", time: { created: Date.now() } },
+            parts: [
+              { id: "srv_t:0", messageID: "srv_t", sessionID: sid, type: "compaction" },
+            ],
+          },
+          {
+            info: { id: "srv_s", role: "assistant", agent: "compaction", time: { created: Date.now() + 1 } },
+            parts: [],
+          },
+        ],
+      ),
+    );
+    await sseFlush("session.idle", { sessionID: sid });
+    await settle(6);
+    // Exactly one local record per run, retired on completion: nothing
+    // with "/compact" text remains, and the server's rows merged in.
+    const bubbles = listOf(sid).filter(
+      (m) =>
+        m.info.role === "user" &&
+        (m.info.id.startsWith("pending:") || m.info.id.startsWith("cmd:")),
+    );
+    assert.equal(bubbles.length, 0);
+    assert.ok(findRow(sid, "srv_t"));
+    assert.ok(findRow(sid, "srv_s"));
+  });
+  it("a refresh pairs durable /compact echoes with the server's rows one-to-one", async () => {
+    const sid = "cp7";
+    open(sid, [
+      row("u1", "user", T0),
+      row("a1", "assistant", T0 + 1, { providerID: "pp", modelID: "mm" }),
+    ]);
+    // Three durable echoes (two stand for orphans an older build left);
+    // busy holds the flush so the echoes stay put.
+    setBusy(sid);
+    queueCommand(sid, "/compact");
+    queueCommand(sid, "/compact");
+    queueCommand(sid, "/compact");
+    // The server has run twice: two "/compact" rows postdating the echoes.
+    const now = Date.now();
+    onApi(
+      messageMock(sid, () => ({ data: [] }), () => [
+        {
+          info: { id: "sv1", role: "user", time: { created: now } },
+          parts: [textPart("sv1:0", "sv1", sid, "/compact")],
+        },
+        {
+          info: { id: "sv2", role: "user", time: { created: now + 1 } },
+          parts: [textPart("sv2:0", "sv2", sid, "/compact")],
+        },
+      ]),
+    );
+    await refreshMessages(sid);
+    const lines = listOf(sid).filter(
+      (m) =>
+        m.info.role === "user" &&
+        (m.parts[0] as { text?: string }).text === "/compact",
+    );
+    // Two server rows plus the one unpaired echo (its run is still owed).
+    assert.equal(lines.length, 3);
+    assert.equal(lines.filter((m) => m.info.id.startsWith("cmd:")).length, 1);
+  });
   it("reports a failed compaction", async () => {
     const sid = "cp3";
     open(sid, [

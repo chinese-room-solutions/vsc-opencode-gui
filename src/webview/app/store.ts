@@ -158,6 +158,9 @@ export type QueuedTurn = {
   kind: "prompt" | "command";
   text: string;
   files?: ComposerFile[];
+  // The durable echo's row id, for a queued command — the run retires
+  // exactly this row when it completes.
+  echoCid?: string;
 };
 export const queuedTurns = signal<QueuedTurn[]>([]);
 
@@ -207,11 +210,12 @@ export function queueCommand(target: string, text: string): void {
     setSendError(`Unknown command /${name}.`);
     return;
   }
+  const cid = `cmd:${Date.now()}:${++pendingSeq}`;
   queuedTurns.value = [
     ...queuedTurns.value,
-    { id: target, kind: "command", text: line },
+    { id: target, kind: "command", text: line, echoCid: cid },
   ];
-  appendCommandEcho(target, line);
+  appendCommandEchoId(target, cid, line);
 }
 
 // Take back a prompt still waiting in the local queue: its turn never
@@ -2977,9 +2981,34 @@ export async function refreshMessages(id: string): Promise<void> {
     const durableUsers = sorted.filter(
       (m) => m.info.role === "user" && !m.info.id.startsWith("pending:"),
     );
+    // The server writes its own "/compact" user row per summarize run, so
+    // a durable /compact echo retires once its run's row exists — paired
+    // one-to-one, oldest with oldest, so an unpaired echo (a compact this
+    // client still owes) stays. Also cleans echoes orphaned by an older
+    // build or another window. Non-compact commands have no server row to
+    // pair with and always stay.
+    const cmdRows = [
+      ...inMemory.filter((m) => m.info.id.startsWith("cmd:")),
+      ...storedCommandRows(id).filter((m) => !knownCmd.has(m.info.id)),
+    ];
+    const compactRows = sorted
+      .filter((m) => m.info.role === "user" && partText(m) === "/compact")
+      .sort(byCreated);
+    const supersededCmd = new Set<string>();
+    cmdRows
+      .filter((m) => partText(m) === "/compact")
+      .sort(byCreated)
+      .forEach((e, k) => {
+        const row = compactRows[k];
+        if (
+          row &&
+          (row.info.time.created ?? 0) >= (e.info.time.created ?? 0) - 2000
+        )
+          supersededCmd.add(e.info.id);
+      });
     sorted.push(
       ...inMemory.filter((m) => {
-        if (m.info.id.startsWith("cmd:")) return true;
+        if (m.info.id.startsWith("cmd:")) return !supersededCmd.has(m.info.id);
         if (!m.info.id.startsWith("pending:")) {
           // A row the stream delivered while this fetch was in flight
           // (message.updated mid-await) is newer than the snapshot — keep
@@ -3007,7 +3036,9 @@ export async function refreshMessages(id: string): Promise<void> {
           )
         );
       }),
-      ...storedCommandRows(id).filter((m) => !knownCmd.has(m.info.id)),
+      ...storedCommandRows(id).filter(
+        (m) => !knownCmd.has(m.info.id) && !supersededCmd.has(m.info.id),
+      ),
     );
     sorted.sort(byCreated);
     // A pending revert folds the transcript at its marker: the message and
@@ -3271,7 +3302,10 @@ function storedCommandRows(id: string): ChatMessage[] {
 }
 
 function appendCommandEcho(id: string, text: string): void {
-  const cid = `cmd:${Date.now()}:${++pendingSeq}`;
+  appendCommandEchoId(id, `cmd:${Date.now()}:${++pendingSeq}`, text);
+}
+
+function appendCommandEchoId(id: string, cid: string, text: string): void {
   const created = Date.now();
   const part: Part = {
     id: `${cid}:text`,
@@ -3285,6 +3319,27 @@ function appendCommandEcho(id: string, text: string): void {
     ...list,
     { info: { id: cid, role: "user", time: { created } }, parts: [part] },
   ]);
+}
+
+// Remove one durable command echo by row id, from the transcript and
+// localStorage — the queued /compact's echo, retired by the run that
+// owns it. Idempotent; unknown ids are a no-op.
+function removeCommandEcho(id: string, cid: string): void {
+  const all = storedCommands(id);
+  if (all.some((c) => c.cid === cid)) {
+    try {
+      localStorage.setItem(
+        cmdStoreKey(id),
+        JSON.stringify(all.filter((c) => c.cid !== cid)),
+      );
+    } catch {
+      // Quota or privacy mode — the in-memory removal still applies.
+    }
+  }
+  mutateMessages(id, (l) => {
+    const i = l.findIndex((m) => m.info.id === cid);
+    return i < 0 ? l : [...l.slice(0, i), ...l.slice(i + 1)];
+  });
 }
 
 function titleFrom(text: string): string {
@@ -3483,8 +3538,14 @@ async function postPrompt(
 // command behind /command; compaction is a direct call to the summarize
 // endpoint, what the TUI's /compact runs. It folds the history into an AI
 // summary written by the session's current model, freeing the context.
-// Needs a session with turns, and an idle one — it runs a turn of its own.
-async function runCompact(target: string | "draft", echoed = false): Promise<void> {
+// Needs a session with turns, and an idle one — it runs a turn of its own
+// (a queue-fired compact is exempt: the flush effect checked idle and
+// flipped busy itself, so the guard would read its own optimism).
+async function runCompact(
+  target: string | "draft",
+  echoed = false,
+  echoCid?: string,
+): Promise<void> {
   if (target === "draft") {
     setSendError("Nothing to compact yet — send a message first.");
     return;
@@ -3497,10 +3558,12 @@ async function runCompact(target: string | "draft", echoed = false): Promise<voi
       (m) => m.info.role === "assistant" && m.info.agent !== "compaction",
     )
   ) {
+    if (echoed)
+      sessionStatus.value = { ...sessionStatus.value, [target]: { type: "idle" } };
     setSendError("Nothing to compact yet — send a message first.");
     return;
   }
-  if ((sessionStatus.value[target]?.type ?? "idle") !== "idle") {
+  if (!echoed && (sessionStatus.value[target]?.type ?? "idle") !== "idle") {
     setSendError("Wait for the running turn to finish.");
     return;
   }
@@ -3516,14 +3579,18 @@ async function runCompact(target: string | "draft", echoed = false): Promise<voi
       ? { providerID: last.info.providerID!, id: last.info.modelID! }
       : undefined);
   if (!model?.providerID || !model.id) {
+    if (echoed)
+      sessionStatus.value = { ...sessionStatus.value, [target]: { type: "idle" } };
     setSendError("No model set to compact with.");
     return;
   }
   setSendError(undefined);
   sessionStatus.value = { ...sessionStatus.value, [target]: { type: "busy" } };
-  // The command shows as a sent message (Claude Code); the compaction
-  // trigger row the server creates retires it on the stream. A queued
-  // /compact already appended its echo when it was queued.
+  // The command shows as a sent message (Claude Code). A queued compact's
+  // queue-time echo IS its bubble — no pending copy: two local rows for one
+  // run is how the line used to double. The trigger fold the server streams
+  // lands under it mid-run; the echo retires by id when the run completes.
+  // A failed run keeps it as the record.
   if (!echoed) appendPending(target, "/compact");
   const ok = await compactSession(target, model.providerID, model.id);
   sessionStatus.value = { ...sessionStatus.value, [target]: { type: "idle" } };
@@ -3532,6 +3599,7 @@ async function runCompact(target: string | "draft", echoed = false): Promise<voi
     setSendError("The session could not be compacted.");
     return;
   }
+  if (echoCid) removeCommandEcho(target, echoCid);
   // The summarize POST resolves once the summary turn is done (the server
   // awaits its loop) — the summary itself already streamed over /event.
   // This refresh picks up the trigger + summary rows' durable truth.
@@ -3539,19 +3607,21 @@ async function runCompact(target: string | "draft", echoed = false): Promise<voi
 }
 
 // Run a "/name args..." composer line. A draft is created first — commands
-// need a session to run in. `echoed` marks a queued command whose pending
-// bubble was appended when it was queued; appending again would show the
-// line twice until the refresh retires both.
+// need a session to run in. `echoed` marks a queued command: its durable
+// bubble was appended when it was queued and stays through the run, so
+// nothing is appended here; `echoCid` is that bubble's row id (compaction
+// retires it on completion).
 export async function runSlashCommand(
   target: string | "draft",
   text: string,
   echoed = false,
+  echoCid?: string,
 ): Promise<void> {
   const m = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
   const name = m?.[1];
   if (!name) return;
   if (name === "compact") {
-    await runCompact(target, echoed);
+    await runCompact(target, echoed, echoCid);
     return;
   }
   if (!commands.value.some((c) => c.name === name)) {
@@ -3633,7 +3703,7 @@ effect(() => {
     )
   )
     appendPending(hit.id, hit.text);
-  if (hit.kind === "command") void runSlashCommand(hit.id, hit.text, true);
+  if (hit.kind === "command") void runSlashCommand(hit.id, hit.text, true, hit.echoCid);
   else void postPrompt(hit.id, hit.text, hit.files ?? []);
 });
 
