@@ -190,6 +190,37 @@ export function Session(props: { sessionId?: string; parent?: string }) {
       }, 120);
     }
   };
+  // Late layout grows the tail after the list-change pins above ran: the
+  // deferred markdown paints (their parse throttled 250ms behind the store)
+  // land after the update that scheduled them, and no scroll event fires
+  // while content grows below a resting scrollTop — between bursts (second-
+  // apart batches) the tail would sit past the fold until the next burst
+  // re-pinned. While the session works, a frame loop holds the bottom
+  // instead, skipping the prompt pin like the pins do; a short trail past
+  // the idle flip covers the settle parse, the last paint of all.
+  useEffect(() => {
+    if (!busy) return;
+    let raf = 0;
+    const hold = () => {
+      const el = scroller.current;
+      if (el && stick.current && pinHold.current === undefined)
+        el.scrollTop = el.scrollHeight;
+    };
+    const tick = () => {
+      hold();
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(raf);
+      const end = performance.now() + 1500;
+      const trail = () => {
+        hold();
+        if (performance.now() < end) raf = requestAnimationFrame(trail);
+      };
+      raf = requestAnimationFrame(trail);
+    };
+  }, [busy]);
   // Leaving the session saves where the reader stopped, so coming back
   // resumes there. On unmount, not on scroll: programmatic moves (the
   // bottom-follow pins) may fire no scroll event at all.
