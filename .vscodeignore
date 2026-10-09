@@ -6,6 +6,7 @@
 AGENTS.md
 src/**
 .oc-data/**
+v2rig/**
 .github/**
 tsconfig.webview.json
 out/test-unit/**
