@@ -205,18 +205,179 @@ export function enhanceCodeBlocks(root: HTMLElement, tokenize = true): void {
   }
 }
 
-// Transcript selection copies are rewritten as clean plain text plus a
-// structural HTML flavor. Chromium's default HTML payload bakes every
-// element's computed styles into the fragment — theme colors, the code
-// block's background dump — and rich paste targets inherit them or choke
-// on the nesting: colored prose, gray code slabs. The rewrite keeps the
-// structure (paragraphs, pre, code, lists, links) and drops every style
-// and class, so the paste takes the target's own formatting: formatting
-// only, never colors. Editables (composer) keep the native behavior.
-const COPY_STRIP = "style, script, button, svg, .code-copy";
+// Transcript selection copies are rewritten as markdown source — plain
+// text only, no HTML flavor. Chromium's default payload bakes every
+// computed style into text/html (theme colors, the code-block slab), and
+// even a stripped structural payload still makes rich targets render
+// <pre> as their own code-block look — the block's style survives the
+// copy. Markdown keeps every structure — fences, emphasis, links,
+// lists — as text and styles nothing: identical on every platform and
+// paste target. A selection inside one code block copies raw code (no
+// fence — it's headed for an editor). Editables (composer) keep the
+// native behavior.
+
+// Inline nodes → markdown text. Outside <pre>, whitespace collapses to
+// single spaces (marked's output carries no meaningful runs there).
+function mdInline(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE)
+    return (node.textContent ?? "").replace(/\s+/g, " ");
+  const el = node as Element;
+  if (el.nodeType !== Node.ELEMENT_NODE) return "";
+  if (el.tagName === "BR") return "\n";
+  if (el.tagName === "BUTTON" || el.tagName === "SVG" || el.tagName === "INPUT")
+    return "";
+  const inner = [...el.childNodes].map(mdInline).join("");
+  switch (el.tagName) {
+    case "STRONG":
+    case "B":
+      return inner.trim() ? `**${inner}**` : "";
+    case "EM":
+    case "I":
+      return inner.trim() ? `*${inner}*` : "";
+    case "DEL":
+    case "S":
+      return inner.trim() ? `~~${inner}~~` : "";
+    case "A": {
+      const href = el.getAttribute("href") ?? "";
+      // File-ref anchors had their href removed (tagFileRefs) — plain
+      // text, same as the file's own code span would copy.
+      return /^https?:/.test(href) ? `[${inner}](${href})` : inner;
+    }
+    case "IMG":
+      return `![${el.getAttribute("alt") ?? ""}](${el.getAttribute("src") ?? ""})`;
+    case "CODE": {
+      const t = inner.replace(/\s+/g, " ").trim();
+      if (!t) return "";
+      const longest = Math.max(
+        0,
+        ...(t.match(/`+/g) ?? []).map((r) => r.length),
+      );
+      const fence = "`".repeat(longest + 1);
+      return `${fence}${longest ? " " : ""}${t}${longest ? " " : ""}${fence}`;
+    }
+    default:
+      return inner;
+  }
+}
+
+const mdLines = (s: string): string =>
+  s
+    .split("\n")
+    .map((l) => l.trim())
+    .join("\n");
+
+// A fenced block: the code element carries the language class; a body
+// containing ``` needs a longer fence.
+function mdPre(pre: Element): string {
+  const codeEl = pre.querySelector("code");
+  const lang = codeEl
+    ? /\blanguage-([\w+#-]+)/.exec(codeEl.className)?.[1]
+    : undefined;
+  const body = ((codeEl ?? pre).textContent ?? "").replace(/\n+$/, "");
+  const longest = Math.max(
+    2,
+    ...(body.match(/`+/g) ?? []).map((r) => r.length),
+  );
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return `${fence}${lang ?? ""}\n${body}\n${fence}`;
+}
+
+function mdList(el: Element, depth: number): string {
+  const pad = "  ".repeat(depth);
+  const lines: string[] = [];
+  let n = 0;
+  for (const li of [...el.children]) {
+    if (li.tagName !== "LI") continue;
+    n++;
+    const marker = el.tagName === "OL" ? `${n}. ` : "- ";
+    const check = li.querySelector(":scope > input[type=checkbox]");
+    const tick = check
+      ? (check as HTMLInputElement).checked
+        ? "[x] "
+        : "[ ] "
+      : "";
+    const inlineNodes: Node[] = [];
+    const sub: string[] = [];
+    for (const c of li.childNodes) {
+      if (c instanceof Element && (c.tagName === "UL" || c.tagName === "OL"))
+        sub.push(mdList(c, depth + 1));
+      else inlineNodes.push(c);
+    }
+    lines.push(`${pad}${marker}${tick}${mdLines(inlineNodes.map(mdInline).join("")).trim()}`);
+    lines.push(...sub);
+  }
+  return lines.join("\n");
+}
+
+// Elements that start a new block; everything else flows as inline text.
+const BLOCK_TAGS = new Set([
+  "P", "PRE", "UL", "OL", "BLOCKQUOTE", "TABLE", "HR", "DIV",
+  "H1", "H2", "H3", "H4", "H5", "H6",
+]);
+
+function mdBlocks(el: Element, depth = 0): string[] {
+  const tag = el.tagName;
+  if (tag === "PRE") return [mdPre(el)];
+  if (tag === "UL" || tag === "OL") return [mdList(el, depth)];
+  if (tag === "HR") return ["---"];
+  if (tag === "BLOCKQUOTE") {
+    const inner = [...el.childNodes].flatMap((c) =>
+      c instanceof Element ? mdBlocks(c, depth) : [],
+    );
+    return [
+      inner
+        .join("\n\n")
+        .split("\n")
+        .map((l) => (l ? `> ${l}` : ">"))
+        .join("\n"),
+    ];
+  }
+  if (tag === "TABLE") {
+    const rows = [...el.querySelectorAll("tr")].map((tr) =>
+      [...tr.children].map((cell) =>
+        mdInline(cell).replace(/\|/g, "\\|").replace(/\s+/g, " ").trim(),
+      ),
+    );
+    if (rows.length === 0) return [];
+    const line = (cells: string[]) => `| ${cells.join(" | ")} |`;
+    return [
+      [
+        line(rows[0]),
+        `| ${rows[0].map(() => "---").join(" | ")} |`,
+        ...rows.slice(1).map(line),
+      ].join("\n"),
+    ];
+  }
+  if (/^H[1-6]$/.test(tag))
+    return [`${"#".repeat(Number(tag[1]))} ${mdLines(mdInline(el)).trim()}`];
+  if (tag === "P") return [mdLines(mdInline(el)).trim()];
+  // Wrappers (code-block, part containers) and unknown containers: keep
+  // child order, folding inline runs into paragraphs at the seams.
+  const out: string[] = [];
+  let run = "";
+  for (const c of el.childNodes) {
+    if (c instanceof Element && BLOCK_TAGS.has(c.tagName)) {
+      if (run.trim()) out.push(mdLines(run).trim());
+      run = "";
+      out.push(...mdBlocks(c, depth));
+    } else {
+      run += mdInline(c);
+    }
+  }
+  if (run.trim()) out.push(mdLines(run).trim());
+  return out;
+}
+
+function selectionMarkdown(box: HTMLElement): string {
+  return mdBlocks(box)
+    .filter(Boolean)
+    .join("\n\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 
 export function initTranscriptCopy(): void {
-  document.addEventListener("copy", (e: ClipboardEvent) => {
+  document.addEventListener("copy", (e) => {
     const sel = document.getSelection();
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
     const range = sel.getRangeAt(0);
@@ -226,25 +387,25 @@ export function initTranscriptCopy(): void {
     };
     const start = scope(range.startContainer);
     if (!start || start !== scope(range.endContainer)) return;
-    // A range inside a code block clones bare token spans — no pre, so
-    // targets that flow text would collapse the newlines again. Wrap the
-    // fragment in the block's own pre (attribute-free) in that case.
     const common =
       range.commonAncestorContainer instanceof Element
         ? range.commonAncestorContainer
         : range.commonAncestorContainer.parentElement;
-    const pre = common?.closest("pre");
-    const box = pre?.cloneNode(false) as HTMLElement | null ?? document.createElement("div");
-    box.appendChild(range.cloneContents());
-    box.querySelectorAll(COPY_STRIP).forEach((el) => el.remove());
-    for (const el of [box, ...box.querySelectorAll("*")]) {
-      for (const attr of [...el.attributes]) {
-        if (attr.name !== "href") el.removeAttribute(attr.name);
-      }
+    // A copy from inside one code block is raw code — fences and the
+    // language tag are noise when the snippet is headed for an editor.
+    // Both endpoints inside one pre ⇒ nothing outside it is selected.
+    if (common?.closest("pre")) {
+      e.preventDefault();
+      e.clipboardData?.setData(
+        "text/plain",
+        (range.cloneContents().textContent ?? "").replace(/\n+$/, ""),
+      );
+      return;
     }
+    const box = document.createElement("div");
+    box.appendChild(range.cloneContents());
     e.preventDefault();
-    e.clipboardData?.setData("text/plain", sel.toString());
-    e.clipboardData?.setData("text/html", pre ? box.outerHTML : box.innerHTML);
+    e.clipboardData?.setData("text/plain", selectionMarkdown(box));
   });
 }
 
