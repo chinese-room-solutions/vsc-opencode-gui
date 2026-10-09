@@ -3090,6 +3090,7 @@ export async function refreshMessages(id: string): Promise<void> {
     const stored = new Map(
       messagesBySession.value.get(id)?.map((m) => [m.info.id, m]) ?? [],
     );
+    const working = sessionWorking(id);
     mutateMessages(id, () =>
       visible.map((m) => {
         const old = stored.get(m.info.id);
@@ -3134,6 +3135,34 @@ export async function refreshMessages(id: string): Promise<void> {
           if (keep !== p) merged = true;
           return keep;
         });
+        // The durable snapshot lags an in-flight turn by design — parts
+        // reach the row store at their boundaries — and every return to
+        // the tab fires a resync pull. A part the stream already
+        // delivered but this snapshot lacks would drop out for the
+        // seconds until its next typed write: the tool-action flicker.
+        // While the session works, live-only parts ride along after the
+        // snapshot's; an idle session adopts the snapshot, so
+        // server-side part changes stick. A text part rides only past
+        // the snapshot's count of its kind — v2 streams under
+        // kind-distinct ids while durable names by content index, so the
+        // first N of a kind pair positionally in the merge above.
+        if (working) {
+          const durableKinds = new Map<string, number>();
+          for (const p of m.parts)
+            if (isText(p))
+              durableKinds.set(p.type, (durableKinds.get(p.type) ?? 0) + 1);
+          const liveKinds = new Map<string, number>();
+          for (const q of old.parts) {
+            if (m.parts.some((p) => p.id === q.id)) continue;
+            if (isText(q)) {
+              const k = liveKinds.get(q.type) ?? 0;
+              liveKinds.set(q.type, k + 1);
+              if (k < (durableKinds.get(q.type) ?? 0)) continue;
+            }
+            parts.push(q);
+            merged = true;
+          }
+        }
         // Identity survives an unchanged row: MessageView's memo holds and
         // a refresh renders nothing that didn't actually change.
         return merged ? { ...m, parts } : m;

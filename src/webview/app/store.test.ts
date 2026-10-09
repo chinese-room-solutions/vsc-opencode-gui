@@ -458,6 +458,86 @@ describe("orphan v1 delta pulls durable truth for its part's type", () => {
   });
 });
 
+// The tab-return resync pull: durable lags an in-flight turn by design
+// (parts reach the row store at their boundaries), so the snapshot can
+// lack a part the stream already delivered. Dropping it is the
+// tool-action flicker — shown, hidden, shown again at its next write.
+describe("a working session's live-only parts ride a resync pull", () => {
+  it("keeps a running tool the snapshot lacks", async () => {
+    const sid = "fl1";
+    open(sid, [row("m1", "assistant", T0)]);
+    setBusy(sid);
+    const read = {
+      id: "t1",
+      messageID: "m1",
+      sessionID: sid,
+      type: "tool",
+      tool: "read",
+      state: { status: "running", input: { filePath: "a.ts" } },
+    };
+    await sseFlush("message.part.updated", { sessionID: sid, part: read });
+    assert.equal(findPart(sid, "t1")?.type, "tool");
+    // The pull's snapshot predates the tool-start write.
+    onApi(
+      messageMock(sid, { data: [], cursor: {} }, [
+        { info: { id: "m1", role: "assistant", time: { created: T0 } }, parts: [] },
+      ]),
+    );
+    await refreshMessages(sid);
+    const kept = findPart(sid, "t1") as Part & {
+      state?: { status?: string };
+    };
+    assert.equal(kept?.type, "tool");
+    assert.equal(kept?.state?.status, "running");
+  });
+
+  it("an idle session adopts the snapshot without the part", async () => {
+    const sid = "fl2";
+    open(sid, [
+      {
+        info: { id: "m1", role: "assistant", time: { created: T0 } },
+        parts: [toolPart("t1", "m1", sid, { filePath: "a.ts" })],
+      },
+    ]);
+    onApi(
+      messageMock(sid, { data: [], cursor: {} }, [
+        { info: { id: "m1", role: "assistant", time: { created: T0 } }, parts: [] },
+      ]),
+    );
+    await refreshMessages(sid);
+    assert.equal(findPart(sid, "t1"), undefined);
+  });
+
+  it("a streamed text part rides only past the snapshot's count of its kind", async () => {
+    const sid = "fl3";
+    open(sid, [
+      {
+        info: { id: "m1", role: "assistant", time: { created: T0 } },
+        parts: [
+          textPart("p1", "m1", sid, "durable text"),
+          textPart("p2", "m1", sid, "streamed beyond", "reasoning"),
+        ],
+      },
+    ]);
+    setBusy(sid);
+    // Durable names its text part by content index — a different id, so
+    // p1 must pair with it positionally, not ride as a duplicate.
+    onApi(
+      messageMock(sid, { data: [], cursor: {} }, [
+        {
+          info: { id: "m1", role: "assistant", time: { created: T0 } },
+          parts: [textPart("d0", "m1", sid, "durable text")],
+        },
+      ]),
+    );
+    await refreshMessages(sid);
+    const parts = findRow(sid, "m1")?.parts ?? [];
+    assert.equal(parts.length, 2);
+    assert.ok(parts.some((p) => p.id === "d0"));
+    assert.ok(parts.some((p) => p.id === "p2"));
+  });
+});
+
 // A steer admitted mid-turn lands its user row while the turn still
 // streams; the live sweep must not treat it as the turn boundary (the
 // streaming row's Thinking label would freeze into "Thought" until the
