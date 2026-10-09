@@ -372,28 +372,20 @@ describe("reasoning window reopen (530a2f2)", () => {
   });
 });
 
-// The reconnect leak: a reasoning part whose typed full write
-// (reasoning-start's message.part.updated) was lost in an SSE gap is
-// created by the first delta — which carries field:"text" even for
-// reasoning (server processor sends the part field, not the part type) —
-// so it streams into the main transcript. The resync's fetch brings the
-// typed durable copy, but its text lags the stream, and the old
-// keep-longer-text merge preserved the mis-typed live part until
-// reasoning.ended snapped it under the Thought block. The merge now
-// adopts the durable type while keeping the fresher text.
-describe("reconnect resync heals a mis-typed reasoning part", () => {
+// The refresh merge's type adoption — the guarantee the orphan-delta pull
+// (above) relies on. A mis-typed live copy (created by an older build's
+// delta path, or a pull whose fetch raced the stream) must take the
+// durable row's type while keeping its fresher text.
+describe("refresh adopts the durable type over a mis-typed live part", () => {
   it("keeps the streamed text and adopts the durable type", async () => {
     const sid = "rk1";
-    open(sid, [row("m1", "assistant", T0)]);
+    open(sid, [
+      {
+        info: { id: "m1", role: "assistant", time: { created: T0 } },
+        parts: [textPart("p1", "m1", sid, "leaked thought")],
+      },
+    ]);
     setBusy(sid);
-    await sseFlush("message.part.delta", {
-      sessionID: sid,
-      messageID: "m1",
-      partID: "p1",
-      field: "text", // the server's reasoning deltas say "text"
-      delta: "leaked thought",
-    });
-    assert.equal(findPart(sid, "p1")?.type, "text"); // the leak premise
     onApi(
       messageMock(
         sid,
@@ -410,6 +402,59 @@ describe("reconnect resync heals a mis-typed reasoning part", () => {
     const healed = findPart(sid, "p1");
     assert.equal(healed?.type, "reasoning");
     assert.equal((healed as { text?: string }).text, "leaked thought");
+  });
+});
+
+// An orphan v1 delta — its typed start write lost to a suspended webview's
+// vanishing host messages — must pull durable truth itself: without the
+// pull, reasoning streams as answer text until the part's end write (or
+// the 30s busy backstop) wraps it seconds later.
+describe("orphan v1 delta pulls durable truth for its part's type", () => {
+  it("heals the guessed type on the spot", async () => {
+    const sid = "ow1";
+    open(sid, [row("m1", "assistant", T0)]);
+    setBusy(sid);
+    onApi(
+      messageMock(
+        sid,
+        { data: [], cursor: {} },
+        [
+          {
+            info: { id: "m1", role: "assistant", time: { created: T0 } },
+            parts: [textPart("p1", "m1", sid, "", "reasoning")],
+          },
+        ],
+      ),
+    );
+    await sseFlush("message.part.delta", {
+      sessionID: sid,
+      messageID: "m1",
+      partID: "p1",
+      field: "text",
+      delta: "leaked thought",
+    });
+    const healed = findPart(sid, "p1");
+    assert.equal(healed?.type, "reasoning");
+    assert.equal((healed as { text?: string }).text, "leaked thought");
+  });
+
+  it("a delta into a known typed part pulls nothing", async () => {
+    const sid = "ow2";
+    open(sid, [
+      {
+        info: { id: "m1", role: "assistant", time: { created: T0 } },
+        parts: [textPart("p1", "m1", sid, "", "reasoning")],
+      },
+    ]);
+    setBusy(sid);
+    await sseFlush("message.part.delta", {
+      sessionID: sid,
+      messageID: "m1",
+      partID: "p1",
+      field: "text",
+      delta: "more",
+    });
+    assert.equal(callsFor(`/session/${sid}/message`).length, 0);
   });
 });
 
@@ -1406,6 +1451,12 @@ describe("turn projection from stream events", () => {
     const sid = "sfcal";
     open(sid, [row("a1", "assistant", T0)]);
     setBusy(sid);
+    // The typed start write that introduces the part (the wire always
+    // sends it ahead of the deltas — an orphan delta would pull truth).
+    await sseFlush("message.part.updated", {
+      sessionID: sid,
+      part: { id: "p1", messageID: "a1", sessionID: sid, type: "text", text: "" },
+    });
     await sseFlush("message.part.delta", {
       sessionID: sid,
       messageID: "a1",
@@ -1453,6 +1504,10 @@ describe("turn projection from stream events", () => {
     // The streamed-chars/usage pairs feed the tail estimator's ratio: one
     // dominant pair (1M chars / 100M tokens â†’ 0.01) pins it regardless of
     // whatever earlier tests contributed.
+    await sseFlush("message.part.updated", {
+      sessionID: sid,
+      part: { id: "p2", messageID: "a1", sessionID: sid, type: "text", text: "" },
+    });
     await sseFlush("message.part.delta", {
       sessionID: sid,
       messageID: "a1",

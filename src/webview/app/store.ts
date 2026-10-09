@@ -1381,14 +1381,23 @@ function upsertPart(sessionID: string, part: Part): void {
 // first delta (text.started carries only the id). Once a part clamped, its
 // deltas are dropped — re-slicing a cap-sized text per token and re-ticking
 // the marker's total would only burn the renderer for nothing.
+// Returns true when the delta had to create its part (or its row was
+// unknown): the typed full write that introduces a part was lost — a
+// suspended webview's host messages vanish without the stream dropping.
+// A v1 delta's `field` names the JSON column ("text"), not the part type,
+// so the caller must pull durable truth to heal the type.
 function appendPartText(
   sessionID: string,
   messageID: string,
   partID: string,
   type: "text" | "reasoning",
   delta: string,
-): void {
-  if (isTruncatedPart(partID)) return;
+): boolean {
+  if (isTruncatedPart(partID)) return false;
+  const row = messagesBySession.value
+    .get(sessionID)
+    ?.find((m) => m.info.id === messageID);
+  const orphan = !row || !row.parts.some((p) => p.id === partID);
   mutateMessages(sessionID, (list) =>
     list.map((m) => {
       if (m.info.id !== messageID) return m;
@@ -1425,6 +1434,7 @@ function appendPartText(
       return { ...m, parts };
     }),
   );
+  return orphan;
 }
 
 // The server echo of our optimistic send supersedes every pending entry.
@@ -2102,13 +2112,19 @@ function applyEvent(event: ServerEvent): void {
     }
     case "message.part.delta":
       if (data.messageID && data.partID && typeof data.delta === "string") {
-        appendPartText(
-          sid,
-          data.messageID,
-          data.partID,
-          data.field === "reasoning" ? "reasoning" : "text",
-          data.delta,
-        );
+        // The field names the JSON column the chunk appends to ("text"
+        // for reasoning parts too) — a guessed type is only a guess. A
+        // delta that had to create its part lost the typed start write;
+        // the durable row was typed before it published, so one pull
+        // adopts the type and keeps the fresher streamed text. Unhealed,
+        // reasoning streams as answer text until the part's end write
+        // wraps it seconds later.
+        const type = data.field === "reasoning" ? "reasoning" : "text";
+        if (
+          appendPartText(sid, data.messageID, data.partID, type, data.delta) &&
+          type === "text"
+        )
+          void refreshMessages(sid);
       }
       break;
     // The turn stream's dialect (verified against 1.18.25's durable replay —
