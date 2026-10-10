@@ -174,17 +174,19 @@ suite("opencode ServerManager", function () {
     }
   });
 
-  test("exposeToNetwork plumbs --mdns into the spawned command line", async function () {
+  test("exposeToNetwork binds all interfaces on v2 and dials localhost", async function () {
     const port = await freePort();
     const { sm, hub } = await boot(port, true);
     const url = await waitForUrl(hub);
+    // The wide bind announces 0.0.0.0; the manager must normalize it.
     assert.strictEqual(url, `http://localhost:${port}`);
     if (process.platform === "win32") {
       const cl = cmdlineForPort(port);
-      assert.ok(cl.includes("--mdns"), `--mdns in: ${cl}`);
+      assert.ok(cl.includes("--hostname"), `--hostname in: ${cl}`);
+      assert.ok(!cl.includes("--mdns"), `--mdns must not reach v2: ${cl}`);
     }
     await sm.dispose();
-    assert.ok(await untilDead(url), "mdns server killed on dispose");
+    assert.ok(await untilDead(url), "exposed server killed on dispose");
   });
 
   suiteTeardown(async function () {

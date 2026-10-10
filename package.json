@@ -172,7 +172,7 @@
           "opencodeGui.exposeToNetwork": {
             "type": "boolean",
             "default": false,
-            "description": "Expose the opencode server to the local network via mDNS. When enabled, you can access the same instance from another device at http://opencode.local:<port>."
+            "description": "Expose the opencode server to the local network. opencode v1 advertises via mDNS (http://opencode.local:<port>); v2 has no mDNS and binds all interfaces — reach it at http://<your-LAN-IP>:<port>."
           }
         }
       },

@@ -71,7 +71,7 @@ All commands live under the **`Open Code:`** prefix in the command palette.
 | --- | --- | --- |
 | `opencodeGui.port` | `0` | Fixed server port (`0` = random). Changing it resets webview preferences. |
 | `opencodeGui.path` | *(empty)* | Full path to the opencode CLI. Empty = use `PATH`. |
-| `opencodeGui.exposeToNetwork` | `false` | Pass `--mdns` to the server so other devices can reach it. |
+| `opencodeGui.exposeToNetwork` | `false` | Expose the server to the local network. v1: `--mdns` (reach it at `http://opencode.local:<port>`); v2: binds all interfaces (reach it at `http://<LAN-IP>:<port>`). |
 | `opencodeGui.codeGlow` | `false` | Neon-glow rendering for code-block tokens. |
 | `opencodeGui.codeCopyModifier` | `alt` | Modifier held to copy code blocks and quotes on click. |
 | `opencodeGui.readySound` | `true` | Chime when a turn finishes (1.5 s grace cancels on follow-ups). |

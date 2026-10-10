@@ -372,14 +372,15 @@ export class ServerManager {
       // before — other windows and clients attach to them without it).
       // Version strings: v1 prints bare "1.18.30", v2 "opencode v2.0.18".
       let spawnPassword: string | undefined;
+      let isV2 = false;
       try {
         const ver = await execFile(commandLine, ["--version"], {
           timeout: 5000,
           // Same resolution rule as the serve spawn below.
           shell: process.platform === "win32",
         });
-        if (/^opencode\s+v?2\./m.test(`${ver.stdout}${ver.stderr}`))
-          spawnPassword = crypto.randomBytes(24).toString("hex");
+        isV2 = /^opencode\s+v?2\./m.test(`${ver.stdout}${ver.stderr}`);
+        if (isV2) spawnPassword = crypto.randomBytes(24).toString("hex");
       } catch {
         // Unversioned binary: assume v1 (a misdetected v2 child prints a
         // password we never learn and every call 401s — but a binary whose
@@ -395,7 +396,12 @@ export class ServerManager {
       const attempt = (port: number, retry: boolean): void => {
         const args = ["serve", "--port", port.toString()];
         if (exposeToNetwork) {
-          args.push("--mdns");
+          // v1 advertised the server over mDNS; v2 dropped the flag
+          // entirely (serve exits 1 on unknown flags) and exposes by
+          // binding all interfaces instead. The password set above
+          // gates the wide bind on v2.
+          if (isV2) args.push("--hostname", "0.0.0.0");
+          else args.push("--mdns");
         }
 
         this.serverProcess = spawn(commandLine, args, {
@@ -422,12 +428,14 @@ export class ServerManager {
         let output = "";
         this.bootedAt = Date.now();
 
-        const onUrl = (url: string) => {
+        const onUrl = (rawUrl: string) => {
           if (resolved || this.disposed) return;
           resolved = true;
           if (this.bootTimer) clearTimeout(this.bootTimer);
           this.bootTimer = undefined;
-          void attach(url);
+          // A v2 wide bind announces http://0.0.0.0:<port>; dial it as
+          // localhost (macOS refuses 0.0.0.0 as a destination).
+          void attach(rawUrl.replace("//0.0.0.0:", "//localhost:"));
         };
 
         // Parse stdout/stderr for the server URL, and keep the tail for the
