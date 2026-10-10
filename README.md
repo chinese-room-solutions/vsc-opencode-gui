@@ -31,6 +31,9 @@ HTTP/SSE.
 - **Steer mid-turn** - a prompt sent while the agent works lands at the next
   step boundary. Prompts still waiting in the queue can be reverted (hover
   the bubble, Revert) - the text returns to the composer unposted.
+- **Fast copy** - hold the copy modifier (Alt, or ⌘ - see
+  `opencodeGui.codeCopyModifier`) and click a code block, quote, or inline
+  code span to copy it.
 - **Peer messages** - messages from other opencode sessions show the
   sender's name and live session title
   ([opencode-peers](https://github.com/chinese-room-solutions/opencode-peers)).
