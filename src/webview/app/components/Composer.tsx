@@ -405,11 +405,16 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
     syncText(el);
   }, [draftKey]);
 
+  // A builtin hides behind a server-provided command of the same name —
+  // runSlashCommand defers to the server's, so the menu must not list both.
   const matches =
     slashQuery !== undefined
-      ? [...BUILTIN_COMMANDS, ...commands.value].filter((c) =>
-          c.name.startsWith(slashQuery),
-        )
+      ? [
+          ...BUILTIN_COMMANDS.filter(
+            (b) => !commands.value.some((c) => c.name === b.name),
+          ),
+          ...commands.value,
+        ].filter((c) => c.name.startsWith(slashQuery))
       : [];
 
   // Finder results for the live query, debounced; the seq drops responses
