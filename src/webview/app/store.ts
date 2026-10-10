@@ -40,6 +40,8 @@ import {
   runCommand,
   setDialect,
   setProjectColor as setProjectColorApi,
+  shareSession as shareSessionApi,
+  unshareSession as unshareSessionApi,
   switchSessionAgent,
   switchSessionModel,
   type Agent,
@@ -970,6 +972,51 @@ export async function renameSession(id: string, title: string): Promise<boolean>
     return false;
   }
   patchSession(id, (s) => ({ ...s, title }));
+  return true;
+}
+
+// --- session share ---
+
+// Publish the session as a public link. The URL goes straight to the
+// clipboard and onto the row — which is also where a refresh re-reads it
+// (the v1 row carries share:{url} on every pull). v2 2.0.x serves no share
+// route: the server's 404 surfaces once, here.
+export async function shareSession(id: string): Promise<boolean> {
+  const directory = sessions.value.find((s) => s.id === id)?.location?.directory;
+  const res = await shareSessionApi(id, directory);
+  if (!res.ok) {
+    setSendError(withReason("Could not share the session", res.error), id);
+    return false;
+  }
+  if (!res.url) {
+    setSendError("The server did not return a share link.", id);
+    return false;
+  }
+  const url = res.url;
+  void navigator.clipboard?.writeText(url)?.catch(() => {});
+  patchSession(id, (s) => ({ ...(res.row ?? s), share: { url } }));
+  return true;
+}
+
+// v2.0.x serves no share route at all (wire-verified) — the affordances
+// hide there until upstream ships one.
+export function shareSupported(): boolean {
+  return dialect() !== "v2";
+}
+
+// Take the session private again; the marker leaves the row either way (a
+// v2 204 has no reply body to read).
+export async function unshareSession(id: string): Promise<boolean> {
+  const directory = sessions.value.find((s) => s.id === id)?.location?.directory;
+  const res = await unshareSessionApi(id, directory);
+  if (!res.ok) {
+    setSendError(withReason("Could not stop sharing the session", res.error), id);
+    return false;
+  }
+  patchSession(id, (s) => {
+    const { share, ...row } = res.row ?? s;
+    return row;
+  });
   return true;
 }
 

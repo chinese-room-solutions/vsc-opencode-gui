@@ -229,6 +229,28 @@ export function TrashIcon() {
   );
 }
 
+// The "publish this session" affordance — the share-nodes glyph.
+export function ShareIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.4"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="3.5" r="1.7" />
+      <circle cx="4" cy="8" r="1.7" />
+      <circle cx="12" cy="12.5" r="1.7" />
+      <path d="M5.6 7.1l4.8-2.7M5.6 8.9l4.8 2.7" />
+    </svg>
+  );
+}
+
 // A color drop — the "recolor this tile" affordance.
 export function DropletIcon() {
   return (

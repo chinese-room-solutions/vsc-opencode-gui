@@ -23,6 +23,10 @@ HTTP/SSE.
 - **Projects × sessions home** - every session of every project on one
   screen. Projects rename in place, and sessions from other folders open
   deep-linked.
+- **Share a session** - publish a conversation as a public link from the
+  tab menu or a home row; the URL is copied to the clipboard and shown in
+  the context panel. Stop sharing takes it private again. opencode v1
+  servers only - v2.0.x has no share API yet (the entry hides there).
 - **Sub-agents are sessions** - open one from its task chip, steer it, stop
   it, and the parent's turn collects the result.
 - **Notifications, visual and sound** - tabs pulse yellow when a session

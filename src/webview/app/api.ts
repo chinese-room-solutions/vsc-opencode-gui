@@ -64,6 +64,9 @@ export interface Session {
   // everything after hide) until the next prompt commits the cut — the
   // server keeps serving the rows until then.
   revert?: { messageID: string };
+  // The public share link while the session is shared (v1 stamps it on the
+  // row via POST /session/{id}/share; every list/refetch carries it after).
+  share?: { url: string };
 }
 
 // v2 time fields arrive as epoch ms on 2.0.x and ISO strings on newer
@@ -2225,6 +2228,54 @@ export async function deleteSession(
         : `/session/${id}${dirQuery(directory)}`,
     ))?.ok === true
   );
+}
+
+// POST /session/{id}/share (v1) / POST /api/session/{id}/share (v2) —
+// publish the session as a public link. v1 replies the updated row, whose
+// share:{url} is the link (older v1 builds replied a bare {url}); the row
+// rides along so the store can adopt it. v2 (2.0.x) serves no share route
+// at all — the call 404s and the store surfaces that once; the path stays
+// the natural v2 shape for builds that add it.
+export async function shareSession(
+  id: string,
+  directory?: string,
+): Promise<{ ok: boolean; url?: string; row?: Session; error?: string }> {
+  const res = await sendJson<unknown>(
+    "POST",
+    route(
+      `/session/${id}/share${serverDialect === "v1" ? dirQuery(directory) : ""}`,
+      `/api/session/${id}/share`,
+    ),
+  );
+  if (!res.ok) return { ok: false, error: res.error };
+  const row = unwrapRow<
+    Session & { directory?: string; url?: string }
+  >(res.data);
+  const url = row?.share?.url ?? row?.url;
+  return {
+    ok: true,
+    ...(url ? { url } : {}),
+    ...(row?.id ? { row: normalizeSession(row) } : {}),
+  };
+}
+
+// DELETE /session/{id}/share — take the session private again. v1 replies
+// the row with share cleared; v2 204s with no body — either way the store
+// drops its local marker.
+export async function unshareSession(
+  id: string,
+  directory?: string,
+): Promise<{ ok: boolean; row?: Session; error?: string }> {
+  const res = await sendJson<unknown>(
+    "DELETE",
+    route(
+      `/session/${id}/share${serverDialect === "v1" ? dirQuery(directory) : ""}`,
+      `/api/session/${id}/share`,
+    ),
+  );
+  if (!res.ok) return { ok: false, error: res.error };
+  const row = unwrapRow<Session & { directory?: string }>(res.data);
+  return { ok: true, ...(row?.id ? { row: normalizeSession(row) } : {}) };
 }
 
 // POST /session/{id}/revert (v1) / v2's two-step: POST /revert/stage

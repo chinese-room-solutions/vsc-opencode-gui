@@ -11,6 +11,7 @@ import {
   NewSessionIcon,
   PencilIcon,
   SearchIcon,
+  ShareIcon,
   TrashIcon,
 } from "../icons";
 import { navigate } from "../router";
@@ -40,7 +41,10 @@ import {
   sessionsNext,
   sessionStatus,
   setProjectColor,
+  shareSession,
+  shareSupported,
   tombstones,
+  unshareSession,
 } from "../store";
 import { baseName, parentName, tileFor } from "../tile";
 import { useArm } from "../useArm";
@@ -429,6 +433,23 @@ function SessionRow(props: { s: Session }) {
             >
               {copied ? <CheckIcon /> : <CopyIcon />}
             </button>
+            {shareSupported() && (
+              <button
+                class={s.share?.url ? "row-act iconic done" : "row-act iconic"}
+                title={
+                  s.share?.url
+                    ? `Stop sharing — ${s.share.url}`
+                    : "Share session..."
+                }
+                onClick={() =>
+                  void (s.share?.url
+                    ? unshareSession(s.id)
+                    : shareSession(s.id))
+                }
+              >
+                <ShareIcon />
+              </button>
+            )}
             <button
               class="row-act iconic"
               title="Rename"

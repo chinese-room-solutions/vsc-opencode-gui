@@ -380,6 +380,17 @@ export function ContextRing(props: { sessionId: string }) {
   // from the session.
   const cells: { k: string; v: string; title?: string }[] = [
     { k: "Session", v: dash(sessionTitle(session, id)), title: id },
+    // The public link while the session is shared — scheme-stripped for
+    // the grid, full URL on hover.
+    ...(session?.share?.url
+      ? [
+          {
+            k: "Share",
+            v: session.share.url.replace(/^https?:\/\//, ""),
+            title: session.share.url,
+          },
+        ]
+      : []),
     { k: "Messages", v: list ? fmtNum(list.length) : "—" },
     { k: "Provider", v: dash(providerName) },
     { k: "Model", v: dash(modelSel ? modelLabel(modelSel) : undefined) },
