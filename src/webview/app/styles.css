@@ -2429,20 +2429,31 @@ body {
    before the webview has focus (keydown tracking would miss that first
    hover). opencodeGui.codeCopyModifier picks the key. */
 .code-small.mod-hover,
-.code-inline.mod-hover {
+.code-inline.mod-hover,
+.quote-copy.mod-hover {
   cursor: pointer;
 }
 
-/* Inline spans pulse green as the copy confirmation. */
-.code-inline.copied-flash {
-  animation: inline-copied 1200ms ease-out;
+/* Every copyable surface pulses the same green tint: inline spans, code
+   blocks, quotes. The tint (not an inverted fill) keeps a whole slab
+   from shouting, and it sits at the click — where on tall blocks the
+   top-right check may be off-screen. The fixed rgba is the fallback;
+   color-mix themes it when supported. */
+.copied-flash.code-inline,
+.copied-flash.code-small,
+.copied-flash.quote-copy {
+  animation: copied-tint 1200ms ease-out;
 }
 
-@keyframes inline-copied {
+@keyframes copied-tint {
   0%,
   70% {
-    background: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
-    color: var(--vscode-sideBar-background, var(--vscode-editor-background));
+    background: rgba(115, 201, 145, 0.18);
+    background: color-mix(
+      in srgb,
+      var(--vscode-testing-iconPassed, var(--vscode-charts-green)) 18%,
+      transparent
+    );
   }
 }
 

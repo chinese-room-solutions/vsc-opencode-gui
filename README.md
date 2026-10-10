@@ -70,7 +70,7 @@ All commands live under the **`Open Code:`** prefix in the command palette.
 | `opencodeGui.path` | *(empty)* | Full path to the opencode CLI. Empty = use `PATH`. |
 | `opencodeGui.exposeToNetwork` | `false` | Pass `--mdns` to the server so other devices can reach it. |
 | `opencodeGui.codeGlow` | `false` | Neon-glow rendering for code-block tokens. |
-| `opencodeGui.codeCopyModifier` | `alt` | Modifier held to copy small code blocks on click. |
+| `opencodeGui.codeCopyModifier` | `alt` | Modifier held to copy code blocks and quotes on click. |
 | `opencodeGui.readySound` | `true` | Chime when a turn finishes (1.5 s grace cancels on follow-ups). |
 | `opencodeGui.permissionSound` | `true` | Chime on permission asks. |
 | `opencodeGui.questionSound` | `true` | Chime on questions. |

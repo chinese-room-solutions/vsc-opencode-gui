@@ -68,11 +68,15 @@ function copyButton(text: string, label: string): HTMLButtonElement {
   btn.title = label;
   btn.setAttribute("aria-label", label);
   btn.innerHTML = COPY_ICON;
+  let revert: number | undefined;
   btn.addEventListener("click", () => {
     void navigator.clipboard.writeText(text).catch(() => {});
     btn.classList.add("done");
     btn.innerHTML = CHECK_ICON;
-    window.setTimeout(() => {
+    // A rapid second copy must not be cut short by the first one's
+    // timer — clear it so the beat restarts.
+    if (revert !== undefined) clearTimeout(revert);
+    revert = window.setTimeout(() => {
       btn.classList.remove("done");
       btn.innerHTML = COPY_ICON;
     }, 1200);
@@ -80,9 +84,22 @@ function copyButton(text: string, label: string): HTMLButtonElement {
   return btn;
 }
 
-// Blocks up to this many lines copy in place (modifier+click) — selecting
-// text in them is more effort than the copy is worth.
-const COPY_MAX_LINES = 10;
+// The green pulse that confirms a copy at the click point (blocks and
+// quotes on modifier-click, inline spans on theirs). Drop, reflow, re-add
+// restarts the animation; the per-element timer clears the previous beat
+// so rapid copies each get their full flash.
+const flashTimers = new WeakMap<HTMLElement, number>();
+function flashCopied(el: HTMLElement): void {
+  el.classList.remove("copied-flash");
+  void el.offsetWidth;
+  el.classList.add("copied-flash");
+  const prev = flashTimers.get(el);
+  if (prev !== undefined) clearTimeout(prev);
+  flashTimers.set(
+    el,
+    window.setTimeout(() => el.classList.remove("copied-flash"), 1200),
+  );
+}
 
 // The modifier for click-to-copy: opencodeGui.codeCopyModifier, baked in by
 // AppHost and pushed live as "copy-modifier" messages (store.hostMessage).
@@ -176,15 +193,20 @@ export function enhanceCodeBlocks(root: HTMLElement, tokenize = true): void {
     // completes) finds the same wrapper — drop the stale button instead of
     // stacking a second one over it: a click then lit the check on one
     // while the other still showed the copy glyph.
-    wrap.querySelector(".code-copy")?.remove();
+    // :scope — the wrap holds only the pre and the button; a plain
+    // descendant query could hit a nested quote's button first.
+    wrap.querySelector(":scope > .code-copy")?.remove();
     const btn = copyButton(code, "Copy code");
-    // A small block copies in place: modifier+click or modifier+right-click
-    // anywhere in it. The class guards the listeners against the same
-    // re-run that re-appends the button. The pointer cursor rides the
-    // mousemove's own modifier flag — key events only reach a focused
-    // webview, so keydown tracking would miss the first hover.
-    const lines = code.replace(/\n+$/, "").split("\n").length;
-    if (lines <= COPY_MAX_LINES && !pre.classList.contains("code-small")) {
+    // Any block copies in place: modifier+click or modifier+right-click
+    // anywhere in it, the button's check as the confirmation. The class
+    // guards the listeners against the same re-run that re-appends the
+    // button — which also means the handler must look the CURRENT
+    // button up at click time, not capture this run's. The pointer
+    // cursor rides the mousemove's own modifier flag — key events only
+    // reach a focused webview, so keydown tracking would miss the first
+    // hover. stopPropagation keeps a nested copy (code inside a quote)
+    // from firing both.
+    if (!pre.classList.contains("code-small")) {
       pre.classList.add("code-small");
       pre.title = `${modLabel()}+click to copy`;
       pre.addEventListener("mousemove", (e) =>
@@ -196,7 +218,14 @@ export function enhanceCodeBlocks(root: HTMLElement, tokenize = true): void {
       const modCopy = (e: MouseEvent) => {
         if (!modHit(e)) return;
         e.preventDefault();
-        btn.click();
+        e.stopPropagation();
+        pre
+          .closest(".code-block")
+          ?.querySelector<HTMLButtonElement>(".code-copy")
+          ?.click();
+        // The click point can sit far below the top-right check — a
+        // block taller than the viewport flashes at the click instead.
+        flashCopied(pre);
       };
       pre.addEventListener("click", modCopy);
       pre.addEventListener("contextmenu", modCopy);
@@ -410,13 +439,36 @@ export function initTranscriptCopy(): void {
 }
 
 // Copy affordance for blockquotes: the same control as fenced blocks,
-// revealed on hover at the block's top right; copies the quoted text.
+// revealed on hover at the block's top right, plus the same in-place
+// modifier+click copy anywhere in the quote.
 export function enhanceBlockquotes(root: HTMLElement): void {
   for (const bq of [...root.querySelectorAll<HTMLElement>("blockquote")]) {
     const text = (bq.textContent ?? "").trim();
     if (!text) continue;
-    bq.querySelector(".code-copy")?.remove();
+    // :scope — a plain descendant query would remove a nested code
+    // block's button (document order puts it before the quote's own).
+    bq.querySelector(":scope > .code-copy")?.remove();
     bq.appendChild(copyButton(text, "Copy quote"));
+    // The class guards the listeners against the re-run above; the
+    // handler looks the current button up at click time. A quote wraps
+    // nested copyable blocks (code) — stopPropagation keeps one click
+    // from firing both copies.
+    if (bq.classList.contains("quote-copy")) continue;
+    bq.classList.add("quote-copy");
+    bq.title = `${modLabel()}+click to copy`;
+    bq.addEventListener("mousemove", (e) =>
+      bq.classList.toggle("mod-hover", modHit(e)),
+    );
+    bq.addEventListener("mouseleave", () => bq.classList.remove("mod-hover"));
+    const modCopy = (e: MouseEvent) => {
+      if (!modHit(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      bq.querySelector<HTMLButtonElement>(".code-copy")?.click();
+      flashCopied(bq);
+    };
+    bq.addEventListener("click", modCopy);
+    bq.addEventListener("contextmenu", modCopy);
   }
 }
 
@@ -439,10 +491,7 @@ export function enhanceInlineCode(root: HTMLElement): void {
       e.preventDefault();
       e.stopPropagation();
       void navigator.clipboard.writeText(text).catch(() => {});
-      el.classList.remove("copied-flash");
-      void el.offsetWidth; // restart the pulse on back-to-back copies
-      el.classList.add("copied-flash");
-      window.setTimeout(() => el.classList.remove("copied-flash"), 1200);
+      flashCopied(el);
     });
   }
 }
