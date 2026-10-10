@@ -44,6 +44,7 @@ import {
   runCommand,
   setDialect,
   shareSession,
+  unrevertSession,
   unshareSession,
 } from "./api";
 import type { FilePart, Session } from "./api";
@@ -330,6 +331,26 @@ describe("fork wire shape (v1)", () => {
       call.path,
       /^\/session\/ses_1\/fork\?directory=C%3A%5Cwork%5Crepo$/,
     );
+    assert.equal(call.body, undefined);
+  });
+});
+
+// v1 unrevert: POST /session/{id}/unrevert, bodyless — restores a pending
+// revert and replies the updated row bare.
+describe("unrevert wire shape (v1)", () => {
+  it("posts the bare route with the directory query and reads the row", async () => {
+    onApi((call) =>
+      call.method === "POST" && call.path.startsWith("/session/ses_4/unrevert")
+        ? { ...sessRow("ses_4"), directory: "C:\\work\\repo" }
+        : undefined,
+    );
+    const row = await unrevertSession("ses_4", "C:\\work\\repo");
+    assert.equal(row?.id, "ses_4");
+    assert.equal(row?.location.directory, "C:\\work\\repo");
+    assert.equal(row?.revert, undefined);
+    const call = callsFor("/session/ses_4/unrevert")[0];
+    assert.equal(call.method, "POST");
+    assert.match(call.path, /directory=/);
     assert.equal(call.body, undefined);
   });
 });
@@ -778,6 +799,22 @@ describe("v2 route/body/envelope translation", () => {
     });
     assert.equal(callsFor("/api/session/ses_1/revert/commit").length, 1);
     assert.deepEqual(row?.revert, { messageID: "m1" });
+  });
+
+  it("unrevertSession DELETEs the bare revert route and refetches the row", async () => {
+    onApi((call) => {
+      if (call.method === "DELETE" && call.path === "/api/session/ses_1/revert")
+        return {};
+      if (call.path === "/api/session/ses_1")
+        return { data: sessRow("ses_1") };
+      return undefined;
+    });
+    const row = await unrevertSession("ses_1");
+    assert.equal(row?.id, "ses_1");
+    assert.equal(row?.revert, undefined);
+    const call = callsFor("/api/session/ses_1/revert")[0];
+    assert.equal(call.method, "DELETE");
+    assert.equal(call.body, undefined);
   });
 
   it("fetchProjectSessions walks the paged list, filtering by directory", async () => {

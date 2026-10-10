@@ -46,6 +46,7 @@ import {
   unshareSession as unshareSessionApi,
   switchSessionAgent,
   switchSessionModel,
+  unrevertSession as unrevertSessionApi,
   type Agent,
   type Command,
   type Message,
@@ -1198,6 +1199,21 @@ export async function revertSession(id: string, messageID: string): Promise<bool
     return false;
   }
   patchSession(id, () => row);
+  await refreshMessages(id);
+  return true;
+}
+
+// Redo: lift a pending revert — the folded turn and the file snapshot come
+// back, until the next prompt commits the cut. The marker leaves the row
+// even when the refetched row lags the server's clear (a v2 204).
+export async function redoSession(id: string): Promise<boolean> {
+  const directory = sessions.value.find((s) => s.id === id)?.location?.directory;
+  const row = await unrevertSessionApi(id, directory);
+  if (!row) {
+    setSendError("The redo was rejected by the server.");
+    return false;
+  }
+  patchSession(id, (s) => ({ ...(row.id === id ? row : s), revert: undefined }));
   await refreshMessages(id);
   return true;
 }

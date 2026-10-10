@@ -1156,6 +1156,22 @@ body {
   opacity: 0.8;
 }
 
+/* The Redo link on the pending-revert fold line. */
+.redo-link {
+  padding: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.redo-link:hover {
+  color: var(--oc-text);
+}
+
 /* The reasoning row (Claude Code's "Thought for Ns"): a quiet button that
    unfolds the muted thinking text under a left rule. The chevron points
    right while folded, down when open. */

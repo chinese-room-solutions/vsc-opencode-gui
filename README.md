@@ -40,6 +40,9 @@ HTTP/SSE.
 - **Steer mid-turn** - a prompt sent while the agent works lands at the next
   step boundary. Prompts still waiting in the queue can be reverted (hover
   the bubble, Revert) - the text returns to the composer unposted.
+- **Redo a revert** - a reverted turn folds out of the transcript until the
+  next prompt commits the cut; the fold line's Redo restores it (opencode's
+  `/redo`).
 - **Fast copy** - hold the copy modifier (Alt, or ⌘ - see
   `opencodeGui.codeCopyModifier`) and click a code block, quote, or inline
   code span to copy it.

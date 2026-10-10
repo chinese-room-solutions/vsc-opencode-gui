@@ -8,7 +8,7 @@ import {
   StatusStats,
   TurnFooter,
 } from "../components/MessageView";
-import { StopIcon, WordmarkIcon } from "../icons";
+import { StopIcon, WordmarkIcon, OcResetIcon } from "../icons";
 import { isText, isTool } from "../api";
 import {
   failedMsgLoads,
@@ -20,6 +20,7 @@ import {
   messagesFor,
   hasQueued,
   liveAssistantId,
+  redoSession,
   refreshMessages,
   refreshPermissions,
   refreshQuestions,
@@ -620,6 +621,22 @@ export function Session(props: { sessionId?: string; parent?: string }) {
                   <div class="thinking-line">Working...</div>
                 </div>
               </div>
+            </div>
+          )}
+          {/* A pending revert folds the transcript here; the cut line is
+              the way back — Redo restores the folded rows until the next
+              prompt commits the cut. */}
+          {id && session?.revert && (
+            <div class="interrupted">
+              <OcResetIcon />
+              <span>Reverted</span>
+              <button
+                class="redo-link"
+                title="Restore the reverted messages"
+                onClick={() => void redoSession(id)}
+              >
+                Redo
+              </button>
             </div>
           )}
           {/* In the scroller, not the floating chrome: an error is part of

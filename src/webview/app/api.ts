@@ -2333,6 +2333,29 @@ export async function revertSession(
   return row ? normalizeSession(row) : undefined;
 }
 
+// POST /session/{id}/unrevert (v1) / DELETE /api/session/{id}/revert (v2)
+// — redo: lift a pending revert before the next prompt commits the cut.
+// The server restores the folded rows and the file snapshot and clears the
+// marker. v1 replies the updated row; v2 204s, so the row is refetched
+// either way (a missing marker is a no-op success on both).
+export async function unrevertSession(
+  id: string,
+  directory?: string,
+): Promise<Session | undefined> {
+  if (serverDialect === "v2") {
+    const res = await sendJson("DELETE", `/api/session/${id}/revert`);
+    if (!res?.ok) return undefined;
+    const row = await fetchSession(id);
+    return row === "missing" ? undefined : row;
+  }
+  const res = await sendJson<Session & { directory?: string }>(
+    "POST",
+    `/session/${id}/unrevert${dirQuery(directory)}`,
+  );
+  const row = res?.data;
+  return row ? normalizeSession(row) : undefined;
+}
+
 // GET /session?directory= (v1) — a project's sessions, unpaged. Only ids
 // are read (project purge). v2 has no directory filter: walk the paginated
 // /api/session list and match rows by their location directory (folded for

@@ -66,6 +66,7 @@ import {
   purgeState,
   queueCommand,
   queuedTurns,
+  redoSession,
   refreshMessages,
   refreshPermissions,
   refreshQuestions,
@@ -2703,6 +2704,50 @@ describe("revert fold", () => {
     assert.deepEqual(sessions.value.find((s) => s.id === sid)?.revert, {
       messageID: "u9",
     });
+  });
+  it("redoSession lifts the fold: the marker clears and the rows return", async () => {
+    const sid = "rv3";
+    sessions.value = [sessRow(sid, { revert: { messageID: "u2" } })];
+    onApi(
+      messageMock(sid, {
+        data: [
+          { id: "u1", type: "user", time: { created: 1 }, text: "one" },
+          { id: "a1", type: "assistant", time: { created: 2 } },
+          { id: "u2", type: "user", time: { created: 3 }, text: "two" },
+          { id: "a2", type: "assistant", time: { created: 4 } },
+        ],
+        cursor: {},
+      }),
+    );
+    onApi((call) =>
+      call.method === "POST" && call.path.startsWith(`/session/${sid}/unrevert`)
+        ? sessRow(sid)
+        : undefined,
+    );
+    await refreshMessages(sid);
+    assert.deepEqual(
+      listOf(sid).map((m) => m.info.id),
+      ["u1", "a1"],
+    );
+    assert.equal(await redoSession(sid), true);
+    assert.equal(sessions.value.find((s) => s.id === sid)?.revert, undefined);
+    assert.deepEqual(
+      listOf(sid).map((m) => m.info.id),
+      ["u1", "a1", "u2", "a2"],
+    );
+    assert.equal(sendError.value, undefined);
+  });
+  it("a rejected redo surfaces once and keeps the fold", async () => {
+    const sid = "rv4";
+    sessions.value = [sessRow(sid, { revert: { messageID: "u2" } })];
+    onApi((call) =>
+      call.path.startsWith(`/session/${sid}/unrevert`)
+        ? apiFailWith("HTTP 409")
+        : undefined,
+    );
+    assert.equal(await redoSession(sid), false);
+    assert.equal(sendError.value?.text, "The redo was rejected by the server.");
+    assert.deepEqual(sessions.value[0].revert, { messageID: "u2" });
   });
 });
 
