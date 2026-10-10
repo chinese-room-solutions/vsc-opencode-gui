@@ -5,6 +5,7 @@ import { activeTab, goHome, moveTab, navigate, openTabs, unreadTabs } from "../r
 import {
   closeSessionTab,
   deleteSession,
+  forkSession,
   formatSessionTimes,
   newSession,
   pendingPermissions,
@@ -258,6 +259,17 @@ export function TabsBar() {
                 </span>
               </button>
             )}
+            <button
+              class="menu-item"
+              onClick={() => {
+                void forkSession(menu.id).then((row) => {
+                  if (row) navigate({ view: "session", id: row.id });
+                });
+                closeMenu();
+              }}
+            >
+              <span class="menu-label">Fork session</span>
+            </button>
             <button
               class="menu-item"
               onClick={() => {

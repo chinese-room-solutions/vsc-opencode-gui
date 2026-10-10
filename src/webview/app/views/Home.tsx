@@ -8,6 +8,7 @@ import {
   CloseIcon,
   CopyIcon,
   DropletIcon,
+  ForkIcon,
   NewSessionIcon,
   PencilIcon,
   SearchIcon,
@@ -21,6 +22,7 @@ import {
   currentDir,
   deleteSession,
   formatSessionTimes,
+  forkSession,
   homeFilter,
   homeQuery,
   isEmptySession,
@@ -450,6 +452,26 @@ function SessionRow(props: { s: Session }) {
                 <ShareIcon />
               </button>
             )}
+            <button
+              class="row-act iconic"
+              title="Fork session"
+              onClick={() =>
+                void forkSession(s.id).then((row) => {
+                  if (!row) return;
+                  // The row's own convention: another project's session
+                  // opens in its window, deep-linked — so does its fork.
+                  if (foreign)
+                    postToHost({
+                      type: "open-project",
+                      path: dir,
+                      session: row.id,
+                    });
+                  else navigate({ view: "session", id: row.id });
+                })
+              }
+            >
+              <ForkIcon />
+            </button>
             <button
               class="row-act iconic"
               title="Rename"

@@ -27,6 +27,9 @@ HTTP/SSE.
   tab menu or a home row; the URL is copied to the clipboard and shown in
   the context panel. Stop sharing takes it private again. opencode v1
   servers only - v2.0.x has no share API yet (the entry hides there).
+- **Fork a session** - duplicate a conversation from the tab menu or a
+  home row and continue on the copy; the original stays untouched
+  (opencode's `session_fork`).
 - **Sub-agents are sessions** - open one from its task chip, steer it, stop
   it, and the parent's turn collects the result.
 - **`/init`** - guided AGENTS.md setup for the project, mirroring the

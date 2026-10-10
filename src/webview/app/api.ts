@@ -2278,6 +2278,31 @@ export async function unshareSession(
   return { ok: true, ...(row?.id ? { row: normalizeSession(row) } : {}) };
 }
 
+// POST /session/{id}/fork (v1) / POST /api/session/{id}/fork (v2) — copy a
+// session with its history and continue on the copy. v1 scopes by the
+// directory query and takes an empty body; v2 requires a JSON body whose
+// lone field `before` is omitted to copy the full history. Both reply the
+// new session's row (v2 in a {data} envelope).
+export async function forkSession(
+  id: string,
+  directory?: string,
+): Promise<{ session?: Session; error?: string }> {
+  const res = await sendJson<unknown>(
+    "POST",
+    route(
+      `/session/${id}/fork${serverDialect === "v1" ? dirQuery(directory) : ""}`,
+      `/api/session/${id}/fork`,
+    ),
+    serverDialect === "v2" ? {} : undefined,
+  );
+  const row = res?.ok
+    ? unwrapRow<Session & { directory?: string }>(res.data)
+    : undefined;
+  return row
+    ? { session: normalizeSession(row) }
+    : { error: res?.error };
+}
+
 // POST /session/{id}/revert (v1) / v2's two-step: POST /revert/stage
 // {messageID, files?} marks the cut, POST /revert/commit applies it (the
 // bare POST /revert 404s on v2 — wire-verified). Rewind semantics: the

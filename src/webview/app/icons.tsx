@@ -251,6 +251,28 @@ export function ShareIcon() {
   );
 }
 
+// The "copy this conversation onto a branch" affordance — the fork glyph.
+export function ForkIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.4"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="4.5" cy="3.5" r="1.7" />
+      <circle cx="11.5" cy="3.5" r="1.7" />
+      <circle cx="8" cy="12.5" r="1.7" />
+      <path d="M4.5 5.2c0 2 3.5 1.4 3.5 3.3 0-1.9 3.5-1.3 3.5-3.3M8 8.5v2.3" />
+    </svg>
+  );
+}
+
 // A color drop — the "recolor this tile" affordance.
 export function DropletIcon() {
   return (

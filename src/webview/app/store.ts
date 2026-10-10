@@ -27,6 +27,7 @@ import {
   fetchConfigDocs,
   fetchProjects,
   findFiles,
+  forkSession as forkSessionApi,
   interruptSession,
   normalizePermission,
   normalizeSession,
@@ -1019,6 +1020,22 @@ export async function unshareSession(id: string): Promise<boolean> {
     return row;
   });
   return true;
+}
+
+// --- session fork ---
+
+// Copy the session — history included — onto a row of its own (the server
+// titles it "… (fork #N)") and hand the copy back; the caller opens it
+// (in-app, or deep-linked for another project's session).
+export async function forkSession(id: string): Promise<Session | undefined> {
+  const directory = sessions.value.find((s) => s.id === id)?.location?.directory;
+  const { session, error } = await forkSessionApi(id, directory);
+  if (!session) {
+    setSendError(withReason("Could not fork the session", error), id);
+    return undefined;
+  }
+  upsertSession(session);
+  return session;
 }
 
 // A project's label: the user-set name when present, the folder name

@@ -36,6 +36,7 @@ import {
   defaultAgent,
   deleteSession,
   displayModel,
+  forkSession,
   fmtDur,
   formatDateTime,
   hasOlder,
@@ -3008,6 +3009,42 @@ describe("session share", () => {
     assert.equal(await unshareSession("sh3"), true);
     assert.equal(sessions.value[0].share, undefined);
     assert.equal(sessions.value[0].title, "t-sh3");
+  });
+});
+
+describe("session fork", () => {
+  it("forks: adopts the copy's row and hands it back to open", async () => {
+    sessions.value = [sessRow("fk1")];
+    onApi((call) =>
+      call.method === "POST" && call.path.startsWith("/session/fk1/fork")
+        ? {
+            ...sessRow("fk2"),
+            directory: "C:\\work\\repo",
+            title: "t-fk1 (fork #1)",
+          }
+        : undefined,
+    );
+    const row = await forkSession("fk1");
+    assert.equal(row?.id, "fk2");
+    assert.equal(
+      sessions.value.find((s) => s.id === "fk2")?.title,
+      "t-fk1 (fork #1)",
+    );
+    assert.equal(sessions.value.find((s) => s.id === "fk1") !== undefined, true);
+    assert.equal(sendError.value, undefined);
+  });
+
+  it("a rejected fork surfaces once and adopts nothing", async () => {
+    sessions.value = [sessRow("fk3")];
+    onApi((call) =>
+      call.path.startsWith("/session/fk3/fork")
+        ? apiFailWith("HTTP 500")
+        : undefined,
+    );
+    assert.equal(await forkSession("fk3"), undefined);
+    assert.equal(sendError.value?.text, "Could not fork the session: HTTP 500.");
+    assert.equal(sendError.value?.for, "fk3");
+    assert.equal(sessions.value.length, 1);
   });
 });
 

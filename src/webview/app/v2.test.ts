@@ -31,6 +31,7 @@ import {
   fetchProjects,
   fetchSessions,
   findFiles,
+  forkSession,
   interruptSession,
   isBashTool,
   isTool,
@@ -307,6 +308,29 @@ describe("share/unshare wire shape (v1)", () => {
     const call = callsFor("/session/ses_3/share")[0];
     assert.equal(call.method, "DELETE");
     assert.match(call.path, /directory=/);
+  });
+});
+
+// v1 fork: POST /session/{id}/fork — the raw handler takes an empty body
+// (no messageID = copy the full history) and replies the new row bare.
+describe("fork wire shape (v1)", () => {
+  it("posts bodyless with the directory query and reads the bare row", async () => {
+    onApi((call) =>
+      call.method === "POST" && call.path.startsWith("/session/ses_1/fork")
+        ? { ...sessRow("ses_2"), directory: "C:\\work\\repo" }
+        : undefined,
+    );
+    const { session, error } = await forkSession("ses_1", "C:\\work\\repo");
+    assert.equal(error, undefined);
+    assert.equal(session?.id, "ses_2");
+    assert.equal(session?.location.directory, "C:\\work\\repo");
+    const call = callsFor("/session/ses_1/fork")[0];
+    assert.equal(call.method, "POST");
+    assert.match(
+      call.path,
+      /^\/session\/ses_1\/fork\?directory=C%3A%5Cwork%5Crepo$/,
+    );
+    assert.equal(call.body, undefined);
   });
 });
 
@@ -665,6 +689,22 @@ describe("v2 route/body/envelope translation", () => {
     });
     assert.equal((await unshareSession("ses_9")).ok, false);
     assert.equal(callsFor("/api/session/ses_9/share").length, 2);
+  });
+
+  it("forkSession posts an empty JSON body to /api/session/{id}/fork and unwraps {data}", async () => {
+    onApi((call) =>
+      call.method === "POST" && call.path === "/api/session/ses_1/fork"
+        ? { data: sessRow("ses_2") }
+        : undefined,
+    );
+    const { session, error } = await forkSession("ses_1");
+    assert.equal(error, undefined);
+    assert.equal(session?.id, "ses_2");
+    const call = callsFor("/api/session/ses_1/fork")[0];
+    assert.equal(call.method, "POST");
+    assert.equal(call.path, "/api/session/ses_1/fork");
+    // v2 requires a JSON body; {} copies the full history.
+    assert.deepEqual(call.body, {});
   });
 
   it("fetchSessions coerces ISO times, string model refs, and missing titles", async () => {
