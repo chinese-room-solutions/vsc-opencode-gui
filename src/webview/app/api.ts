@@ -885,6 +885,36 @@ export const isBashTool = (tool: string): boolean =>
 export const isTaskTool = (tool: string): boolean =>
   tool === "task" || tool === "subagent";
 
+// The notice facts for a finished background sub-agent, from a synthetic
+// row/event the server injected into the parent (v2's SubagentCompletion):
+// metadata {source: "subagent", childID, agent, state}; the task description
+// rides the row's own `description` field, the <subagent …> tag in the text
+// mirrors it as the fallback. Returns undefined for any other injector.
+export interface SubagentNotice {
+  childID: string;
+  agent: string;
+  state: string;
+  description?: string;
+}
+export function subagentNoticeMeta(
+  metadata: Record<string, unknown> | undefined,
+  description: string | undefined,
+  text: string,
+): SubagentNotice | undefined {
+  const m = metadata as
+    | { source?: unknown; childID?: unknown; agent?: unknown; state?: unknown }
+    | undefined;
+  if (m?.source !== "subagent" || typeof m.childID !== "string") return undefined;
+  const desc =
+    description ?? text.match(/^<subagent [^\n]*?description="([^"]*)"/)?.[1];
+  return {
+    childID: m.childID,
+    agent: typeof m.agent === "string" && m.agent ? m.agent : "subagent",
+    state: typeof m.state === "string" && m.state ? m.state : "completed",
+    ...(desc ? { description: desc } : {}),
+  };
+}
+
 const TOOL_NAMES: Record<string, string> = {
   bash: "Shell",
   shell: "Shell",
@@ -1044,8 +1074,11 @@ interface V2MessageRow {
   };
   text?: string;
   // synthetic rows: the injector's metadata (opencode-plugin-peers tags its
-  // messages metadata.peerMessage — the peer card's provenance).
+  // messages metadata.peerMessage — the peer card's provenance; v2's
+  // sub-agent completion tags metadata.source "subagent"). Synthetic rows
+  // also carry the injector's one-line description.
   metadata?: Record<string, unknown>;
+  description?: string;
   payload?: { text?: string; files?: V2RowFile[] };
   content?: { type: string; id?: string; time?: { created?: number | string; completed?: number | string } }[];
   // shell rows: their own run, keyed by shellID.
@@ -1322,7 +1355,9 @@ export async function fetchMessages(
       // A peer injection (opencode-plugin-peers) carries its provenance in
       // the row's metadata — served as v1's shape (a user row with a
       // synthetic part tagged metadata.peerMessage) so the peer card
-      // renders and the row heads its own turn. Other synthetic notes
+      // renders and the row heads its own turn. A finished background
+      // sub-agent (metadata.source "subagent") maps the same way, tagged
+      // metadata.subagentNotice for the notice card. Other synthetic notes
       // stay plain assistant rows.
       const peer = (r.metadata as { peerMessage?: unknown } | undefined)
         ?.peerMessage;
@@ -1339,6 +1374,25 @@ export async function fetchMessages(
                 text: clampPartText(`${r.id}:text`, r.text ?? ""),
                 synthetic: true,
                 metadata: { peerMessage: peer },
+              },
+            ],
+          },
+        ];
+      }
+      const sub = subagentNoticeMeta(r.metadata, r.description, r.text ?? "");
+      if (sub) {
+        return [
+          {
+            info: { id: r.id, role: "user", time: r.time },
+            parts: [
+              {
+                id: `${r.id}:text`,
+                messageID: r.id,
+                sessionID: id,
+                type: "text",
+                text: clampPartText(`${r.id}:text`, r.text ?? ""),
+                synthetic: true,
+                metadata: { subagentNotice: sub },
               },
             ],
           },
@@ -2003,6 +2057,18 @@ export async function interruptSession(id: string): Promise<boolean> {
       route(`/session/${id}/abort`, `/api/session/${id}/interrupt`),
     ))?.ok === true
   );
+}
+
+// POST /api/session/{id}/background (v2 only, 204) — "Move active
+// foreground backgroundable tools for this session into background
+// observation": every blocking sub-agent's tool part completes and the
+// parent's turn ends while the children keep running. An idle session is a
+// no-op. v1 has no such route — the store action gates on the dialect.
+export async function backgroundSession(
+  id: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await sendJson("POST", `/api/session/${id}/background`);
+  return res.ok ? { ok: true } : { ok: false, error: res.error };
 }
 
 // POST /api/session/{id}/agent — the agent for subsequent turns. 204.

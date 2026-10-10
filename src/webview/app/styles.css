@@ -2670,6 +2670,57 @@ body {
   min-height: 0;
 }
 
+/* Finished background sub-agent (v2): the injected completion renders as a
+   compact notice beside the peer card's spot — state mark plus one line,
+   the child's result clamped under, click opens the child transcript. */
+.subagent-notice {
+  cursor: pointer;
+}
+
+.subagent-notice .user-pill {
+  min-height: 0;
+}
+
+.subagent-notice:hover .user-pill {
+  border-color: var(--oc-text-2);
+}
+
+.notice-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px 3px;
+  color: var(--oc-text-2);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.notice-head .notice-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.notice-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.notice-dot.completed {
+  background: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+}
+
+.notice-dot.error {
+  background: var(--vscode-errorForeground);
+}
+
+.notice-dot.cancelled {
+  background: var(--oc-text-2);
+}
+
 /* Folded pills preview at a 5-line budget. Short messages stay whole and
    bare; replies never fold — the reader comes for them in full. */
 .user-text.clamped {
@@ -2890,9 +2941,10 @@ a.tool-pill {
   background: var(--vscode-input-background);
 }
 
-/* Stop a running sub-agent from its chip: kills the child session only —
-   the parent's turn continues with the aborted task result. */
-.subagent-stop {
+/* Chip action buttons on a running sub-agent: one 22px box, the action's
+   color and hover its own. */
+.subagent-stop,
+.subagent-bg {
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -2904,12 +2956,27 @@ a.tool-pill {
   border: 1px solid var(--oc-border);
   border-radius: 4px;
   background: none;
-  color: var(--vscode-errorForeground);
   cursor: pointer;
+}
+
+/* Stop a running sub-agent from its chip: kills the child session only —
+   the parent's turn continues with the aborted task result. */
+.subagent-stop {
+  color: var(--vscode-errorForeground);
 }
 
 .subagent-stop:hover {
   border-color: var(--vscode-errorForeground);
+}
+
+/* Release the parent's turn instead: the sub-agent finishes out of the way
+   and its completion lands as a notice card. Neutral — the soft action. */
+.subagent-bg {
+  color: var(--oc-text-2);
+}
+
+.subagent-bg:hover {
+  border-color: var(--oc-text-2);
 }
 
 .subagent-chip.link {

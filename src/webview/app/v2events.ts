@@ -7,7 +7,13 @@
 // ahead of the queue; unknown events pass through (the store ignores what
 // it doesn't know).
 import type { ServerEvent } from "./events";
-import { formToQuestion, toMs, v2CompactionTrigger, v2ModelRef } from "./api";
+import {
+  formToQuestion,
+  subagentNoticeMeta,
+  toMs,
+  v2CompactionTrigger,
+  v2ModelRef,
+} from "./api";
 
 // v2 addresses a part as (assistantMessageID, ordinal); the durable fetch
 // names content elements `${row.id}:${index}`. The stream's ordinal counts
@@ -432,11 +438,21 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
     // plain assistant row — role "user" would entangle it with the echo
     // retirement and the ghost-turn abort, which watch user rows. A peer
     // injection keeps its provenance on the part (synthetic +
-    // metadata.peerMessage) so the peer card renders live; the durable
-    // fetch later serves the row as the v1-shaped user row (same id).
+    // metadata.peerMessage) so the peer card renders live; a finished
+    // background sub-agent (metadata.source "subagent") tags
+    // metadata.subagentNotice the same way. The durable fetch later serves
+    // both as the v1-shaped user row (same id).
     case "session.synthetic": {
       const rowID = v2RowID(undefined, event.id);
       const peer = d.metadata?.peerMessage;
+      const sub =
+        typeof d.text === "string"
+          ? subagentNoticeMeta(
+              d.metadata,
+              typeof d.description === "string" ? d.description : undefined,
+              d.text,
+            )
+          : undefined;
       return sid && rowID && typeof d.text === "string"
         ? [
             synth("message.updated", {
@@ -456,6 +472,9 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
                 type: "text",
                 text: d.text,
                 ...(peer ? { synthetic: true, metadata: { peerMessage: peer } } : {}),
+                ...(sub
+                  ? { synthetic: true, metadata: { subagentNotice: sub } }
+                  : {}),
               },
             }),
           ]

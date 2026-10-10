@@ -33,6 +33,9 @@ import {
   currentDir,
   currentSelection,
   attachInputs,
+  backgroundSupported,
+  canBackgroundSubagent,
+  continueInBackground,
   defaultAgent,
   deleteSession,
   displayModel,
@@ -3054,6 +3057,55 @@ describe("session share", () => {
     assert.equal(await unshareSession("sh3"), true);
     assert.equal(sessions.value[0].share, undefined);
     assert.equal(sessions.value[0].title, "t-sh3");
+  });
+});
+
+describe("background sub-agent", () => {
+  afterEach(() => setDialect("v1"));
+  it("v1 has no route: the action no-ops and never surfaces", async () => {
+    assert.equal(backgroundSupported(), false);
+    assert.equal(await continueInBackground("bg0"), false);
+    assert.equal(callsFor("/api/session/bg0/background").length, 0);
+    assert.equal(sendError.value, undefined);
+  });
+  it("v2 posts the whole-session background route; success mutates nothing", async () => {
+    setDialect("v2");
+    assert.equal(backgroundSupported(), true);
+    sessions.value = [sessRow("bg1")];
+    onApi((call) =>
+      call.method === "POST" &&
+      call.path.startsWith("/api/session/bg1/background")
+        ? {}
+        : undefined,
+    );
+    assert.equal(await continueInBackground("bg1"), true);
+    assert.equal(callsFor("/api/session/bg1/background").length, 1);
+    // The stream drives the chip and the composer — no local busy flip.
+    assert.equal(sessionStatus.value["bg1"]?.type, undefined);
+    assert.equal(sendError.value, undefined);
+  });
+  it("a rejected background surfaces the banner once", async () => {
+    setDialect("v2");
+    onApi((call) =>
+      call.path.startsWith("/api/session/bg2/background")
+        ? apiFailWith("HTTP 500")
+        : undefined,
+    );
+    assert.equal(await continueInBackground("bg2"), false);
+    assert.equal(
+      sendError.value?.text,
+      "Could not move the sub-agent to the background: HTTP 500.",
+    );
+    assert.equal(sendError.value?.for, "bg2");
+  });
+  it("the chip gate: working and blocking on v2, nothing else", () => {
+    setDialect("v2");
+    assert.equal(canBackgroundSubagent(true, undefined), true);
+    assert.equal(canBackgroundSubagent(true, false), true);
+    assert.equal(canBackgroundSubagent(false, undefined), false);
+    assert.equal(canBackgroundSubagent(true, true), false);
+    setDialect("v1");
+    assert.equal(canBackgroundSubagent(true, undefined), false);
   });
 });
 

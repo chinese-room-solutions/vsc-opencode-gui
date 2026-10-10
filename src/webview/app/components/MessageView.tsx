@@ -30,9 +30,10 @@ import {
   OcCopyIcon,
   OcResetIcon,
 } from "../icons";
-import { ToolCard } from "./ToolCard";
+import { ToolCard, displayAgent } from "./ToolCard";
 import { openLightbox } from "./Lightbox";
 import { silenceLabel } from "../stuck";
+import { route, navigate } from "../router";
 
 // Compact units for the live counters: 95s → "1m35s", 12340 → "12.3k".
 // Sub-1000 values pass through unrounded, so rates keep their decimal.
@@ -478,6 +479,42 @@ function peerMessage(parts: Part[]): {
   return { text, from, title };
 }
 
+// A finished background sub-agent (v2): the server injects the completion
+// into the parent as a synthetic part tagged metadata.subagentNotice — the
+// notice card's provenance, the peer-message pattern. The <subagent …>
+// wrapper rode the text for the model; the card shows the result inside.
+function subagentNotice(parts: Part[]): {
+  childID: string;
+  agent: string;
+  state: string;
+  description?: string;
+  text: string;
+} | undefined {
+  for (const p of parts) {
+    if (!isText(p)) continue;
+    const n = p.metadata?.subagentNotice as
+      | { childID?: unknown; agent?: unknown; state?: unknown; description?: unknown }
+      | undefined;
+    if (!p.synthetic || !n || typeof n.childID !== "string") continue;
+    const raw = p.text ?? "";
+    const body = raw
+      .replace(/^<subagent [^\n]*>\n?/, "")
+      .replace(/\n<\/subagent>\s*$/, "");
+    return {
+      childID: n.childID,
+      agent: typeof n.agent === "string" && n.agent ? n.agent : "subagent",
+      state: typeof n.state === "string" && n.state ? n.state : "completed",
+      ...(typeof n.description === "string" && n.description
+        ? { description: n.description }
+        : {}),
+      // A truncated long result can lose its closing tag — the stripped
+      // body falls back to the raw text.
+      text: body || raw,
+    };
+  }
+  return undefined;
+}
+
 // Attachment chips above a user pill's text (Claude Code's): images a slim
 // thumbnail crop — name and pixel size move to the hover title — other files
 // their name; an image click opens the lightbox, a chip with an on-disk path
@@ -820,6 +857,50 @@ function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
           text={peer.text}
           base="markdown msg-text user-text"
         />
+      </div>
+    );
+  }
+  // The sub-agent completion card renders from the part tag too — the live
+  // translation lands it as an assistant row, the durable fetch as a user
+  // row (the peer asymmetry); the tag, not the role, is the card's key.
+  const notice = subagentNotice(parts);
+  if (notice) {
+    // State worded for the reader: the wire's completed/error/cancelled.
+    const word =
+      notice.state === "error"
+        ? "failed"
+        : notice.state === "cancelled"
+          ? "stopped"
+          : "finished";
+    // The chip's drill-down: the tab keeps belonging to this session, the
+    // finished child rides the route as a breadcrumb.
+    const openChild = (e: MouseEvent) => {
+      const sel = window.getSelection();
+      if (
+        (sel && sel.toString().length > 0) ||
+        (e.target as HTMLElement).closest(".clamp-toggle")
+      )
+        return;
+      const r = route.value;
+      if (r.view === "session")
+        navigate({ view: "session", id: r.child ?? r.id, child: notice.childID });
+    };
+    return (
+      <div class="msg user subagent-notice" onClick={openChild} title="Open the sub-agent session">
+        <div class="notice-head">
+          <span class={`notice-dot ${notice.state}`} aria-hidden="true" />
+          <span class="notice-title">
+            {`${displayAgent(notice.agent)} sub-agent ${word}${
+              notice.description ? ` · ${notice.description}` : ""
+            }`}
+          </span>
+        </div>
+        {notice.text !== "" && (
+          <ClampedText
+            text={notice.text}
+            base="markdown msg-text user-text"
+          />
+        )}
       </div>
     );
   }

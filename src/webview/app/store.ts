@@ -28,6 +28,7 @@ import {
   fetchProjects,
   findFiles,
   forkSession as forkSessionApi,
+  backgroundSession,
   interruptSession,
   normalizePermission,
   normalizeSession,
@@ -1005,6 +1006,40 @@ export async function shareSession(id: string): Promise<boolean> {
 // hide there until upstream ships one.
 export function shareSupported(): boolean {
   return dialect() !== "v2";
+}
+
+// The inverse gate for backgrounding a blocking sub-agent: v2's
+// POST /api/session/{id}/background (2.0.26) has no v1 counterpart.
+export function backgroundSupported(): boolean {
+  return dialect() === "v2";
+}
+
+// The chip's background affordance: a sub-agent that is working AND still
+// blocking this conversation, on a server that can release it. Pure chip
+// state + the dialect gate, so tests drive it without a live turn.
+export function canBackgroundSubagent(
+  running: boolean,
+  background: boolean | undefined,
+): boolean {
+  return running && !background && backgroundSupported();
+}
+
+// Stop blocking on a running sub-agent: the server completes its tool part
+// (the chip reads "… (background)") and ends the parent's turn while the
+// child keeps working — the stream drives the chip and the composer, so a
+// success mutates nothing locally. The child's completion later arrives as
+// a synthetic subagent-notice row.
+export async function continueInBackground(id: string): Promise<boolean> {
+  if (!backgroundSupported()) return false;
+  const res = await backgroundSession(id);
+  if (!res.ok) {
+    setSendError(
+      withReason("Could not move the sub-agent to the background", res.error),
+      id,
+    );
+    return false;
+  }
+  return true;
 }
 
 // Take the session private again; the marker leaves the row either way (a

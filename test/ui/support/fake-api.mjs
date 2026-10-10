@@ -301,6 +301,21 @@ const sessionRow = {
 };
 const flatSession = ({ ...sessionRow, directory });
 
+// A spawned sub-agent child of the seeded session, still working: the
+// durable task chip ("Check the retry paths", turn 12) resolves it by
+// parentID + title prefix and vouches for liveness through the child's
+// busy status — the fixture for the chip's run-in-background affordance.
+const childRow = {
+  id: "ses_child_1",
+  parentID: SESSION_ID,
+  title: "Check the retry paths (@general subagent)",
+  cost: 0,
+  tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 }, total: 0 },
+  time: { created: T0 + 60_000, updated: Date.now() },
+  location: { directory },
+  agent: "general",
+};
+
 // /find/file seeds — the @-menu's autocomplete and the composer's chip
 // verification both hit the endpoint. Case-insensitive substring match,
 // like a fuzzy finder; directories keep the platform trailing "/".
@@ -323,6 +338,7 @@ setInterval(() => {
 
 // --- synthetic streaming ---
 let streamCount = 0;
+const backgroundCalls = [];
 const timers = new Set();
 function later(fn, ms) {
   const t = setTimeout(() => {
@@ -648,14 +664,58 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, { ok: true });
       return;
     }
+    if (method === "GET" && path === "/__control/background") {
+      json(res, 200, { calls: backgroundCalls });
+      return;
+    }
     json(res, 404, { error: "no such control" });
+    return;
+  }
+
+  // v2's background conversion: records the call, answers like the real
+  // server (204; idle sessions are a no-op there).
+  if (method === "POST" && /^\/api\/session\/[^/]+\/background\/?$/.test(path)) {
+    backgroundCalls.push(path.split("/")[3]);
+    res.writeHead(204, CORS);
+    res.end();
     return;
   }
 
   // boot / reads
   if (method === "GET") {
     if (path === "/session/status") { json(res, 200, { [SESSION_ID]: { type: stepsActive ? "busy" : "idle" } }); return; }
-    if (path === "/api/session") { json(res, 200, { data: [sessionRow], cursor: {} }); return; }
+    // v2: the child is mid-run — the seeded session itself stays idle so
+    // the chip's running state comes from the child, not the parent.
+    if (path === "/api/session/active") { json(res, 200, { data: { ses_child_1: { agent: "general" } } }); return; }
+    if (path === "/api/session") { json(res, 200, { data: [sessionRow, childRow], cursor: {} }); return; }
+    // v2 twins of the v1 boot routes (same seeds, the app's v2 shapes):
+    // /api/provider+model+config assemble the picker catalog, /api/agent
+    // the agent list, /api/command+/api/skill the slash registry,
+    // /api/project the Home list (bare array there, {data} elsewhere).
+    if (path === "/api/provider") { json(res, 200, { data: [{ id: "fake", name: "Fake Labs" }] }); return; }
+    if (path === "/api/model") {
+      json(res, 200, {
+        data: [
+          { id: "fake-model", providerID: "fake", name: "Fake Model", capabilities: { tools: true, input: ["text", "image", "pdf"] }, variants: [{ id: "default" }, { id: "high" }], limit: { context: 200_000 } },
+          { id: "fake-audio", providerID: "fake", name: "Fake Audio", capabilities: { tools: true, input: ["text", "audio"] }, variants: [{ id: "default" }], limit: { context: 100_000 } },
+        ],
+      });
+      return;
+    }
+    if (path === "/api/config") { json(res, 200, [{ info: { model: { providerID: "fake", model: "fake-model" } } }]); return; }
+    if (path === "/api/agent") {
+      json(res, 200, {
+        data: [
+          { id: "build", name: "Build", description: "Write code", mode: "primary" },
+          { id: "plan", name: "Plan", description: "Plan first", mode: "primary" },
+          { id: "general", name: "General", description: "Sub-agent", mode: "subagent" },
+        ],
+      });
+      return;
+    }
+    if (path === "/api/command") { json(res, 200, { data: [] }); return; }
+    if (path === "/api/skill") { json(res, 200, { data: [] }); return; }
+    if (path === "/api/project") { json(res, 200, [{ id: "prj_1", worktree: directory, canonical: directory, icon: { color: "pink" }, time: { created: T0, updated: T0 } }]); return; }
     if (path === "/provider") {
       json(res, 200, {
         all: [{

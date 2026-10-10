@@ -2807,3 +2807,113 @@ describe("v2 turn through the store (recorded frame sequence)", () => {
     assert.equal(part?.state?.output, "ok\n");
   });
 });
+
+// The finished background sub-agent's completion notice: the server injects
+// it into the parent as a synthetic row/event tagged metadata.source
+// "subagent". Both paths must produce the same tagged part — the live
+// event renders first, the durable fetch later replaces it under the same
+// row id (evt_ → msg_), like the peer message pair.
+describe("subagent completion notice (durable + live pair)", () => {
+  beforeEach(() => setDialect("v2"));
+  afterEach(() => setDialect("v1"));
+
+  const raw =
+    '<subagent sessionID="ses_kid" state="completed" description="Fix the flaky test">\nAll tests pass.\n</subagent>';
+  const metadata = {
+    source: "subagent",
+    childID: "ses_kid",
+    agent: "build",
+    state: "completed",
+  };
+
+  it("the durable row and the live event map to the same tagged part", async () => {
+    onApi((call) =>
+      call.path.startsWith("/api/session/ses_pair/message")
+        ? {
+            data: [
+              {
+                id: "msg_pair",
+                time: { created: 5 },
+                type: "synthetic",
+                description: "Fix the flaky test",
+                text: raw,
+                metadata,
+              },
+            ],
+          }
+        : undefined,
+    );
+    const page = await fetchMessages("ses_pair");
+    const durableRow = page?.messages?.[0];
+    assert.equal(durableRow?.info.role, "user");
+    const live = translateV2Event({
+      id: "evt_pair",
+      type: "session.synthetic",
+      data: {
+        sessionID: "ses_pair",
+        description: "Fix the flaky test",
+        text: raw,
+        metadata,
+      },
+    });
+    assert.equal(live.length, 2);
+    // Live lands assistant (a streamed user row would trip the echo
+    // retirement / ghost-turn abort); the durable fetch later serves the
+    // user row under the same id — the peer-message asymmetry.
+    assert.equal(
+      (live[0].data as { info?: { id?: string; role?: string } }).info?.id,
+      "msg_pair",
+    );
+    assert.equal(
+      (live[0].data as { info?: { role?: string } }).info?.role,
+      "assistant",
+    );
+    const livePart = (live[1].data as { part?: unknown }).part;
+    assert.deepEqual(livePart, {
+      id: "msg_pair:text",
+      messageID: "msg_pair",
+      sessionID: "ses_pair",
+      type: "text",
+      text: raw,
+      synthetic: true,
+      metadata: {
+        subagentNotice: {
+          childID: "ses_kid",
+          agent: "build",
+          state: "completed",
+          description: "Fix the flaky test",
+        },
+      },
+    });
+    // The pair assertion: the durable part is the live part, exactly.
+    assert.deepEqual(durableRow?.parts[0], livePart);
+  });
+
+  it("falls back to the tag's description attribute when the row omits it", async () => {
+    onApi((call) =>
+      call.path.startsWith("/api/session/ses_fallback/message")
+        ? {
+            data: [
+              {
+                id: "msg_fb",
+                time: { created: 5 },
+                type: "synthetic",
+                text: raw,
+                metadata: { ...metadata, state: "error" },
+              },
+            ],
+          }
+        : undefined,
+    );
+    const page = await fetchMessages("ses_fallback");
+    const part = page?.messages?.[0]?.parts[0] as
+      | { metadata?: { subagentNotice?: Record<string, unknown> } }
+      | undefined;
+    assert.deepEqual(part?.metadata?.subagentNotice, {
+      childID: "ses_kid",
+      agent: "build",
+      state: "error",
+      description: "Fix the flaky test",
+    });
+  });
+});

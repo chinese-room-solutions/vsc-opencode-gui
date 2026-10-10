@@ -140,8 +140,9 @@ const shellHtml = (serverUrl) => {
     .replaceAll("{{APP_JS}}", "/app.js")
     .replaceAll("{{APP_CSS}}", "/app.css")
     .replaceAll("{{ORIGIN}}", serverUrl)
-    // The fake API speaks the v1 dialect.
-    .replaceAll("{{DIALECT}}", "")
+    // The fake API speaks the v1 dialect by default; OPENCODE_DIALECT=v2
+    // bakes v2 (the fake serves both surfaces).
+    .replaceAll("{{DIALECT}}", process.env.OPENCODE_DIALECT === "v2" ? "v2" : "")
     .replaceAll("{{ERROR_MESSAGE}}", "")
     .replaceAll("{{INSTALL_HINT}}", "")
     // Boot-restore metas honor env so Playwright can exercise restore

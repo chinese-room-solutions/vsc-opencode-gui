@@ -226,6 +226,62 @@ describe("stuck", () => {
       assert.equal(mark?.since, T0 + 2_000);
     });
 
+    it("a backgrounded task part completing clears its child mark", () => {
+      const sid = "sk10";
+      busySession(sid);
+      busySession("child1"); // the child keeps working after the background
+      open(sid, [
+        {
+          info: { id: "m1", role: "assistant", time: { created: T0 } },
+          parts: [
+            {
+              id: "p1",
+              messageID: "m1",
+              sessionID: sid,
+              type: "tool",
+              tool: "task",
+              state: {
+                status: "running",
+                time: { start: T0 },
+                metadata: { sessionId: "child1" },
+              },
+            },
+          ],
+        },
+      ]);
+      setNow(T0 + 100);
+      runStuckTick();
+      setNow(T0 + 3_300);
+      runStuckTick();
+      assert.equal(marksOf(sid)?.parts["p1"]?.childId, "child1");
+      // POST /background completes the part while the parent is still busy
+      // a beat before its turn ends — the healthy child must not sit under
+      // a stale mark the auto-abort would act on.
+      const done: ChatMessage = {
+        info: { id: "m1", role: "assistant", time: { created: T0 } },
+        parts: [
+          {
+            id: "p1",
+            messageID: "m1",
+            sessionID: sid,
+            type: "tool",
+            tool: "task",
+            state: {
+              status: "completed",
+              time: { start: T0, end: T0 + 3_300 },
+              metadata: { sessionId: "child1", background: true },
+              output:
+                "The subagent is working in the background (sessionID: child1).",
+            },
+          },
+        ],
+      };
+      open(sid, [done]);
+      setNow(T0 + 3_400);
+      runStuckTick();
+      assert.equal(marksOf(sid)?.parts["p1"], undefined);
+    });
+
     it("a live compaction turn is excluded wholesale", () => {
       const sid = "sk8";
       busySession(sid);
