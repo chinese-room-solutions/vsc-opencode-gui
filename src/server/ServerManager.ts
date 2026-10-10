@@ -286,7 +286,14 @@ export class ServerManager {
     exposeToNetwork: boolean = false,
     opencodePath: string = "",
   ): Promise<void> {
-    const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    // VS Code lowercases the Windows drive letter in fsPath; opencode v2's
+    // instruction scan stack-overflows on a lowercase drive at boot and
+    // blocks every command. Spawn with the OS-canonical uppercase form.
+    const rawCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const cwd =
+      process.platform === "win32" && rawCwd && /^[a-z]:/.test(rawCwd)
+        ? rawCwd[0].toUpperCase() + rawCwd.slice(1)
+        : rawCwd;
 
     if (!cwd) {
       hub.setError("No workspace folder open.", false);
