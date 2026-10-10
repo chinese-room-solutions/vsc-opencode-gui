@@ -1,5 +1,6 @@
 import { computed, effect, signal } from "@preact/signals";
 import type { ReadonlySignal } from "@preact/signals";
+import { buildInitPrompt } from "./initPrompt";
 import {
   attachmentParts,
   attachAllowed,
@@ -3714,6 +3715,18 @@ export async function runSlashCommand(
   if (!name) return;
   if (name === "compact") {
     await runCompact(target, echoed, echoCid);
+    return;
+  }
+  // /init mirrors the TUI's client-side builtin (the server's command list
+  // stays empty): the template goes out as an ordinary prompt, so draft
+  // creation, the echo, and the busy queue all apply. A server- or
+  // user-defined init command takes precedence below.
+  if (name === "init" && !commands.value.some((c) => c.name === "init")) {
+    const dir =
+      sessions.value.find((s) => s.id === target)?.location?.directory ||
+      currentDir.value ||
+      "";
+    await sendPrompt(target, buildInitPrompt(dir, m?.[2] ?? ""));
     return;
   }
   if (!commands.value.some((c) => c.name === name)) {

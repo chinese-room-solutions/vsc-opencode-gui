@@ -2173,6 +2173,44 @@ describe("/compact (store side of ff714f0)", () => {
   });
 });
 
+describe("/init builtin", () => {
+  it("sends the template as a prompt with the directory and args folded in", async () => {
+    const sid = "in1";
+    sessions.value = [sessRow(sid)];
+    await runSlashCommand(sid, "/init focus on testing quirks");
+    const calls = callsFor(`/session/${sid}/prompt_async`);
+    assert.equal(calls.length, 1);
+    const text = ((calls[0].body as { parts: { type: string; text: string }[] })
+      .parts[0] as { text: string }).text;
+    assert.ok(text.startsWith("Create or update `AGENTS.md`"));
+    assert.ok(text.includes("focus on testing quirks"));
+    assert.ok(text.includes("C:\\work\\repo"));
+    assert.ok(!text.includes("$ARGUMENTS"));
+  });
+  it("a draft creates the session and falls back to the workspace dir", async () => {
+    onApi((call) => {
+      if (call.method === "POST" && call.path === "/session")
+        return sessRow("in2");
+      return undefined;
+    });
+    currentDir.value = "D:\\ws\\proj";
+    await runSlashCommand("draft", "/init");
+    const text = ((callsFor("/session/in2/prompt_async")[0].body as {
+      parts: { text: string }[];
+    }).parts[0] as { text: string }).text;
+    assert.ok(text.includes("D:\\ws\\proj"));
+    assert.ok(text.includes("(none)"), "no args read as (none)");
+  });
+  it("a server-provided /init command wins over the builtin", async () => {
+    const sid = "in3";
+    sessions.value = [sessRow(sid)];
+    commands.value = [{ name: "init", description: "custom" }];
+    await runSlashCommand(sid, "/init mine");
+    assert.equal(callsFor(`/session/${sid}/prompt_async`).length, 0);
+    assert.equal(callsFor(`/session/${sid}/command`).length, 1);
+  });
+});
+
 describe("sendPrompt", () => {
   it("draft: creates the session, rides the pick, moves files, posts", async () => {
     agents.value = [{ name: "reviewer", mode: "subagent" }];

@@ -32,6 +32,7 @@ import { ArrowUpIcon, PlusIcon, StopIcon } from "../icons";
 // /compact is a client call to the summarize endpoint, not a server command.
 const BUILTIN_COMMANDS = [
   { name: "compact", description: "Summarize the conversation to free context" },
+  { name: "init", description: "Guided AGENTS.md setup for this project" },
 ];
 
 // File attach from paste/drop, mirroring the opencode web app: images, pdf,

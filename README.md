@@ -29,6 +29,8 @@ HTTP/SSE.
   servers only - v2.0.x has no share API yet (the entry hides there).
 - **Sub-agents are sessions** - open one from its task chip, steer it, stop
   it, and the parent's turn collects the result.
+- **`/init`** - guided AGENTS.md setup for the project, mirroring the
+  opencode TUI's builtin (a user- or server-defined `/init` command wins).
 - **Notifications, visual and sound** - tabs pulse yellow when a session
   waits on you and green when a turn finishes. Chimes cover ready,
   permission, and question events.
