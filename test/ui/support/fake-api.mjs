@@ -328,6 +328,37 @@ const childRow = {
   agent: "general",
 };
 
+// FAKE_API_HOME_LIST=1: extra listable sessions across a second project
+// folder — Home multiselect specs need several rows in both columns.
+// FAKE_API_PAGINATE=1 grows the list past the store's page size (50):
+// /api/session serves a full first page plus a cursor, the rest on the
+// cursor page — the "Load older sessions" path. Flat order (updated
+// desc) is stable: seeded first, then the bulk rows newest-first.
+const paginate = process.env.FAKE_API_PAGINATE === "1";
+const extraSessions =
+  process.env.FAKE_API_HOME_LIST === "1" || paginate
+    ? Array.from({ length: paginate ? 52 : 6 }, (_, i) => ({
+        id: `ses_bulk_${i + 1}`,
+        title: `Bulk session ${i + 1}`,
+        cost: 0,
+        tokens: {
+          input: 10,
+          output: 20,
+          reasoning: 0,
+          cache: { read: 0, write: 0 },
+          total: 30,
+        },
+        time: {
+          created: T0 + 120_000 + i * 8_000,
+          updated: T0 + 130_000 + i * 8_000,
+        },
+        location: { directory: i < 3 ? directory : `${directory}-other` },
+        agent: "build",
+        model: { id: "fake-model", providerID: "fake" },
+      }))
+    : [];
+const sessionList = [sessionRow, childRow, ...extraSessions];
+
 // /find/file seeds — the @-menu's autocomplete and the composer's chip
 // verification both hit the endpoint. Case-insensitive substring match,
 // like a fuzzy finder; directories keep the platform trailing "/".
@@ -721,7 +752,17 @@ const server = http.createServer(async (req, res) => {
       });
       return;
     }
-    if (path === "/api/session") { json(res, 200, { data: [sessionRow, childRow], cursor: {} }); return; }
+    if (path === "/api/session") {
+      if (paginate) {
+        const p2 = url.searchParams.get("cursor") === "page2";
+        json(res, 200, p2
+          ? { data: sessionList.slice(50), cursor: {} }
+          : { data: sessionList.slice(0, 50), cursor: { next: "page2" } });
+        return;
+      }
+      json(res, 200, { data: sessionList, cursor: {} });
+      return;
+    }
     // v2 twins of the v1 boot routes (same seeds, the app's v2 shapes):
     // /api/provider+model+config assemble the picker catalog, /api/agent
     // the agent list, /api/command+/api/skill the slash registry,

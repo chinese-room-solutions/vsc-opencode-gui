@@ -533,6 +533,80 @@ body {
   translate: 0 -1px;
 }
 
+/* Multiselect picks (Ctrl/⌘/Shift+Click on Home rows): a quiet fill the
+   full row and the tile flips to a check. Distinct from
+   .proj-row.selected — that outline is the session filter. */
+.proj-row.picked,
+.sess-row.picked {
+  background: var(
+    --vscode-list-inactiveSelectionBackground,
+    rgb(128 128 128 / 15%)
+  );
+  border-radius: 6px;
+}
+
+/* Neighboring picks read as one block: square the corners the run's
+   members share (:has — the end of a run keeps its bottom corners). */
+.proj-row.picked:has(+ .proj-row.picked),
+.sess-row.picked:has(+ .sess-row.picked) {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.proj-row.picked + .proj-row.picked,
+.sess-row.picked + .sess-row.picked {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+/* The multiselect action dock: one floating Delete pinned to the bottom
+   center of the Home view while rows are picked (session picks and
+   project picks are mutually exclusive — one button serves both). Sits
+   under the confirm dialog (z 19). */
+.pick-dock {
+  position: fixed;
+  bottom: 22px;
+  left: 50%;
+  translate: -50% 0;
+  z-index: 18;
+}
+
+.pick-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 14px;
+  background: var(--vscode-errorForeground, #f14c4c);
+  border: none;
+  border-radius: 15px;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 25%);
+  color: var(--vscode-button-foreground, #fff);
+  font: inherit;
+  cursor: pointer;
+}
+
+.pick-delete:hover {
+  background: color-mix(
+    in srgb,
+    var(--vscode-errorForeground, #f14c4c) 88%,
+    #000
+  );
+}
+
+/* The bulk-delete progress note rides the same dock. */
+.pick-note {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 14px;
+  background: var(--oc-panel);
+  border: 1px solid var(--oc-border);
+  border-radius: 15px;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 25%);
+  color: var(--oc-text-2);
+  font-size: 12px;
+}
+
 /* Hover actions (rename/delete, project delete): quiet, never push the row. */
 
 .row-acts {

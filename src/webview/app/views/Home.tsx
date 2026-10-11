@@ -1,3 +1,4 @@
+import { signal } from "@preact/signals";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Session } from "../api";
 import { postToHost } from "../host";
@@ -43,6 +44,7 @@ import {
   sessionsNext,
   sessionStatus,
   setProjectColor,
+  setSendError,
   shareSession,
   shareSupported,
   tombstones,
@@ -50,6 +52,53 @@ import {
 } from "../store";
 import { baseName, parentName, tileFor } from "../tile";
 import { useArm } from "../useArm";
+
+// --- Home multiselect: pick many rows, delete many at once ---
+// Ctrl+Click (or ⌘) toggles one row; Shift+Click works the span from
+// the anchor row, its direction read off the anchor's own state: a
+// picked anchor adds the span (adjacent blocks merge into one), an
+// unpicked anchor removes it — one rule gives select-many and
+// unselect-many, and repeating a click never flips anything. Plain
+// clicks keep the row's own action (open the session / filter the
+// project) and a click landing on no row drops the picks. Picks are
+// exclusive: sessions or projects, never both. Module-level signals: a
+// trip into a session tab keeps the picks.
+const pickedSessions = signal<Set<string>>(new Set());
+const pickedDirs = signal<Set<string>>(new Set());
+let anchorSession: string | undefined;
+let anchorDir: string | undefined;
+
+const isPickClick = (e: MouseEvent) =>
+  e.ctrlKey || e.metaKey || e.shiftKey;
+
+function pickToggle(
+  order: readonly string[],
+  picked: ReadonlySet<string>,
+  anchor: string | undefined,
+  id: string,
+  range: boolean,
+): { picked: Set<string>; anchor: string | undefined } {
+  const next = new Set(picked);
+  const to = order.indexOf(id);
+  if (to < 0) return { picked: next, anchor };
+  if (!range) {
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return { picked: next, anchor: id };
+  }
+  if (anchor === undefined || order.indexOf(anchor) < 0) {
+    next.add(id);
+    return { picked: next, anchor: id };
+  }
+  const from = order.indexOf(anchor);
+  const add = next.has(anchor);
+  for (let i = Math.min(from, to); i <= Math.max(from, to); i++) {
+    const x = order[i];
+    if (add) next.add(x);
+    else next.delete(x);
+  }
+  return { picked: next, anchor };
+}
 
 // "Today" / "Yesterday" / locale date for a session row's group header.
 function dayLabel(ts: number): string {
@@ -140,6 +189,84 @@ export function Home() {
     else groups.push({ label, rows: [s] });
   }
 
+  // Picks among the rows still listed — a pick whose row left the list
+  // (deleted elsewhere, or filtered away by the search) reads as gone,
+  // and every toggle rebuilds from this view so ghosts never resurrect.
+  const rowIds = rows.map((s) => s.id);
+  const rowIdSet = new Set(rowIds);
+  const pickedSess = new Set(
+    [...pickedSessions.value].filter((id) => rowIdSet.has(id)),
+  );
+  const dirSet = new Set(dirList);
+  const pickedProj = new Set(
+    [...pickedDirs.value].filter((d) => dirSet.has(d)),
+  );
+
+  const [confirming, setConfirming] = useState<
+    "sessions" | "projects" | undefined
+  >(undefined);
+  const [bulk, setBulk] = useState<
+    { done: number; total: number } | undefined
+  >(undefined);
+
+  const pickSession = (id: string, e: MouseEvent) => {
+    const r = pickToggle(rowIds, pickedSess, anchorSession, id, e.shiftKey);
+    pickedSessions.value = r.picked;
+    anchorSession = r.anchor;
+    // Sessions or projects, never both: starting one drops the other.
+    if (r.picked.size > 0) {
+      pickedDirs.value = new Set();
+      anchorDir = undefined;
+    }
+  };
+  const pickProject = (dir: string, e: MouseEvent) => {
+    const r = pickToggle(dirList, pickedProj, anchorDir, dir, e.shiftKey);
+    pickedDirs.value = r.picked;
+    anchorDir = r.anchor;
+    if (r.picked.size > 0) {
+      pickedSessions.value = new Set();
+      anchorSession = undefined;
+    }
+  };
+  const clearPicks = () => {
+    pickedSessions.value = new Set();
+    pickedDirs.value = new Set();
+    anchorSession = anchorDir = undefined;
+  };
+  const deletePickedSessions = async () => {
+    const ids = [...pickedSess];
+    setConfirming(undefined);
+    pickedSessions.value = new Set();
+    anchorSession = undefined;
+    setBulk({ done: 0, total: ids.length });
+    let done = 0;
+    for (const id of ids) if (await deleteSession(id)) done += 1;
+    setBulk(undefined);
+    if (done < ids.length)
+      setSendError(
+        `Deleted ${done} of ${ids.length} sessions — the rest were rejected by the server.`,
+      );
+  };
+  const deletePickedProjects = async () => {
+    const dirs = [...pickedProj];
+    setConfirming(undefined);
+    pickedDirs.value = new Set();
+    anchorDir = undefined;
+    // Sequential like the single purge: each row walks its own d/t note.
+    for (const d of dirs) await purgeProject(d);
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setConfirming(undefined);
+      if (pickedSessions.value.size > 0 || pickedDirs.value.size > 0)
+        clearPicks();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // A page can hold nothing listable (sub-agent and blank sessions never
   // show; a project filter hides the rest), while the project's real
   // sessions sit pages deep. Walk older pages while nothing is visible;
@@ -150,7 +277,20 @@ export function Home() {
   }, [rows.length, sessionsNext.value]);
 
   return (
-    <div class="home">
+    <div
+      class="home"
+      onClick={(e) => {
+        // A click landing on no row, dock, or dialog drops the picks —
+        // except the list's own controls (Load older sessions), which
+        // grow the list the picks live in.
+        if (
+          !(e.target as Element).closest(
+            ".sess-row, .proj-row, .pick-dock, .confirm-backdrop, .load-older",
+          )
+        )
+          clearPicks();
+      }}
+    >
       {/* Session-scoped errors render in their session; a for-less error
           (project purge) has no session — Home is its only surface, so a
           failed delete never reads as a silent no-op. */}
@@ -167,6 +307,8 @@ export function Home() {
               count={rowsByDir.get(dir)?.length ?? 0}
               disambig={disambig(dir)}
               selected={filter === dir}
+              picked={pickedProj.has(dir)}
+              onPick={(e) => pickProject(dir, e)}
               onSelect={() =>
                 (homeFilter.value = filter === dir ? undefined : dir)
               }
@@ -219,7 +361,12 @@ export function Home() {
                   )}
                 </div>
                 {g.rows.map((s) => (
-                  <SessionRow key={s.id} s={s} />
+                  <SessionRow
+                    key={s.id}
+                    s={s}
+                    picked={pickedSess.has(s.id)}
+                    onPick={(e) => pickSession(s.id, e)}
+                  />
                 ))}
               </section>
             ))
@@ -231,6 +378,52 @@ export function Home() {
           )}
         </div>
       </div>
+      {(pickedSess.size > 0 || pickedProj.size > 0 || bulk !== undefined) && (
+        <div class="pick-dock">
+          {bulk ? (
+            <span class="pick-note">
+              Deleting {bulk.done} of {bulk.total}…
+            </span>
+          ) : (
+            <button
+              class="pick-delete"
+              onClick={() =>
+                setConfirming(pickedProj.size > 0 ? "projects" : "sessions")
+              }
+            >
+              <TrashIcon />
+              Delete{" "}
+              {pickedProj.size > 0
+                ? `${pickedProj.size} project${pickedProj.size === 1 ? "" : "s"}`
+                : `${pickedSess.size} session${pickedSess.size === 1 ? "" : "s"}`}
+            </button>
+          )}
+        </div>
+      )}
+      {confirming !== undefined && (
+        <div class="confirm-backdrop" onClick={() => setConfirming(undefined)}>
+          <div class="confirm" role="dialog" onClick={(e) => e.stopPropagation()}>
+            <div class="confirm-text">
+              {confirming === "sessions"
+                ? `Delete ${pickedSess.size} session${pickedSess.size === 1 ? "" : "s"}? They cannot be recovered.`
+                : `Delete ${pickedProj.size} project${pickedProj.size === 1 ? "" : "s"} and all their sessions? The sessions cannot be recovered.`}
+            </div>
+            <div class="confirm-actions">
+              <button
+                class="confirm-danger"
+                onClick={() =>
+                  void (confirming === "sessions"
+                    ? deletePickedSessions()
+                    : deletePickedProjects())
+                }
+              >
+                Delete
+              </button>
+              <button onClick={() => setConfirming(undefined)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -240,6 +433,8 @@ function ProjectRow(props: {
   count: number;
   disambig?: string;
   selected: boolean;
+  picked?: boolean;
+  onPick?: (e: MouseEvent) => void;
   onSelect: () => void;
 }) {
   const isCurrent = currentDir.value === props.dir;
@@ -262,7 +457,15 @@ function ProjectRow(props: {
   };
 
   return (
-    <div class={props.selected ? "proj-row selected" : "proj-row"}>
+    <div
+      class={[
+        "proj-row",
+        props.selected && "selected",
+        props.picked && "picked",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
       {editing ? (
         <RenameInput
           class="rename-input"
@@ -272,9 +475,26 @@ function ProjectRow(props: {
         />
       ) : (
         <>
-          <button class="proj-open" title={props.dir} onClick={props.onSelect}>
+          <button
+            class="proj-open"
+            title={props.dir}
+            // Shift+Click extends the browser's text selection on
+            // mousedown — click's preventDefault is too late for it.
+            onMouseDown={(e) => {
+              if (isPickClick(e)) e.preventDefault();
+            }}
+            onClick={(e) => {
+              // A modified click picks instead of filtering.
+              if (isPickClick(e)) {
+                e.preventDefault();
+                props.onPick?.(e);
+                return;
+              }
+              props.onSelect();
+            }}
+          >
             <span class="tile" style={{ background: tile.color }}>
-              {tile.letter}
+              {props.picked ? <CheckIcon /> : tile.letter}
             </span>
             <span class="name">
               {name}
@@ -363,7 +583,11 @@ function ProjectRow(props: {
   );
 }
 
-function SessionRow(props: { s: Session }) {
+function SessionRow(props: {
+  s: Session;
+  picked?: boolean;
+  onPick?: (e: MouseEvent) => void;
+}) {
   const [editing, setEditing] = useState(false);
   const [armed, arm, disarm] = useArm();
   // Copy feedback: the glyph flips to a green check for a beat (the
@@ -398,7 +622,7 @@ function SessionRow(props: { s: Session }) {
   };
 
   return (
-    <div class="sess-row">
+    <div class={props.picked ? "sess-row picked" : "sess-row"}>
       {editing ? (
         <RenameInput
           class="rename-input"
@@ -410,11 +634,24 @@ function SessionRow(props: { s: Session }) {
         <>
           <button
             class="sess-open"
-            onClick={open}
+            // Shift+Click extends the browser's text selection on
+            // mousedown — click's preventDefault is too late for it.
+            onMouseDown={(e) => {
+              if (isPickClick(e)) e.preventDefault();
+            }}
+            onClick={(e) => {
+              // A modified click picks instead of opening.
+              if (isPickClick(e)) {
+                e.preventDefault();
+                props.onPick?.(e);
+                return;
+              }
+              open();
+            }}
             title={formatSessionTimes(s)}
           >
             <span class="tile" style={{ background: tile.color }}>
-              {tile.letter}
+              {props.picked ? <CheckIcon /> : tile.letter}
             </span>
             <span class="texts">
               <span class="sess-title">{sessionTitle(s, s.id)}</span>

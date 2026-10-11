@@ -22,7 +22,10 @@ HTTP/SSE.
   session tabs.
 - **Projects × sessions home** - every session of every project on one
   screen. Projects rename in place, and sessions from other folders open
-  deep-linked.
+  deep-linked. Ctrl/⌘+Click and Shift+Click pick rows for a bulk delete
+  through one confirm - sessions or whole projects, never both - from a
+  single floating Delete at the bottom; Esc or a click off the rows drops
+  the picks.
 - **Share a session** - publish a conversation as a public link from the
   tab menu or a home row; the URL is copied to the clipboard and shown in
   the context panel. Stop sharing takes it private again. opencode v1
