@@ -271,10 +271,15 @@ export function Home() {
   // show; a project filter hides the rest), while the project's real
   // sessions sit pages deep. Walk older pages while nothing is visible;
   // the walk stops at the first visible row or an exhausted cursor, and a
-  // failed fetch leaves the button below as the manual retry.
+  // failed fetch leaves the button below as the manual retry. The gate
+  // is computed in the render and passed as the dep — rows.length read
+  // live inside the effect raced the boot, where the mount render's
+  // stale closure (0 rows) met the first page's fresh cursor and pulled
+  // page 2 eagerly.
+  const walkOlder = rows.length === 0 && sessionsNext.value !== undefined;
   useEffect(() => {
-    if (rows.length === 0 && sessionsNext.value) void loadMoreSessions();
-  }, [rows.length, sessionsNext.value]);
+    if (walkOlder) void loadMoreSessions();
+  }, [walkOlder]);
 
   return (
     <div
