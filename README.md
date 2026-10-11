@@ -51,6 +51,12 @@ HTTP/SSE.
   streams while it runs, with a stop control to kill it; a row left running
   by a server restart settles with a note instead of spinning forever
   (opencode 2.x).
+- **Dead turns don't haunt the transcript** - a turn that dies without its
+  final events (an interrupt racing a tool call, a server restart) leaves
+  its last command row "running" in the v2 store forever; the UI reads such
+  rows as settled the moment the session is idle, so they show no phantom
+  progress and never re-animate with a minutes-old timer when the next
+  prompt starts (opencode 2.x).
 - **Redo a revert** - a reverted turn folds out of the transcript until the
   next prompt commits the cut; the fold line's Redo restores it (opencode's
   `/redo`).

@@ -29,6 +29,14 @@ const stalled = process.env.FAKE_API_STALLED === "1";
 // specs) plus a durable running row whose shell no server holds (the
 // restart-healing spec). See the registry after the SSE plumbing.
 const shellMode = process.env.FAKE_API_SHELL === "1";
+// FAKE_API_GHOST=1 seeds a dead turn's fingerprint: the last assistant
+// row holds a bash tool part still status "running" with an old start
+// stamp (what the v2 store keeps when a turn dies without terminal tool
+// events — an interrupt, a server restart), while the status endpoints
+// serve the session idle. The UI must read the row as settled and must
+// not re-animate it (running visuals, a large elapsed) when the next
+// prompt flips the session busy.
+const ghost = process.env.FAKE_API_GHOST === "1";
 
 // --- deterministic filler text (tall enough to overflow any viewport) ---
 const SENTENCES = [
@@ -335,6 +343,42 @@ if (shellMode)
     command: "cargo build",
     time: { created: T0 + 2_000 },
   });
+
+// FAKE_API_GHOST's dead turn: a trailing user prompt + assistant row
+// whose only content is a still-"running" bash part started long ago
+// (the durable shape a killed turn leaves behind — wire-verified against
+// a real 2.0.26 store). The session serves idle.
+if (ghost) {
+  const gu = T0 + SEED_TURNS * 8_000;
+  const ga = gu + 1_500;
+  const gStart = Date.now() - 15 * 60_000;
+  seedRows.push({
+    id: "msg_uguost",
+    type: "user",
+    time: { created: gu, completed: gu + 200 },
+    text: "Run the watch task",
+  });
+  seedRows.push({
+    id: "msg_aghost",
+    type: "assistant",
+    time: { created: ga },
+    agent: "build",
+    model: { id: "fake-model", providerID: "fake" },
+    content: [
+      {
+        type: "tool",
+        id: "pt_tghost",
+        name: "bash",
+        time: { created: gStart, ran: gStart },
+        state: {
+          status: "running",
+          input: { command: "npm run watch" },
+          metadata: { output: "" },
+        },
+      },
+    ],
+  });
+}
 
 const sessionRow = {
   id: SESSION_ID,

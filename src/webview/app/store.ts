@@ -1658,6 +1658,37 @@ function scheduleRing(sessionID: string): void {
 // the settled tail must not re-animate (dot, Thinking label, footer).
 const idleTails: Record<string, string> = {};
 
+// An idle session has no live tools: a part still marked running or
+// pending belongs to a turn that died without its terminal events (an
+// interrupt racing the tool call, a server restart) — the v2 store keeps
+// it "running" forever, and the row would spin dot-less with no timer,
+// then re-animate off its old stamps when the next prompt flips the
+// session busy. Settle it; a still-alive turn re-marks its parts on the
+// next tool event. Native shell rows are exempt — the tail poller owns
+// settling those, with its own note.
+function settleDeadTools(sessionID: string): void {
+  const unsettled = (p: Part): p is ToolPart =>
+    isTool(p) &&
+    p.state?.metadata?.nativeShell !== true &&
+    (p.state?.status === "running" || p.state?.status === "pending");
+  const rows = messagesBySession.value.get(sessionID);
+  if (!rows?.some((m) => m.parts.some(unsettled))) return;
+  mutateMessages(sessionID, (list) =>
+    list.map((m) =>
+      m.parts.some(unsettled)
+        ? {
+            ...m,
+            parts: m.parts.map((p) =>
+              unsettled(p)
+                ? { ...p, state: { ...p.state, status: "completed" } }
+                : p,
+            ),
+          }
+        : m,
+    ),
+  );
+}
+
 function setIdle(sessionID: string): void {
   const tail = [...(messagesBySession.value.get(sessionID) ?? [])]
     .reverse()
@@ -1668,6 +1699,7 @@ function setIdle(sessionID: string): void {
     ...sessionStatus.value,
     [sessionID]: { type: "idle" },
   };
+  settleDeadTools(sessionID);
   if (prev !== "busy" && prev !== "retry") return;
   const s = sessions.value.find((x) => x.id === sessionID);
   if (s && isSubagentSession(s)) return;
@@ -3135,6 +3167,12 @@ export function hostMessage(msg: unknown) {
 // pre-window remainder in olderPool, both behind "Load older messages".
 const loadingMessages = new Set<string>();
 
+// Whether the server's busy-only status map has been adopted at least
+// once: before it has, a session's absence from sessionStatus is unknown,
+// not idle — settling dead tools on it would kill live parts in the boot
+// race (messages can resolve before the status pull).
+let statusesAdopted = false;
+
 // Adopt the server's status map. It is maintained by both prompt paths, so
 // it is truth for every session; a stale busy (stream events missed while
 // the connection looked healthy) survives tab switches because only
@@ -3145,6 +3183,12 @@ export async function refreshStatuses(): Promise<void> {
   const statuses = await fetchSessionStatus();
   if (!statuses) return;
   sessionStatus.value = statuses;
+  statusesAdopted = true;
+  // Absence from the busy-only map is idle truth (the ring's rule): a
+  // session with no entry is as idle as one the map states — both may
+  // hold parts of a turn that died without terminal events.
+  for (const sid of messagesBySession.value.keys())
+    if (!statuses[sid]) settleDeadTools(sid);
   // Idle truth retires every echo but a queued turn's (it rides the next
   // turn) and a steered POST's (its row lands with the next turn): a
   // stale echo would pin the session's busy backstop off its row pulls
@@ -3395,6 +3439,11 @@ export async function refreshMessages(id: string): Promise<void> {
         (m) => m.info.role === "assistant",
       )?.info.id;
       if (tail) idleTails[id] = tail;
+      // The durable store keeps a dead turn's tool parts "running"
+      // forever — the sweep must re-apply over every fetch, or each
+      // refresh resurrects what the idle settled. Gated on an adopted
+      // map: before one, absence means unknown, not idle.
+      if (statusesAdopted) settleDeadTools(id);
     }
   } finally {
     loadingMessages.delete(id);
