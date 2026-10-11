@@ -421,10 +421,21 @@ export const sendError = signal<{ for?: string; text: string } | undefined>(
 function withReason(text: string, reason?: string): string {
   return reason ? `${text}: ${reason}.` : `${text}.`;
 }
+// An error is transient state: the next attempt replaces it, and an
+// untouched one expires — a banner keyed to a session reads as stale once
+// its turn is long dead (revisit hours later, it hangs over newer turns).
+// 60s: enough to read and copy a long reason; 30s can cut a reader off
+// mid-selection.
+const SEND_ERROR_TTL_MS = 60_000;
+let sendErrorTimer: number | undefined;
 export function setSendError(
   text: string | undefined,
   forSession?: string,
 ): void {
+  if (sendErrorTimer !== undefined) {
+    clearTimeout(sendErrorTimer);
+    sendErrorTimer = undefined;
+  }
   sendError.value =
     text === undefined
       ? undefined
@@ -434,6 +445,12 @@ export function setSendError(
             (route.value.view === "session" ? route.value.id : undefined),
           text,
         };
+  if (sendError.value !== undefined) {
+    sendErrorTimer = window.setTimeout(() => {
+      sendError.value = undefined;
+      sendErrorTimer = undefined;
+    }, SEND_ERROR_TTL_MS);
+  }
 }
 
 // Context/cost ring. stepUsage holds the freshest streaming step's usage

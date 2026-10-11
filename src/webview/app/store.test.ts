@@ -2284,6 +2284,20 @@ describe("sendPrompt", () => {
     );
   });
 
+  it("an untouched error expires", async () => {
+    const sid = "sp3b";
+    open(sid, []);
+    onApi((call) =>
+      call.path.startsWith(`/session/${sid}/prompt_async`)
+        ? API_FAIL
+        : undefined,
+    );
+    await sendPrompt(sid, "hi");
+    assert.equal(sendError.value?.text, "The message could not be sent.");
+    fireExact(60_000);
+    assert.equal(sendError.value, undefined);
+  });
+
   it("an idle during the POST flight keeps the echo until its row lands", async () => {
     const sid = "sp4";
     open(sid, []);

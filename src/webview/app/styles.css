@@ -1034,7 +1034,9 @@ body {
 }
 
 .chat-bottom .composer-card,
-.chat-bottom .dock {
+.chat-bottom .dock,
+/* The error line is text: selectable, so the reason can be copied. */
+.chat-bottom .send-error {
   pointer-events: auto;
 }
 
@@ -1321,14 +1323,16 @@ body {
 
 /* In the floating chrome, right above the composer (Claude Code's error
    line): the in-flow spot rested inside the fade band, so a short panel
-   washed the error out exactly when it mattered. Same grid as the docks,
-   no backdrop — the chrome paints over the gradient, and a solid band
-   across it read as a seam. */
+   washed the error out exactly when it mattered. Centered over the input
+   — the docks' 744px grid and the composer's 680px card are concentric,
+   so text-align centers on the same axis. No backdrop: the chrome paints
+   over the gradient, and a solid band across it read as a seam. */
 .chat-bottom .send-error {
   box-sizing: border-box;
   max-width: 744px;
   margin: 0 auto;
   padding: 0 32px 6px;
+  text-align: center;
 }
 
 /* Home's banner for session-less errors (the project purge): inset to the
