@@ -3047,6 +3047,28 @@ a.tool-pill {
   border-color: var(--vscode-errorForeground);
 }
 
+/* Stop a running native shell command from its tool row: kills the
+   process server-side; the row settles on the ended event. */
+.tool-stop {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  margin-left: auto;
+  border: 1px solid var(--oc-border);
+  border-radius: 4px;
+  background: none;
+  color: var(--vscode-errorForeground);
+  cursor: pointer;
+}
+
+.tool-stop:hover {
+  border-color: var(--vscode-errorForeground);
+}
+
 .subagent-chip.link {
   cursor: pointer;
 }

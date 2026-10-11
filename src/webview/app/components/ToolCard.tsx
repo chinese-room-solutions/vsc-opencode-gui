@@ -16,6 +16,7 @@ import {
   sessionWorking,
   sessions,
   stopSession,
+  stopShellRow,
 } from "../store";
 import { silenceLabel } from "../stuck";
 import { CheckIcon, CopyIcon, PixelMark, PixelSpinner, StopIcon } from "../icons";
@@ -461,6 +462,23 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
             <span class="diff-add">+{stat.add}</span>
             <span class="diff-del">-{stat.del}</span>
           </span>
+        )}
+        {/* A native shell row (a command run in the session's directory,
+            not by the agent) runs outside any model turn — its stop kills
+            the command itself, not a session turn. */}
+        {state?.status === "running" && state?.metadata?.nativeShell === true && (
+          <button
+            type="button"
+            class="tool-stop"
+            title="Stop the command"
+            aria-label="Stop the command"
+            onClick={(e) => {
+              e.stopPropagation();
+              void stopShellRow(part.id);
+            }}
+          >
+            <StopIcon />
+          </button>
         )}
       </div>
       {open && (

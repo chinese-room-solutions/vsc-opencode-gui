@@ -20,6 +20,15 @@ const SEED_TURNS = 12;
 // (vouching for child ses_child_1) and the status endpoints serve the
 // parent busy — the fixture for sendPrompt's auto-background release.
 const blocked = process.env.FAKE_API_BLOCKED === "1";
+// FAKE_API_STALLED=1 seeds the live turn with a "running" edit whose
+// input never arrived — the wire shape a stalled provider stream leaves
+// (v2 tool args stream as ephemeral deltas; the durable row keeps {}
+// until they close) — and the status endpoints serve the session busy.
+const stalled = process.env.FAKE_API_STALLED === "1";
+// FAKE_API_SHELL=1 seeds a running native shell row (live tail + stop
+// specs) plus a durable running row whose shell no server holds (the
+// restart-healing spec). See the registry after the SSE plumbing.
+const shellMode = process.env.FAKE_API_SHELL === "1";
 
 // --- deterministic filler text (tall enough to overflow any viewport) ---
 const SENTENCES = [
@@ -301,6 +310,18 @@ const lastSeedAssistant = `msg_a${SEED_TURNS}`;
 const lastSeedPart = `pt_a${SEED_TURNS}`;
 const lastSeedText = filler(SEED_TURNS * 11, 6);
 
+// FAKE_API_SHELL's restart-healing half: a durable running shell row
+// whose shell id no registry ever held — what a server restart leaves.
+if (shellMode)
+  seedRows.push({
+    id: "msg_shell_gone",
+    type: "shell",
+    status: "running",
+    shellID: "shl_gone_1",
+    command: "cargo build",
+    time: { created: T0 + 2_000 },
+  });
+
 const sessionRow = {
   id: SESSION_ID,
   title: "Seeded long session",
@@ -378,6 +399,25 @@ setInterval(() => {
   for (const res of v2Clients) res.write(": ping\n\n");
   for (const res of v1Clients) res.write(": ping\n\n");
 }, 15_000).unref();
+
+// --- FAKE_API_SHELL registry ---
+// The live shell reveals one chunk per output poll (byte-cursor semantics
+// on the concatenated text), mirroring a command whose output grows. A
+// kill freezes it and emits the ended frame; unknown ids 404.
+const shellChunks = ["watching for changes...\n", "rebuilt src/main.ts\n"];
+const liveShell = { id: "shl_live_1", command: "npm run watch", status: "running", served: 0 };
+const shellDeletes = [];
+const shellText = () => shellChunks.slice(0, liveShell.served).join("");
+const shellStartedFrame = () =>
+  writeFrame(v2Clients, {
+    id: "evt_shell_live",
+    type: "session.shell.started",
+    data: {
+      sessionID: SESSION_ID,
+      timestamp: Date.now(),
+      shell: { id: liveShell.id, command: liveShell.command, status: "running" },
+    },
+  });
 
 // --- synthetic streaming ---
 let streamCount = 0;
@@ -640,6 +680,7 @@ const server = http.createServer(async (req, res) => {
   if (method === "GET" && path === "/api/event") {
     res.writeHead(200, { ...CORS, "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
     v2Clients.add(res);
+    if (shellMode) shellStartedFrame();
     req.on("close", () => v2Clients.delete(res));
     return;
   }
@@ -714,6 +755,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (method === "GET" && path === "/__control/background") {
       json(res, 200, { calls: backgroundCalls });
+      return;
+    }
+    if (method === "GET" && path === "/__control/shell") {
+      json(res, 200, { deletes: shellDeletes });
       return;
     }
     if (method === "GET" && path === "/__control/prompts") {
@@ -838,6 +883,39 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     let m;
+    // v2 single-session GET: fetchSession reads it to tell a restored
+    // route a dead id (404 = missing) — serve the seeded row like the
+    // real server would.
+    if ((m = path.match(/^\/api\/session\/([^/]+)$/)) && m[1] !== "active") {
+      json(res, 200, { data: sessionRow });
+      return;
+    }
+    if (path === "/api/shell") {
+      json(res, 200, {
+        data:
+          liveShell.status === "running"
+            ? [{ id: liveShell.id, command: liveShell.command, status: "running" }]
+            : [],
+      });
+      return;
+    }
+    if ((m = path.match(/^\/api\/shell\/([^/]+)\/output$/))) {
+      if (m[1] !== liveShell.id) {
+        json(res, 404, { error: `no shell ${m[1]}` });
+        return;
+      }
+      if (liveShell.status === "running")
+        liveShell.served = Math.min(liveShell.served + 1, shellChunks.length);
+      const full = shellText();
+      const cursor = Math.max(
+        0,
+        Math.min(Number(url.searchParams.get("cursor") ?? "0") || 0, full.length),
+      );
+      json(res, 200, {
+        data: { output: full.slice(cursor), cursor: full.length, size: full.length, truncated: false },
+      });
+      return;
+    }
     if ((m = path.match(/^\/api\/session\/([^/]+)\/message$/))) {
       // v2 page: {data}, newest first; short page proves the transcript complete.
       json(res, 200, { data: [...seedRows, ...stepsRows].sort((a, b) => b.time.created - a.time.created), cursor: {} });
@@ -900,6 +978,34 @@ const server = http.createServer(async (req, res) => {
     }
     json(res, 404, { error: `no route ${path}` });
     return;
+  }
+
+  if (method === "DELETE") {
+    let m;
+    if ((m = path.match(/^\/api\/shell\/([^/]+)\/?$/))) {
+      shellDeletes.push({ id: m[1], at: Date.now() });
+      if (m[1] === liveShell.id && liveShell.status === "running") {
+        liveShell.status = "killed";
+        writeFrame(v2Clients, {
+          id: "evt_shell_live_end",
+          type: "session.shell.ended",
+          data: {
+            sessionID: SESSION_ID,
+            timestamp: Date.now(),
+            shell: {
+              id: liveShell.id,
+              command: liveShell.command,
+              status: "killed",
+              time: { completed: Date.now() },
+            },
+            output: shellText(),
+          },
+        });
+      }
+      res.writeHead(204, CORS);
+      res.end();
+      return;
+    }
   }
 
   if (method === "PATCH" || method === "DELETE") {

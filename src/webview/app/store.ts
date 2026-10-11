@@ -66,6 +66,8 @@ import {
   isText,
   isTool,
   isTaskTool,
+  fetchShellOutput,
+  stopShellRun,
   clampPartText,
   clampToolState,
   forgetTruncatedParts,
@@ -2304,6 +2306,7 @@ function applyEvent(event: ServerEvent): void {
         tool: "bash",
         state: {
           status: "running",
+          metadata: { nativeShell: true },
           ...(shell.command !== undefined
             ? { input: { command: shell.command } }
             : {}),
@@ -2315,6 +2318,7 @@ function applyEvent(event: ServerEvent): void {
       const shell = data.shell;
       const output = data.output;
       if (!shell?.id) break;
+      shellCursors.delete(shell.id);
       const row = (messagesBySession.value.get(sid) ?? []).find((m) =>
         m.parts.some((p) => p.id === shell.id),
       );
@@ -2592,6 +2596,72 @@ function patchToolState(
 
 let disconnectEvents: (() => void) | undefined;
 
+// --- Native shell rows: live output tail, stop, restart healing ---
+// A native row (a command run in the session's directory, not by the
+// agent) runs outside any model turn — nothing streams its output. Poll
+// the server's byte-cursor tail and append into the row; a 404 means the
+// shell is gone (exited and evicted, or dead with a server restart), and
+// the row settles with a note instead of spinning forever. The ended
+// event remains the authority when it arrives.
+const shellCursors = new Map<string, number>();
+let shellTailing = false;
+function tailNativeShells(): void {
+  if (shellTailing) return;
+  const targets: { sid: string; rowID: string; shellID: string; cursor: number }[] = [];
+  for (const [sid, rows] of messagesBySession.value)
+    for (const m of rows)
+      for (const p of m.parts)
+        if (
+          isTool(p) &&
+          p.state?.status === "running" &&
+          p.state.metadata?.nativeShell === true
+        )
+          targets.push({
+            sid,
+            rowID: m.info.id,
+            shellID: p.id,
+            cursor: shellCursors.get(p.id) ?? 0,
+          });
+  if (targets.length === 0) return;
+  shellTailing = true;
+  void (async () => {
+    try {
+      const dir = meta("opencode-workspace");
+      for (const t of targets) {
+        const res = await fetchShellOutput(t.shellID, t.cursor, dir);
+        if (res === undefined) continue;
+        if (res.gone) {
+          shellCursors.delete(t.shellID);
+          patchToolState(t.sid, t.rowID, t.shellID, (s) => ({
+            ...s,
+            status: "completed",
+            output: `${s.output ?? ""}${s.output ? "\n\n" : ""}[The command is no longer running on the server.]`,
+            time: { ...s.time, end: Date.now() },
+          }));
+          continue;
+        }
+        if (res.cursor !== undefined) shellCursors.set(t.shellID, res.cursor);
+        const chunk = res.output;
+        if (chunk)
+          patchToolState(t.sid, t.rowID, t.shellID, (s) => ({
+            ...s,
+            output: (s.output ?? "") + chunk,
+          }));
+      }
+    } finally {
+      shellTailing = false;
+    }
+  })();
+}
+
+// Stop a running native command from its card. The server kills the
+// process; the ended event settles the row (or the next tail poll does,
+// if the event is lost).
+export async function stopShellRow(shellID: string): Promise<void> {
+  const ok = await stopShellRun(shellID, meta("opencode-workspace"));
+  if (!ok) setSendError("The server refused to stop the command.");
+}
+
 // Frames queue and a short timer drains them in order. Applied one per
 // arrival, every frame paid a full store mutation plus a render pass —
 // three parallel compactions stream deltas faster than the renderer could
@@ -2660,6 +2730,8 @@ export function init(): void {
   if (!meta("opencode-origin") || disconnectEvents) return;
   void refreshBase();
   void validateRestored();
+  // Native shell rows stream nothing on their own — poll their tails.
+  window.setInterval(tailNativeShells, 1500);
   // A reconnect silently skips whatever streamed during the gap — a
   // turn's end can be missed, wedging the view on "Waiting for the
   // model…". Pull truth again after any drop→connect cycle (either

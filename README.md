@@ -46,6 +46,11 @@ HTTP/SSE.
 - **Steer mid-turn** - a prompt sent while the agent works lands at the next
   step boundary. Prompts still waiting in the queue can be reverted (hover
   the bubble, Revert) - the text returns to the composer unposted.
+- **Shell commands live in the transcript** - a command run in the session
+  (`!` in the TUI, or the shell API) renders as its own row whose output
+  streams while it runs, with a stop control to kill it; a row left running
+  by a server restart settles with a note instead of spinning forever
+  (opencode 2.x).
 - **Redo a revert** - a reverted turn folds out of the transcript until the
   next prompt commits the cut; the fold line's Redo restores it (opencode's
   `/redo`).

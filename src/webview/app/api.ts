@@ -1320,9 +1320,13 @@ export async function fetchMessages(
       ] satisfies { info: Message; parts: Part[] }[];
     }
     // A native shell run renders as the bash tool row the live path
-    // builds (the SSE translation shapes the same).
+    // builds (the SSE translation shapes the same). A row the server
+    // left "running" (its shell died with a restart) stays running —
+    // the store's tail poller owns settling it — and every native row
+    // carries the marker that tells it apart from agent bash calls.
     if (r.type === "shell") {
       const failed = r.status === "failed";
+      const running = r.status === "running";
       return [
         {
           info: { id: r.id, role: "assistant", time: r.time },
@@ -1334,14 +1338,15 @@ export async function fetchMessages(
               type: "tool",
               tool: "bash",
               state: {
-                status: failed ? "error" : "completed",
+                status: running ? "running" : failed ? "error" : "completed",
+                metadata: { nativeShell: true },
                 ...(r.command !== undefined ? { input: { command: r.command } } : {}),
                 ...(r.output !== undefined
                   ? failed
                     ? { error: r.output, output: r.output }
                     : { output: r.output }
                   : {}),
-                time: { start: r.time.created, end: r.time.completed },
+                time: { start: r.time.created, end: running ? undefined : r.time.completed },
               },
             },
           ],
@@ -2294,6 +2299,55 @@ export async function deleteSession(
         : `/session/${id}${dirQuery(directory)}`,
     ))?.ok === true
   );
+}
+
+// --- v2 native shells: output tail and kill (v1 has no shell API) ---
+
+// GET /api/shell/{id}/output?cursor=<bytes> — the chunk after the cursor,
+// the advanced cursor, and the total size. `gone` means the server no
+// longer knows the shell (404): it exited and was evicted, or died with a
+// restart. Anything else that fails is transient — the caller retries.
+export interface ShellOutput {
+  gone: boolean;
+  output?: string;
+  cursor?: number;
+}
+export async function fetchShellOutput(
+  id: string,
+  cursor: number,
+  directory?: string,
+): Promise<ShellOutput | undefined> {
+  if (serverDialect !== "v2") return undefined;
+  const qs = new URLSearchParams({ cursor: String(cursor) });
+  if (directory) qs.set("location[directory]", directory);
+  const res = await apiRequest("GET", `/api/shell/${id}/output?${qs}`);
+  if ((res.error ?? "").startsWith("HTTP 404")) return { gone: true };
+  if (!res.ok || res.json === undefined) return undefined;
+  const body = res.json as {
+    data?: { output?: unknown; cursor?: unknown };
+    output?: unknown;
+    cursor?: unknown;
+  };
+  const chunk = body.data?.output ?? body.output;
+  const next = body.data?.cursor ?? body.cursor;
+  return {
+    gone: false,
+    ...(typeof chunk === "string" && chunk ? { output: chunk } : {}),
+    ...(typeof next === "number" ? { cursor: next } : {}),
+  };
+}
+
+// DELETE /api/shell/{id} — 204; the server kills the process.
+export async function stopShellRun(
+  id: string,
+  directory?: string,
+): Promise<boolean> {
+  if (serverDialect !== "v2") return false;
+  const qs = directory
+    ? `?location%5Bdirectory%5D=${encodeURIComponent(directory)}`
+    : "";
+  const res = await apiRequest("DELETE", `/api/shell/${id}${qs}`);
+  return res.ok;
 }
 
 // POST /session/{id}/share (v1) / POST /api/session/{id}/share (v2) —

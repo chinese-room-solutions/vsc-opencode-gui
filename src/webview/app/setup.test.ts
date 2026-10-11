@@ -66,7 +66,9 @@ interface Timer {
 }
 const timers = new Map<number, Timer>();
 let timerSeq = 0;
-let intervalFn: (() => void) | undefined;
+// Interval fns register into a set — stuck's 1s tick and the store's
+// native-shell tail both live here; tests drive them with a mocked clock.
+const intervalFns = new Set<() => void>();
 
 const documentStub = {
   querySelector(sel: string): { getAttribute: (n: string) => string } | null {
@@ -124,7 +126,7 @@ const windowStub = {
     timers.delete(id);
   },
   setInterval(fn: () => void) {
-    intervalFn = fn;
+    intervalFns.add(fn);
     return 0;
   },
 };
@@ -316,7 +318,7 @@ export function pendingTimers(): number {
 // stuck.ts registers its 1s tick through window.setInterval at import;
 // tests drive it manually with a mocked clock.
 export function runStuckTick(): void {
-  intervalFn?.();
+  for (const fn of intervalFns) fn();
 }
 
 export async function settle(turns = 3): Promise<void> {
