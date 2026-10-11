@@ -3431,15 +3431,13 @@ export async function refreshMessages(id: string): Promise<void> {
       }),
     );
     const cursors = new Map(messagesCursor.value);
-    // `older`: true = the tail proved older rows (asc walk not started),
-    // string = a started walk's continuation, undefined = complete. A
-    // refresh must not downgrade either: a covering fetch (sized to the
-    // rows on screen) proves "no more" where the default page said
-    // "maybe", but that proof flips with every new row — the button
-    // stays until a walk's own short page ends it.
+    // `older`: a string = the walk's continuation toward older rows,
+    // undefined = complete. A refresh must not downgrade: a covering
+    // fetch (sized to the rows on screen) proves "no more" where the
+    // default page said "maybe", but that proof flips with every new
+    // row — the button stays until a walk's own short page ends it.
     const prev = cursors.get(id);
-    const older =
-      typeof page?.older === "string" ? page.older : page?.older ? true : undefined;
+    const older = typeof page?.older === "string" ? page.older : undefined;
     cursors.set(id, older === undefined && prev !== undefined ? prev : older);
     messagesCursor.value = cursors;
     // An idle session's loaded tail is settled — record it, or a page that
@@ -3463,13 +3461,12 @@ export async function refreshMessages(id: string): Promise<void> {
   }
 }
 
-// The older-page state per session: true = the tail page proved older rows
-// exist (the asc walk hasn't started); a string = the walk's continuation
-// cursor; undefined means the transcript is complete. olderPool holds the
-// legacy rows held back below the display window (the legacy store is
-// unpaged — its whole bulk arrives on every refresh). hasOlder gates the
-// control.
-export const messagesCursor = signal<Map<string, string | true | undefined>>(
+// The older-page state per session: a string = the walk's continuation
+// cursor (toward older rows); undefined means the transcript is complete.
+// olderPool holds the legacy rows held back below the display window (the
+// legacy store is unpaged — its whole bulk arrives on every refresh).
+// hasOlder gates the control.
+export const messagesCursor = signal<Map<string, string | undefined>>(
   new Map(),
 );
 const olderPool = new Map<string, ChatMessage[]>();
@@ -3481,14 +3478,14 @@ export function hasOlder(id: string): boolean {
   );
 }
 
-// Prepend the next older page. The v2 endpoint walks older rows only
-// forward: page 1 is order=asc (from the transcript's start), then cursor
-// pages — dedupe drops what we already hold. Returns false when nothing
-// was added (empty page). A partial page already cleared the cursor in
+// Prepend the next older page: every page walks cursor.next — the desc
+// timeline's continuation toward older rows, contiguous with the window
+// (dedupe drops what we already hold). Returns false when nothing was
+// added (empty page). A partial page already cleared the cursor in
 // fetchMessages — the walk ends there, "Load older messages" with it.
 const loadingOlder = new Set<string>();
-// Per click. The server caps this at 400; the default page is 50, too
-// small to walk back through a long session.
+// Per click. The server rejects a limit above 200; the default page is
+// 50, too small to walk back through a long session.
 const OLDER_PAGE = 100;
 // Rows rendered on a cold open, parity with the server's page size.
 const VIEW_WINDOW = 50;
@@ -3499,7 +3496,7 @@ export async function loadOlderMessages(id: string): Promise<boolean> {
     const cursor = messagesCursor.value.get(id);
     if (cursor) {
       const page = await fetchMessages(id, {
-        ...(cursor === true ? { asc: true } : { cursor }),
+        cursor,
         size: OLDER_PAGE,
       });
       if (page) {

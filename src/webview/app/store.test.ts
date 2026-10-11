@@ -738,13 +738,11 @@ describe("transcript windowing and Load older (5185f17)", () => {
       messageMock(
         sid,
         (call: ApiCall) => {
-          // The older-row walk: page 1 is order=asc (no cursor), then cursor
-          // pages — here the asc page holds only rows we already have (all
-          // dups, short page) and the cursor page is empty: the v2 transcript
-          // is exhausted, the legacy pool still holds rows.
-          if (call.path.includes("cursor=c2"))
+          // The older-row walk: cursor pages only — here the first
+          // cursor page is empty (the v2 transcript is exhausted), the
+          // legacy pool still holds rows.
+          if (call.path.includes("cursor=c1"))
             return { data: [], cursor: { next: "c3" } };
-          if (call.path.includes("order=asc")) return { data: v2 };
           return { data: v2, cursor: { next: "c1" } };
         },
         legacy,
@@ -757,7 +755,7 @@ describe("transcript windowing and Load older (5185f17)", () => {
     const list = listOf(sid);
     assert.equal(list.length, 50);
     assert.equal(list[0].info.id, "v120"); // boundary snapped to a user head
-    assert.equal(messagesCursor.value.get(sid), true);
+    assert.equal(messagesCursor.value.get(sid), "c1");
     assert.ok(hasOlder(sid));
     assert.ok(
       callsFor(`/api/session/${sid}/message`)[0].path.includes("order=desc"),
@@ -785,7 +783,7 @@ describe("transcript windowing and Load older (5185f17)", () => {
     assert.equal(messagesCursor.value.get(sid), undefined);
   });
 
-  it("walks older rows through the asc pages", async () => {
+  it("walks older rows through the cursor pages", async () => {
     const older = Array.from({ length: 100 }, (_, i) => ({
       id: `o${i}`,
       type: i % 2 === 0 ? "user" : "assistant",
@@ -801,18 +799,16 @@ describe("transcript windowing and Load older (5185f17)", () => {
         if (call.path.includes("cursor=w2"))
           return { data: older.slice(50), cursor: { next: "w3" } };
         if (call.path.includes("cursor=w1"))
-          return { data: older.slice(0, 50), cursor: { next: "w2" } };
-        if (call.path.includes("order=asc"))
-          return { data: older, cursor: { next: "w1" } };
-        return { data: v2, cursor: { next: "c1" } };
+          return { data: older, cursor: { next: "w2" } };
+        return { data: v2, cursor: { next: "w1" } };
       }),
     );
     await refreshMessages(sid);
     assert.equal(await loadOlderMessages(sid), true);
     assert.equal(listOf(sid).length, 150);
     assert.equal(listOf(sid)[0].info.id, "o0");
-    // A full asc page keeps the walk's continuation cursor.
-    assert.equal(messagesCursor.value.get(sid), "w1");
+    // A full page keeps the walk's continuation cursor.
+    assert.equal(messagesCursor.value.get(sid), "w2");
     // Its next page overlaps nothing new and comes back short: the walk
     // ends there even though the endpoint still served a cursor.
     assert.equal(await loadOlderMessages(sid), false);

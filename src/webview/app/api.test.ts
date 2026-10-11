@@ -477,8 +477,8 @@ describe("api", () => {
       assert.deepEqual(tool.state?.input, { command: "ls" });
       assert.equal(tool.state?.error, "Tool execution interrupted");
       assert.equal(text.text, "answer");
-      // a full tail page flags "older may exist" (the asc walk's start)
-      assert.equal(page!.older, true);
+      // a full tail page carries the older-walk cursor
+      assert.equal(page!.older, "page2");
     });
     it("marks a short tail page complete (transcript done)", async () => {
       onApi((call) => {
@@ -501,11 +501,22 @@ describe("api", () => {
       });
       const page = await fetchMessages("sz");
       assert.equal(page!.messages.length, 50);
-      assert.equal(page!.older, true);
+      assert.equal(page!.older, "more");
     });
     it("answers relay failures with undefined", async () => {
       onApi(() => API_FAIL);
       assert.equal(await fetchMessages("sx"), undefined);
+    });
+    it("clamps the fetch size to the server's 200 limit", async () => {
+      let asked = "";
+      onApi((call) => {
+        if (call.path.includes("/api/session/sc/message")) {
+          asked = call.path;
+          return { data: [], cursor: {} };
+        }
+      });
+      await fetchMessages("sc", { size: 400 });
+      assert.ok(asked.includes("limit=200"), asked);
     });
   });
 

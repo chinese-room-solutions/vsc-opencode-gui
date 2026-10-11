@@ -57,11 +57,13 @@ HTTP/SSE.
   rows as settled the moment the session is idle, so they show no phantom
   progress and never re-animate with a minutes-old timer when the next
   prompt starts (opencode 2.x).
-- **Expanded history stays put** - "Load older messages" walks the paged
-  v2 transcript with cursors, and a refresh (the busy poll, a reconnect's
-  resync, reopening a tab) re-fetches enough to cover what's on screen, so
-  hours of scrolled-back history don't collapse to the newest page
-  mid-read (opencode 2.x).
+- **History pages back from where you are** - the transcript opens on the
+  newest page and "Load older messages" walks the paged v2 transcript with
+  cursors, each click adding the rows just above the window (never a jump
+  to the session's start); a refresh (the busy poll, a reconnect's resync,
+  reopening a tab) re-fetches enough to cover what's on screen, so hours of
+  scrolled-back history don't collapse to the newest page mid-read
+  (opencode 2.x).
 - **Redo a revert** - a reverted turn folds out of the transcript until the
   next prompt commits the cut; the fold line's Redo restores it (opencode's
   `/redo`).

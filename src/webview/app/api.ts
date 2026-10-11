@@ -1202,21 +1202,24 @@ export function stringifyError(error: unknown): string {
 
 export interface MessagePage {
   messages: MessageWithParts[];
-  // Older-row signal: a tail fetch sets true when its full desc page proves
-  // older rows may exist; an older fetch sets the asc-walk cursor to
-  // continue with (undefined at the transcript's start… reached). The v2
-  // endpoint's previous-direction cursors come back empty on 2.0.x, so
-  // older pages only walk forward — order=asc from the start, then cursor
-  // pages (the cursor may not be combined with an order param).
-  older?: boolean | string;
+  // The older-row walk's continuation cursor, served by every full page:
+  // on the desc timeline cursor.next continues toward older rows. A page
+  // short of the limit is the only "transcript complete" signal.
+  // (cursor.previous points the other way — newer: from the newest page
+  // it answers empty, which once read as "no backward paging" and cost
+  // us an order=asc walk from the transcript's start. The older walk is
+  // cursor.next; the cursor may not be combined with an order param.)
+  older?: string;
 }
 
 // The default page size (the server's own). A page shorter than this
 // proves the transcript is complete. Exported for the store's refresh
 // sizing: a refresh fetches at least this many rows.
 export const MESSAGE_PAGE = 50;
-// The server clamps the limit at 400.
-const MESSAGE_PAGE_CAP = 400;
+// The server rejects anything above 200 outright (2.0.26: 400
+// InvalidRequestError "Expected a value less than or equal to 200" on
+// [limit]) — it does not clamp.
+const MESSAGE_PAGE_CAP = 200;
 
 // The trigger pair both compaction paths serve — this fetch and the live
 // translation in v2events — under the same `:c`-derived ids, so streamed
@@ -1242,12 +1245,12 @@ export function v2CompactionTrigger(
 
 export async function fetchMessages(
   id: string,
-  opts?: { cursor?: string; asc?: boolean; size?: number },
+  opts?: { cursor?: string; size?: number },
 ): Promise<MessagePage | undefined> {
   const size = Math.min(opts?.size ?? MESSAGE_PAGE, MESSAGE_PAGE_CAP);
   const params = new URLSearchParams({ limit: String(size) });
   if (opts?.cursor) params.set("cursor", opts.cursor);
-  else params.set("order", opts?.asc ? "asc" : "desc");
+  else params.set("order", "desc");
   const body = await getJson<{
     data?: V2MessageRow[];
     cursor?: { next?: string };
@@ -1579,22 +1582,14 @@ export async function fetchMessages(
     };
     return [{ info, parts }];
   });
-  // Raw row count (pre-filter): a full page leaves more rows — the tail
-  // flags "older may exist" for the store; an older page (cursor or asc
-  // start) hands back its continuation cursor (a short page is the only
-  // "done" signal — the endpoint reports a cursor on every non-empty
-  // page).
+  // Raw row count (pre-filter): a full page carries the continuation
+  // cursor toward older rows; a short page is the transcript's end (the
+  // endpoint reports a cursor on every non-empty page, so length is the
+  // only honest "done").
   const full = (body.data?.length ?? 0) >= size;
-  const walk = opts?.cursor !== undefined || opts?.asc === true;
   return {
     messages,
-    ...(walk
-      ? full && body.cursor?.next
-        ? { older: body.cursor.next }
-        : {}
-      : full
-        ? { older: true }
-        : {}),
+    ...(full && body.cursor?.next ? { older: body.cursor.next } : {}),
   };
 }
 

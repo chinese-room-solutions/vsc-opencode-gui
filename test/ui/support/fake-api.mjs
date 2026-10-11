@@ -14,11 +14,11 @@ const port = parseInt(process.argv[2] ?? "0", 10);
 const directory = (process.argv[3] ?? "D:/fake/workspace").replace(/\\/g, "/");
 
 const SESSION_ID = "ses_seed_1";
-// FAKE_API_LONG=1 seeds 60 turns (120+ rows) so the v2 message page the
+// FAKE_API_LONG=1 seeds 100 turns (200+ rows) so the v2 message page the
 // endpoint serves (50) actually windows the transcript, and "Load older
 // messages" needs its cursor walk (a page is 100). Default stays small:
 // every other spec's session fits one page.
-const SEED_TURNS = process.env.FAKE_API_LONG === "1" ? 60 : 12;
+const SEED_TURNS = process.env.FAKE_API_LONG === "1" ? 100 : 12;
 // FAKE_API_BLOCKED=1 rigs the parent session mid-turn, blocked on a live
 // foreground sub-agent: the last turn's first task part reads running
 // (vouching for child ses_child_1) and the status endpoints serve the
@@ -1006,16 +1006,26 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if ((m = path.match(/^\/api\/session\/([^/]+)\/message$/))) {
-      // v2 page, paged like 2.0.26: limit (default 50), order asc|desc,
-      // and an opaque base64url cursor {id, order, direction}. A cursor
-      // walks rows after (next) or before (previous) its anchor; a page
-      // short of the limit is the only "transcript complete" signal, and
+      // v2 page, paged like 2.0.26: limit (default 50, max 200 — above it
+      // the endpoint 400s, it does not clamp), order asc|desc, and an
+      // opaque base64url cursor {id, order, direction}. A cursor walks
+      // rows after (next) or before (previous) its anchor; a page short
+      // of the limit is the only "transcript complete" signal, and
       // cursor.next rides every non-empty page. The client re-sorts, so
       // only the row set and count matter — order is served anyway.
       const all = [...seedRows, ...stepsRows].sort(
         (a, b) => a.time.created - b.time.created || (a.id < b.id ? -1 : 1),
       );
-      const limit = Math.max(1, Number(url.searchParams.get("limit") ?? "50") || 50);
+      const limitRaw = Number(url.searchParams.get("limit") ?? "50") || 50;
+      if (limitRaw > 200) {
+        json(res, 400, {
+          _tag: "InvalidRequestError",
+          message: 'Expected a value less than or equal to 200\n  at ["limit"]',
+          kind: "Query",
+        });
+        return;
+      }
+      const limit = Math.max(1, limitRaw);
       let order = url.searchParams.get("order") ?? "desc";
       let direction = "next";
       let anchor = -1;
