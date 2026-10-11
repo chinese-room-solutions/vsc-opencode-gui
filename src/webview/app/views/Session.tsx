@@ -10,6 +10,7 @@ import {
 } from "../components/MessageView";
 import { StopIcon, WordmarkIcon, OcResetIcon } from "../icons";
 import { isText, isTool } from "../api";
+import { modelWaitAnchor } from "../components/ToolCard";
 import {
   failedMsgLoads,
   interruptedPrompts,
@@ -447,6 +448,43 @@ export function Session(props: { sessionId?: string; parent?: string }) {
   }, [gap]);
   const working = gap && gapHold;
 
+  // The live turn's running tools all wait on the model — no argument in
+  // any form (args stream as model deltas; a stalled provider stops
+  // them). One with its argument is real work: its row pulses, no
+  // placeholder goes up. Otherwise the standard "Waiting for the
+  // model..." placeholder speaks for the turn, where it always stands —
+  // a row under the transcript, not a line inside the tool card.
+  const stalledAnchor = (() => {
+    if (!busy || awaiting || compactLive) return undefined;
+    const liveMsg = visible?.find((m) => m.info.id === liveId);
+    if (!liveMsg) return undefined;
+    let anchor: number | undefined;
+    let anyRunning = false;
+    for (const p of liveMsg.parts) {
+      if (!isTool(p) || p.state?.status !== "running") continue;
+      anyRunning = true;
+      const a = modelWaitAnchor(p);
+      if (a === undefined) return undefined;
+      if (anchor === undefined || a > anchor) anchor = a;
+    }
+    return anyRunning ? anchor : undefined;
+  })();
+  // The 30s crossing is a clock event no store signal fires on, so the
+  // hold arms itself from the anchor: a reloaded long-stalled turn shows
+  // at once, a freshly stalled one only after its 30s. A moved anchor
+  // (a fresh arg delta) restarts the silence clock — the previous
+  // verdict dies with it.
+  const [stallHold, setStallHold] = useState(false);
+  useEffect(() => {
+    setStallHold(false);
+    if (stalledAnchor === undefined) return;
+    const t = window.setTimeout(
+      () => setStallHold(true),
+      Math.max(0, 30_000 - (Date.now() - stalledAnchor)),
+    );
+    return () => window.clearTimeout(t);
+  }, [stalledAnchor]);
+
   // The "Waiting for the model..." placeholder holds through short idles —
   // the endpoint's spurious empty steps idle mid-turn, and a hard flicker
   // off would read as a dead turn. Once the idle is sustained (reload of a
@@ -624,6 +662,22 @@ export function Session(props: { sessionId?: string; parent?: string }) {
                 <div class="status-line">
                   <span class="dot" aria-hidden="true" />
                   <div class="thinking-line">Working...</div>
+                </div>
+              </div>
+            </div>
+          )}
+          {stallHold && stalledAnchor !== undefined && (
+            <div class="turn">
+              <div class="msg assistant dot-running">
+                <div class="status-line">
+                  <span class="dot" aria-hidden="true" />
+                  <div class="thinking-line">
+                    Waiting for the model...
+                    {/* The clock is the silence itself — from the newest
+                        arg delta or the stalled part's start, whichever
+                        is later. */}
+                    <StatusStats start={stalledAnchor} gen={0} />
+                  </div>
                 </div>
               </div>
             </div>

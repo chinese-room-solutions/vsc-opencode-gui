@@ -97,6 +97,7 @@ import {
   stopSession,
   stoppedPrompts,
   tombstones,
+  toolArgsDeltaAt,
   unshareSession,
   homeFilter,
   agents,
@@ -1345,6 +1346,9 @@ describe("turn projection from stream events", () => {
       callID: "c1",
       delta: '{"filePath":"src/a',
     });
+    // The delta's arrival anchors "Waiting for the model" — set while
+    // the args stream, freed once they close.
+    assert.equal(typeof toolArgsDeltaAt("c1"), "number");
     let st = findPart(sid, "c1") as {
       state?: { status?: string; inputText?: string; input?: unknown };
     };
@@ -1373,6 +1377,7 @@ describe("turn projection from stream events", () => {
       callID: "c1",
       text: '{"filePath":"src/a.ts","content":"hi"}',
     });
+    assert.equal(toolArgsDeltaAt("c1"), undefined);
     st = findPart(sid, "c1") as {
       state?: { status?: string; inputText?: string; input?: unknown };
     };

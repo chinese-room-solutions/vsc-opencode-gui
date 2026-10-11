@@ -2422,6 +2422,10 @@ function applyEvent(event: ServerEvent): void {
         typeof data.delta === "string" &&
         !isTruncatedPart(data.callID)
       ) {
+        // Arrival time, not part start, anchors the "Waiting for the
+        // model" hint: a refresh can wipe the streamed preview while the
+        // stream is healthy (the durable row keeps {} until args close).
+        toolArgsLastDelta.set(data.callID, Date.now());
         patchToolState(sid, data.assistantMessageID, data.callID, (s) => ({
           ...s,
           inputText: (s.inputText ?? "") + data.delta,
@@ -2437,6 +2441,7 @@ function applyEvent(event: ServerEvent): void {
         data.callID &&
         typeof data.text === "string"
       ) {
+        toolArgsLastDelta.delete(data.callID);
         const text: string = data.text;
         patchToolState(sid, data.assistantMessageID, data.callID, (s) => {
           const next = { ...s, inputText: text };
@@ -2570,6 +2575,15 @@ function applyEvent(event: ServerEvent): void {
       }
       break;
   }
+}
+
+// Last session.next.tool.input.delta arrival per part (epoch ms). A
+// running part with empty input is only waiting on the model once its
+// argument stream has gone silent — the streamed preview alone can be
+// wiped by a refresh while the stream is healthy.
+const toolArgsLastDelta = new Map<string, number>();
+export function toolArgsDeltaAt(partID: string): number | undefined {
+  return toolArgsLastDelta.get(partID);
 }
 
 function patchToolState(

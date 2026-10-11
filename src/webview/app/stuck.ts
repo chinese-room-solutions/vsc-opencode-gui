@@ -52,7 +52,7 @@ const stuckAutoAbortSeconds = numMeta("opencode-stuck-auto-abort", 0);
 // Last activity per tool part (session → part → epoch ms) and per session,
 // tracked by diffing what the signals show between ticks: a new list for a
 // session is session activity, and a changed fingerprint of a running part
-// (status or output growth) is that part's activity.
+// (status, output growth, or streamed-args growth) is that part's activity.
 const toolSeen = new Map<string, Map<string, number>>();
 const sessionSeen = new Map<string, number>();
 const prevLists = new Map<string, ChatMessage[]>();
@@ -65,7 +65,7 @@ let stuckFingerprint = "";
 
 const printOf = (p: Part): string =>
   isTool(p) && p.state
-    ? `${p.state.status}|${p.state.output?.length ?? 0}`
+    ? `${p.state.status}|${p.state.output?.length ?? 0}|${p.state.inputText?.length ?? 0}`
     : "";
 
 function hasPendingAsk(sid: string): boolean {

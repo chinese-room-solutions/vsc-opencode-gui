@@ -286,6 +286,20 @@ for (let i = 1; i <= SEED_TURNS; i++) {
               time: { start: ca + 9_600, end: ca + 10_400 },
             },
           },
+          ...(stalled
+            ? [
+                {
+                  type: "tool",
+                  id: "pt_tstall",
+                  name: "edit",
+                  state: {
+                    status: "running",
+                    input: {},
+                    time: { start: ca + 10_600 },
+                  },
+                },
+              ]
+            : []),
         ]
       : [];
   seedRows.push({
@@ -395,6 +409,9 @@ function writeFrame(clients, payload) {
 }
 const emitV2 = (type, data) => writeFrame(v2Clients, { id: String(++eid), type, data });
 const emitV1 = (type, properties) => writeFrame(v1Clients, { id: String(++eid), type, properties });
+// /api/event connections served — specs watch it climb to see the host
+// pump reconnect (and the resync that follows it).
+let eventConns = 0;
 setInterval(() => {
   for (const res of v2Clients) res.write(": ping\n\n");
   for (const res of v1Clients) res.write(": ping\n\n");
@@ -678,6 +695,7 @@ const server = http.createServer(async (req, res) => {
 
   // SSE
   if (method === "GET" && path === "/api/event") {
+    eventConns += 1;
     res.writeHead(200, { ...CORS, "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
     v2Clients.add(res);
     if (shellMode) shellStartedFrame();
@@ -761,6 +779,29 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, { deletes: shellDeletes });
       return;
     }
+    // Spec levers for the stalled-tool shape: deliver one arg delta to the
+    // stalled part (the stream is alive again), or drop every v2 SSE
+    // connection (the host pump reconnects and resyncs, which wipes the
+    // streamed-args preview — the false-alarm regression).
+    if (method === "GET" && path === "/__control/argdelta") {
+      emitV2("session.next.tool.input.delta", {
+        sessionID: SESSION_ID,
+        assistantMessageID: lastSeedAssistant,
+        callID: "pt_tstall",
+        delta: '{"filePath":"/src/main.ts"',
+      });
+      json(res, 200, { ok: true });
+      return;
+    }
+    if (method === "GET" && path === "/__control/ssedrop") {
+      for (const r of v2Clients) r.end();
+      json(res, 200, { dropped: v2Clients.size });
+      return;
+    }
+    if (method === "GET" && path === "/__control/eventconns") {
+      json(res, 200, { connections: eventConns });
+      return;
+    }
     if (method === "GET" && path === "/__control/prompts") {
       json(res, 200, { calls: promptCalls });
       return;
@@ -784,7 +825,7 @@ const server = http.createServer(async (req, res) => {
 
   // boot / reads
   if (method === "GET") {
-    if (path === "/session/status") { json(res, 200, { [SESSION_ID]: { type: stepsActive || blocked ? "busy" : "idle" } }); return; }
+    if (path === "/session/status") { json(res, 200, { [SESSION_ID]: { type: stepsActive || blocked || stalled ? "busy" : "idle" } }); return; }
     // v2: the child is mid-run — the seeded session itself stays idle so
     // the chip's running state comes from the child, not the parent,
     // except in the blocked rig (parent mid-turn on that child).
@@ -792,7 +833,7 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, {
         data: {
           ses_child_1: { agent: "general" },
-          ...(blocked ? { [SESSION_ID]: { agent: "build" } } : {}),
+          ...((blocked || stalled) ? { [SESSION_ID]: { agent: "build" } } : {}),
         },
       });
       return;

@@ -17,6 +17,7 @@ import {
   sessions,
   stopSession,
   stopShellRow,
+  toolArgsDeltaAt,
 } from "../store";
 import { silenceLabel } from "../stuck";
 import { CheckIcon, CopyIcon, PixelMark, PixelSpinner, StopIcon } from "../icons";
@@ -297,6 +298,24 @@ function summary(part: ToolPart): string {
   );
 }
 
+// A running tool with no argument in any form — no closed input that
+// names one, no streamed args text — is waiting on the model, not the
+// tool: v2 streams tool args as ephemeral deltas, and a stalled provider
+// stream stops them (observed 20-30+ min). Returns the silence anchor
+// (the newer of the part's start and its last arg delta); 30s past it,
+// the transcript's standard "Waiting for the model..." placeholder
+// speaks for the turn. The delta stamp is what a refresh can't wipe: a
+// healthy stream between chunks never flags.
+export function modelWaitAnchor(part: ToolPart): number | undefined {
+  if (part.state?.status !== "running") return undefined;
+  if (part.state.inputText || summary(part)) return undefined;
+  const anchor = Math.max(
+    part.state.time?.start ?? 0,
+    toolArgsDeltaAt(part.id) ?? 0,
+  );
+  return anchor > 0 ? anchor : undefined;
+}
+
 function highlightDiff(diff: string): string {
   try {
     return hljs.highlight(diff, { language: "diff" }).value;
@@ -395,6 +414,7 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
 
   const status = state?.status ?? "pending";
   const output = state?.error || state?.output || "";
+  const pill = summary(part);
   // A kill (abort) finalizes the tool "completed" — the failure rides in
   // state.error when there is one, and for shells only in the output's
   // <shell_metadata> ("User aborted the command"). The dot and the row
@@ -452,10 +472,10 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
               else if (linkPath) openFile(linkPath);
             }}
           >
-            {summary(part)}
+            {pill}
           </a>
         ) : (
-          <span class="tool-pill">{summary(part)}</span>
+          <span class="tool-pill">{pill}</span>
         )}
         {stat && (
           <span class="diff-stat" aria-hidden="true">
