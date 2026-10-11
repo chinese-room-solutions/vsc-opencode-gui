@@ -412,6 +412,11 @@ export function Session(props: { sessionId?: string; parent?: string }) {
   // well as a client-held queue. No clock — nothing is processing it
   // yet, and a ticking timer would claim otherwise.
   const queued = awaiting && (queuedNow || liveId !== undefined);
+  // A failed send IS the wait's answer: the banner (the chrome's error line
+  // below) reports it, so the phantom "Waiting for the model..." must not
+  // hold under it for the 4s wait-hold window, overprinting the banner in
+  // a short panel.
+  const sendFailed = sendError.value !== undefined && sendError.value.for === id;
   // The turn is working but nothing shows it: every text part closed and no
   // tool row is running — a running tool pulses in its own row, and a second
   // pulsing indicator under the footer reads as a duplicate. The residue is
@@ -591,7 +596,7 @@ export function Session(props: { sessionId?: string; parent?: string }) {
                 </div>
               );
             })}
-          {awaiting && (busy || !waitHold) && (
+          {awaiting && !sendFailed && (busy || !waitHold) && (
             <div class="turn">
               <div class="msg assistant dot-running">
                 <div class="status-line">
@@ -639,13 +644,6 @@ export function Session(props: { sessionId?: string; parent?: string }) {
               </button>
             </div>
           )}
-          {/* In the scroller, not the floating chrome: an error is part of
-              the session's story and reflows with the content above it —
-              and only THIS session's story: failures are keyed to the
-              session they fired in, so nothing leaks across tabs. */}
-          {sendError.value !== undefined && sendError.value.for === id && (
-            <div class="send-error">{sendError.value.text}</div>
-          )}
         </div>
         <div class="msgs-fade" />
       </div>
@@ -656,6 +654,13 @@ export function Session(props: { sessionId?: string; parent?: string }) {
       <div class="chat-bottom" ref={bottom}>
         {empty && <WordmarkIcon />}
         <Docks sessionId={id} />
+        {/* Above the composer, not in the transcript flow: in flow the
+            error's resting spot sat inside the fade band — a short panel
+            washed it out exactly when it mattered. Keyed to the session
+            it fired in, so nothing leaks across tabs. */}
+        {sendError.value !== undefined && sendError.value.for === id && (
+          <div class="send-error">{sendError.value.text}</div>
+        )}
         <Composer sessionId={id} status={st} />
       </div>
     </div>

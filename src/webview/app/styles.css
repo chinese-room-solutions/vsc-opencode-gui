@@ -1239,12 +1239,22 @@ body {
   font-size: 12px;
 }
 
-/* A failed command or turn, in the flow after the last turn — indented to
-   the assistant column so it reads as a transcript entry, not a banner. */
+/* A failed command or turn, keyed to the session it fired in. */
 .send-error {
-  padding-left: 36px;
   color: var(--vscode-errorForeground);
   font-size: 12px;
+}
+
+/* In the floating chrome, right above the composer (Claude Code's error
+   line): the in-flow spot rested inside the fade band, so a short panel
+   washed the error out exactly when it mattered. Same grid as the docks,
+   no backdrop — the chrome paints over the gradient, and a solid band
+   across it read as a seam. */
+.chat-bottom .send-error {
+  box-sizing: border-box;
+  max-width: 744px;
+  margin: 0 auto;
+  padding: 0 32px 6px;
 }
 
 /* Home's banner for session-less errors (the project purge): inset to the
