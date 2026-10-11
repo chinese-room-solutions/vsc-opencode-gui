@@ -173,26 +173,6 @@ export function StopIcon() {
   );
 }
 
-// The sub-agent chip's "run in background": an arrow meeting a bar — the
-// task moves out of the conversation's way and carries on behind it. Same
-// integer-box discipline as StopIcon, so the two chip buttons match.
-export function BackgroundIcon() {
-  return (
-    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-      <g
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.3"
-        stroke-linecap="round"
-      >
-        <path d="M1.3 5h4.6" />
-        <path d="M4.3 2.7 6.6 5 4.3 7.3" />
-        <path d="M8.3 2.5v5" />
-      </g>
-    </svg>
-  );
-}
-
 export function SlidersIcon() {
   return (
     <svg

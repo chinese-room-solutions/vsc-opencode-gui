@@ -11,8 +11,6 @@ import {
 import { openFile, openUrl } from "../host";
 import { route, navigate } from "../router";
 import {
-  canBackgroundSubagent,
-  continueInBackground,
   pendingPermissions,
   pendingQuestions,
   sessionWorking,
@@ -20,7 +18,7 @@ import {
   stopSession,
 } from "../store";
 import { silenceLabel } from "../stuck";
-import { CheckIcon, CopyIcon, PixelMark, PixelSpinner, StopIcon, BackgroundIcon } from "../icons";
+import { CheckIcon, CopyIcon, PixelMark, PixelSpinner, StopIcon } from "../icons";
 
 // One-line tool rows: status dot + display name + the
 // command/argument as a gray code pill, clipped to a single line. Under it,
@@ -132,10 +130,8 @@ function SubagentChip(props: {
   failed?: boolean;
   background?: boolean;
   asking?: "permission" | "question";
-  // The session whose transcript shows this chip — the sub-agent's parent.
-  parentID?: string;
 }) {
-  const { sessionId, running, background, parentID } = props;
+  const { sessionId, running, background } = props;
   // Sub-session drill-down, like the official app: the tab keeps belonging
   // to the root session and the child rides the route as a breadcrumb. A
   // chip inside a child re-roots there (two levels shown).
@@ -194,26 +190,6 @@ function SubagentChip(props: {
       <span class="subagent-desc">
         {background ? `${props.description} (background)` : props.description}
       </span>
-      {/* Background releases the parent's turn: the server completes this
-          tool part ("… (background)") and ends the turn while the child
-          keeps working — its completion later lands as a notice card. The
-          POST is whole-session (every blocking sub-agent goes, not just
-          this chip's), keyed by the transcript's session. */}
-      {parentID !== undefined &&
-        canBackgroundSubagent(running === true, background) && (
-          <button
-            type="button"
-            class="subagent-bg"
-            title="Move the session's blocking sub-agents to the background and keep chatting here"
-            aria-label="Run the blocking sub-agents in the background"
-            onClick={(e) => {
-              e.stopPropagation();
-              void continueInBackground(parentID);
-            }}
-          >
-            <BackgroundIcon />
-          </button>
-        )}
       {/* Stop kills only the child session's loop — the parent's turn gets
           the aborted task result and continues on its own. Rendered while it
           asks too: a child the user wants dead must not wait on its own
@@ -401,11 +377,6 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
       (props.live === true &&
         (status === "pending" || status === "running")) ||
       childBusy(sessionId);
-    // The transcript this chip renders in is the parent whose blocking
-    // tools a background POST releases — the route's session (the same
-    // root childSessionId resolves children against), never the child.
-    const parentID =
-      route.value.view === "session" ? route.value.id : undefined;
     return (
       <>
         <SubagentChip
@@ -416,7 +387,6 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
           failed={status === "error" || !!part.state?.error}
           background={part.state?.metadata?.background === true}
           asking={childAsk(sessionId)}
-          parentID={parentID}
         />
       </>
     );

@@ -15,6 +15,11 @@ const directory = (process.argv[3] ?? "D:/fake/workspace").replace(/\\/g, "/");
 
 const SESSION_ID = "ses_seed_1";
 const SEED_TURNS = 12;
+// FAKE_API_BLOCKED=1 rigs the parent session mid-turn, blocked on a live
+// foreground sub-agent: the last turn's first task part reads running
+// (vouching for child ses_child_1) and the status endpoints serve the
+// parent busy — the fixture for sendPrompt's auto-background release.
+const blocked = process.env.FAKE_API_BLOCKED === "1";
 
 // --- deterministic filler text (tall enough to overflow any viewport) ---
 const SENTENCES = [
@@ -244,12 +249,19 @@ for (let i = 1; i <= SEED_TURNS; i++) {
             type: "tool",
             id: "pt_task1",
             name: "task",
-            state: {
-              status: "completed",
-              input: { description: "Check the retry paths", subagent_type: "general" },
-              output: "done",
-              time: { start: ca + 8_600, end: ca + 9_400 },
-            },
+            state: blocked
+              ? {
+                  status: "running",
+                  input: { description: "Check the retry paths", subagent_type: "general" },
+                  metadata: { sessionId: "ses_child_1" },
+                  time: { start: ca + 8_600 },
+                }
+              : {
+                  status: "completed",
+                  input: { description: "Check the retry paths", subagent_type: "general" },
+                  output: "done",
+                  time: { start: ca + 8_600, end: ca + 9_400 },
+                },
           },
           {
             type: "tool",
@@ -304,7 +316,7 @@ const flatSession = ({ ...sessionRow, directory });
 // A spawned sub-agent child of the seeded session, still working: the
 // durable task chip ("Check the retry paths", turn 12) resolves it by
 // parentID + title prefix and vouches for liveness through the child's
-// busy status — the fixture for the chip's run-in-background affordance.
+// busy status — the running chip sendPrompt's background release answers.
 const childRow = {
   id: "ses_child_1",
   parentID: SESSION_ID,
@@ -338,7 +350,12 @@ setInterval(() => {
 
 // --- synthetic streaming ---
 let streamCount = 0;
+// Wire-action records for the specs: session id + body text, stamped with
+// a shared monotonic seq so tests can assert ordering ACROSS the two
+// (background must precede the prompt it unblocks).
+let recSeq = 0;
 const backgroundCalls = [];
+const promptCalls = [];
 const timers = new Set();
 function later(fn, ms) {
   const t = setTimeout(() => {
@@ -668,6 +685,10 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, { calls: backgroundCalls });
       return;
     }
+    if (method === "GET" && path === "/__control/prompts") {
+      json(res, 200, { calls: promptCalls });
+      return;
+    }
     json(res, 404, { error: "no such control" });
     return;
   }
@@ -675,7 +696,11 @@ const server = http.createServer(async (req, res) => {
   // v2's background conversion: records the call, answers like the real
   // server (204; idle sessions are a no-op there).
   if (method === "POST" && /^\/api\/session\/[^/]+\/background\/?$/.test(path)) {
-    backgroundCalls.push(path.split("/")[3]);
+    backgroundCalls.push({
+      sessionID: path.split("/")[3],
+      at: Date.now(),
+      seq: ++recSeq,
+    });
     res.writeHead(204, CORS);
     res.end();
     return;
@@ -683,10 +708,19 @@ const server = http.createServer(async (req, res) => {
 
   // boot / reads
   if (method === "GET") {
-    if (path === "/session/status") { json(res, 200, { [SESSION_ID]: { type: stepsActive ? "busy" : "idle" } }); return; }
+    if (path === "/session/status") { json(res, 200, { [SESSION_ID]: { type: stepsActive || blocked ? "busy" : "idle" } }); return; }
     // v2: the child is mid-run — the seeded session itself stays idle so
-    // the chip's running state comes from the child, not the parent.
-    if (path === "/api/session/active") { json(res, 200, { data: { ses_child_1: { agent: "general" } } }); return; }
+    // the chip's running state comes from the child, not the parent,
+    // except in the blocked rig (parent mid-turn on that child).
+    if (path === "/api/session/active") {
+      json(res, 200, {
+        data: {
+          ses_child_1: { agent: "general" },
+          ...(blocked ? { [SESSION_ID]: { agent: "build" } } : {}),
+        },
+      });
+      return;
+    }
     if (path === "/api/session") { json(res, 200, { data: [sessionRow, childRow], cursor: {} }); return; }
     // v2 twins of the v1 boot routes (same seeds, the app's v2 shapes):
     // /api/provider+model+config assemble the picker catalog, /api/agent
@@ -796,6 +830,20 @@ const server = http.createServer(async (req, res) => {
     }
     if ((m = path.match(/^\/session\/([^/]+)\/(abort|command|summarize)$/))) {
       await readBody(req);
+      json(res, 200, {});
+      return;
+    }
+    if ((m = path.match(/^\/api\/session\/([^/]+)\/prompt$/))) {
+      const body = await readBody(req);
+      // Record only — the v2 feed has no scripted turn here (no model).
+      // 200+JSON, not 204: Chrome logs ERR_ABORTED on preflighted CORS
+      // POSTs answered 204 (fetch resolves fine, the network log cries).
+      promptCalls.push({
+        sessionID: m[1],
+        text: typeof body.text === "string" ? body.text : "",
+        at: Date.now(),
+        seq: ++recSeq,
+      });
       json(res, 200, {});
       return;
     }

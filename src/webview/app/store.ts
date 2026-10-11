@@ -65,6 +65,7 @@ import {
   type ToolPart,
   isText,
   isTool,
+  isTaskTool,
   clampPartText,
   clampToolState,
   forgetTruncatedParts,
@@ -1014,32 +1015,20 @@ export function backgroundSupported(): boolean {
   return dialect() === "v2";
 }
 
-// The chip's background affordance: a sub-agent that is working AND still
-// blocking this conversation, on a server that can release it. Pure chip
-// state + the dialect gate, so tests drive it without a live turn.
-export function canBackgroundSubagent(
-  running: boolean,
-  background: boolean | undefined,
-): boolean {
-  return running && !background && backgroundSupported();
-}
-
-// Stop blocking on a running sub-agent: the server completes its tool part
-// (the chip reads "… (background)") and ends the parent's turn while the
-// child keeps working — the stream drives the chip and the composer, so a
-// success mutates nothing locally. The child's completion later arrives as
-// a synthetic subagent-notice row.
-export async function continueInBackground(id: string): Promise<boolean> {
-  if (!backgroundSupported()) return false;
-  const res = await backgroundSession(id);
-  if (!res.ok) {
-    setSendError(
-      withReason("Could not move the sub-agent to the background", res.error),
-      id,
-    );
-    return false;
-  }
-  return true;
+// A live foreground sub-agent part in the session's loaded transcript —
+// one the running turn is blocked on (pending/running, not backgrounded;
+// the chips render it as a working sub-agent). sendPrompt releases these
+// so the new prompt answers instead of waiting the block out.
+function blockingSubagentLive(id: string): boolean {
+  return (messagesFor(id).value ?? []).some((m) =>
+    m.parts.some(
+      (p) =>
+        isTool(p) &&
+        isTaskTool(p.tool) &&
+        (p.state?.status === "pending" || p.state?.status === "running") &&
+        p.state?.metadata?.background !== true,
+    ),
+  );
 }
 
 // Take the session private again; the marker leaves the row either way (a
@@ -3554,8 +3543,14 @@ export async function sendPrompt(
   }
   // Busy with nothing held ahead: the prompt POSTs now and the server
   // hands it to the model at the next step boundary — ongoing work stays
-  // steerable. Behind held turns it must wait above, or it would jump
-  // the queue.
+  // steerable. A turn blocked on foreground sub-agents is released first
+  // (v2): the background conversion ends that turn, so the prompt starts a
+  // fresh one instead of steering around the block; a failed conversion
+  // just steers like before — no banner, the prompt is what the user asked
+  // for. Behind held turns it must wait above, or it would jump the queue.
+  if (wasBusy && backgroundSupported() && blockingSubagentLive(id)) {
+    await backgroundSession(id);
+  }
   await postPrompt(id, body, files);
 }
 

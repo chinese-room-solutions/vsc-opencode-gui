@@ -31,10 +31,10 @@ HTTP/SSE.
   home row and continue on the copy; the original stays untouched
   (opencode's `session_fork`).
 - **Sub-agents are sessions** - open one from its task chip, steer it, stop
-  it, and the parent's turn collects the result. Blocking sub-agents can
-  also run in the background (opencode v2 servers) - one move takes every
-  blocking child at once, the chat keeps going, and each finished child
-  lands as a notice card that opens onto its transcript.
+  it, and the parent's turn collects the result. A prompt sent into a turn
+  blocked on sub-agents moves them to the background (opencode v2 servers)
+  and is answered immediately; each finished child lands as a notice card
+  that opens onto its transcript.
 - **`/init`** - guided AGENTS.md setup for the project, mirroring the
   opencode TUI's builtin (a user- or server-defined `/init` command wins).
 - **Notifications, visual and sound** - tabs pulse yellow when a session

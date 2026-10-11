@@ -56,12 +56,13 @@ test("the stop button never leaves the chip's border", async ({ page, rig }) => 
   expect(contained).toBe(true);
 });
 
-// A running foreground sub-agent's run-in-background affordance. Runs on a
-// dedicated v2-dialect rig (the shared fixture bakes v1; the fake serves
-// both surfaces). The seeded child session (ses_child_1) is busy: the first
-// chip runs off the child's status, so the affordance renders; the second
-// chip has no live child and offers nothing.
-test("a running foreground sub-agent offers run-in-background and posts on click", async ({ page }) => {
+// A prompt into a turn blocked on a foreground sub-agent answers instead
+// of steering: the send releases the block to the background FIRST (the
+// turn ends), then the prompt POSTs as its own turn. Runs on a dedicated
+// v2-dialect rig in the fake's FAKE_API_BLOCKED mode: the parent session
+// boots busy with a live task chip (child ses_child_1 working) — typing
+// and Enter go to the FAKE server only, no model involved.
+test("sending into a blocked turn backgrounds the sub-agent, then prompts", async ({ page }) => {
   const rig = await startRig({
     env: {
       OPENCODE_ROUTE: JSON.stringify({ view: "session", id: "ses_seed_1" }),
@@ -70,6 +71,7 @@ test("a running foreground sub-agent offers run-in-background and posts on click
       OPENCODE_READY_SOUND: "0",
       OPENCODE_PERMISSION_SOUND: "0",
       OPENCODE_QUESTION_SOUND: "0",
+      FAKE_API_BLOCKED: "1",
     },
   });
   try {
@@ -78,21 +80,23 @@ test("a running foreground sub-agent offers run-in-background and posts on click
     await page.goto(rig.url);
     const chips = page.locator(".subagent-chip");
     await chips.nth(0).waitFor({ timeout: 15_000 });
-    const running = chips.nth(0);
-    const settled = chips.nth(1);
-    await expect(running.locator(".subagent-bg")).toBeVisible();
-    await expect(running.locator(".subagent-bg")).toHaveAttribute(
-      "title",
-      /background/,
-    );
-    await expect(settled.locator(".subagent-bg")).toHaveCount(0);
-    // Clicking must stay on the chip (no child drill-down) — only the
-    // parent's background conversion POST fires, keyed by the route's
-    // session.
-    await running.locator(".subagent-bg").click();
-    await expect
-      .poll(async () => (await (await fetch(`${rig.api}/__control/background`)).json()).calls)
-      .toEqual(["ses_seed_1"]);
+    // Unblocking is not a per-chip action anymore — no button anywhere.
+    await expect(page.locator(".subagent-bg")).toHaveCount(0);
+    await page.click(".composer textarea");
+    await page.fill(".composer textarea", "keep going while it runs");
+    await page.press(".composer textarea", "Enter");
+    const ctrl = async (name) =>
+      (await (await fetch(`${rig.api}/__control/${name}`)).json()).calls;
+    await expect.poll(async () => (await ctrl("background")).length).toBe(1);
+    await expect.poll(async () => (await ctrl("prompts")).length).toBe(1);
+    const bg = (await ctrl("background"))[0];
+    const prompt = (await ctrl("prompts"))[0];
+    expect(bg.sessionID).toBe("ses_seed_1");
+    expect(prompt.sessionID).toBe("ses_seed_1");
+    expect(prompt.text).toBe("keep going while it runs");
+    // The release precedes the prompt it unblocks — the shared record seq
+    // orders calls across the two endpoints.
+    expect(bg.seq).toBeLessThan(prompt.seq);
     await expect(chips).toHaveCount(2);
   } finally {
     rig.stop();

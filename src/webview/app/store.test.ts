@@ -34,8 +34,6 @@ import {
   currentSelection,
   attachInputs,
   backgroundSupported,
-  canBackgroundSubagent,
-  continueInBackground,
   defaultAgent,
   deleteSession,
   displayModel,
@@ -3060,52 +3058,94 @@ describe("session share", () => {
   });
 });
 
-describe("background sub-agent", () => {
+describe("background sub-agent (sendPrompt release)", () => {
+  // A transcript whose live turn is blocked on one foreground sub-agent.
+  const blockedTurn = (sid: string): ChatMessage[] => [
+    row("u1", "user", T0),
+    {
+      info: { id: "a1", role: "assistant", time: { created: T0 + 1 } },
+      parts: [
+        {
+          id: "p_task",
+          messageID: "a1",
+          sessionID: sid,
+          type: "tool",
+          tool: "task",
+          state: {
+            status: "running",
+            time: { start: T0 + 1 },
+            metadata: { sessionId: "child1" },
+          },
+        },
+      ],
+    },
+  ];
   afterEach(() => setDialect("v1"));
-  it("v1 has no route: the action no-ops and never surfaces", async () => {
-    assert.equal(backgroundSupported(), false);
-    assert.equal(await continueInBackground("bg0"), false);
-    assert.equal(callsFor("/api/session/bg0/background").length, 0);
-    assert.equal(sendError.value, undefined);
-  });
-  it("v2 posts the whole-session background route; success mutates nothing", async () => {
+  it("v2 + blocked: the release fires first, then the prompt POSTs", async () => {
     setDialect("v2");
-    assert.equal(backgroundSupported(), true);
-    sessions.value = [sessRow("bg1")];
-    onApi((call) =>
-      call.method === "POST" &&
-      call.path.startsWith("/api/session/bg1/background")
-        ? {}
-        : undefined,
+    const sid = "bg1";
+    sessions.value = [sessRow(sid)];
+    open(sid, blockedTurn(sid));
+    setBusy(sid);
+    await sendPrompt(sid, "meanwhile");
+    const bg = apiLog.findIndex(
+      (c) => c.method === "POST" && c.path === `/api/session/${sid}/background`,
     );
-    assert.equal(await continueInBackground("bg1"), true);
-    assert.equal(callsFor("/api/session/bg1/background").length, 1);
-    // The stream drives the chip and the composer — no local busy flip.
-    assert.equal(sessionStatus.value["bg1"]?.type, undefined);
+    const pr = apiLog.findIndex(
+      (c) => c.method === "POST" && c.path === `/api/session/${sid}/prompt`,
+    );
+    assert.ok(bg >= 0, "background POST fired");
+    assert.ok(pr >= 0, "prompt POST fired");
+    assert.ok(bg < pr, "background precedes the prompt it unblocks");
     assert.equal(sendError.value, undefined);
   });
-  it("a rejected background surfaces the banner once", async () => {
+  it("v2 + busy with no sub-agent: no release, the prompt steers as before", async () => {
     setDialect("v2");
+    const sid = "bg2";
+    sessions.value = [sessRow(sid)];
+    open(sid, [row("u1", "user", T0), row("a1", "assistant", T0 + 1)]);
+    setBusy(sid);
+    await sendPrompt(sid, "steer");
+    assert.equal(callsFor(`/api/session/${sid}/background`).length, 0);
+    assert.equal(callsFor(`/api/session/${sid}/prompt`).length, 1);
+  });
+  it("v1 never releases", async () => {
+    setDialect("v1");
+    assert.equal(backgroundSupported(), false);
+    const sid = "bg3";
+    sessions.value = [sessRow(sid)];
+    open(sid, blockedTurn(sid));
+    setBusy(sid);
+    await sendPrompt(sid, "hi");
+    assert.equal(callsFor(`/api/session/${sid}/background`).length, 0);
+    assert.equal(callsFor(`/session/${sid}/prompt_async`).length, 1);
+  });
+  it("a busy session with queued turns queues; no release fires", async () => {
+    setDialect("v2");
+    const sid = "bg4";
+    sessions.value = [sessRow(sid)];
+    open(sid, blockedTurn(sid));
+    setBusy(sid);
+    queuedTurns.value = [{ id: sid, kind: "prompt", text: "held" }];
+    await sendPrompt(sid, "second");
+    assert.equal(queuedTurns.value.length, 2);
+    assert.equal(callsFor(`/api/session/${sid}/background`).length, 0);
+    assert.equal(callsFor(`/api/session/${sid}/prompt`).length, 0);
+  });
+  it("a failed release falls back to steering, silently", async () => {
+    setDialect("v2");
+    const sid = "bg5";
+    sessions.value = [sessRow(sid)];
+    open(sid, blockedTurn(sid));
+    setBusy(sid);
     onApi((call) =>
-      call.path.startsWith("/api/session/bg2/background")
+      call.path.startsWith(`/api/session/${sid}/background`)
         ? apiFailWith("HTTP 500")
         : undefined,
     );
-    assert.equal(await continueInBackground("bg2"), false);
-    assert.equal(
-      sendError.value?.text,
-      "Could not move the sub-agent to the background: HTTP 500.",
-    );
-    assert.equal(sendError.value?.for, "bg2");
-  });
-  it("the chip gate: working and blocking on v2, nothing else", () => {
-    setDialect("v2");
-    assert.equal(canBackgroundSubagent(true, undefined), true);
-    assert.equal(canBackgroundSubagent(true, false), true);
-    assert.equal(canBackgroundSubagent(false, undefined), false);
-    assert.equal(canBackgroundSubagent(true, true), false);
-    setDialect("v1");
-    assert.equal(canBackgroundSubagent(true, undefined), false);
+    await sendPrompt(sid, "anyway");
+    assert.equal(callsFor(`/api/session/${sid}/prompt`).length, 1);
+    assert.equal(sendError.value, undefined);
   });
 });
 
