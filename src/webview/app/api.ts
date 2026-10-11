@@ -1212,8 +1212,9 @@ export interface MessagePage {
 }
 
 // The default page size (the server's own). A page shorter than this
-// proves the transcript is complete.
-const MESSAGE_PAGE = 50;
+// proves the transcript is complete. Exported for the store's refresh
+// sizing: a refresh fetches at least this many rows.
+export const MESSAGE_PAGE = 50;
 // The server clamps the limit at 400.
 const MESSAGE_PAGE_CAP = 400;
 

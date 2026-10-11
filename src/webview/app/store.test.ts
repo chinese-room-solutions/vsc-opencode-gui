@@ -779,7 +779,10 @@ describe("transcript windowing and Load older (5185f17)", () => {
     await refreshMessages(sid);
     assert.equal(listOf(sid).length, 170);
     assert.equal(listOf(sid)[0].info.id, "l0");
-    assert.equal(messagesCursor.value.get(sid), true);
+    // The covering fetch (sized to the 170 shown rows) came back short:
+    // the v2 store is exhausted, so the walk flag reads complete rather
+    // than the default page's maybe-more.
+    assert.equal(messagesCursor.value.get(sid), undefined);
   });
 
   it("walks older rows through the asc pages", async () => {
@@ -788,6 +791,11 @@ describe("transcript windowing and Load older (5185f17)", () => {
       type: i % 2 === 0 ? "user" : "assistant",
       time: { created: T0 + i * 10 },
     }));
+    // A clean slate: the previous test's expanded legacy rows would size
+    // this refresh's fetch past this mock's transcript and end the walk
+    // before it starts.
+    messagesBySession.value = new Map(messagesBySession.value).set(sid, []);
+    messagesCursor.value = new Map(messagesCursor.value).set(sid, undefined);
     onApi(
       messageMock(sid, (call: ApiCall) => {
         if (call.path.includes("cursor=w2"))

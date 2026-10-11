@@ -14,7 +14,11 @@ const port = parseInt(process.argv[2] ?? "0", 10);
 const directory = (process.argv[3] ?? "D:/fake/workspace").replace(/\\/g, "/");
 
 const SESSION_ID = "ses_seed_1";
-const SEED_TURNS = 12;
+// FAKE_API_LONG=1 seeds 60 turns (120+ rows) so the v2 message page the
+// endpoint serves (50) actually windows the transcript, and "Load older
+// messages" needs its cursor walk (a page is 100). Default stays small:
+// every other spec's session fits one page.
+const SEED_TURNS = process.env.FAKE_API_LONG === "1" ? 60 : 12;
 // FAKE_API_BLOCKED=1 rigs the parent session mid-turn, blocked on a live
 // foreground sub-agent: the last turn's first task part reads running
 // (vouching for child ses_child_1) and the status endpoints serve the
@@ -1002,8 +1006,51 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if ((m = path.match(/^\/api\/session\/([^/]+)\/message$/))) {
-      // v2 page: {data}, newest first; short page proves the transcript complete.
-      json(res, 200, { data: [...seedRows, ...stepsRows].sort((a, b) => b.time.created - a.time.created), cursor: {} });
+      // v2 page, paged like 2.0.26: limit (default 50), order asc|desc,
+      // and an opaque base64url cursor {id, order, direction}. A cursor
+      // walks rows after (next) or before (previous) its anchor; a page
+      // short of the limit is the only "transcript complete" signal, and
+      // cursor.next rides every non-empty page. The client re-sorts, so
+      // only the row set and count matter — order is served anyway.
+      const all = [...seedRows, ...stepsRows].sort(
+        (a, b) => a.time.created - b.time.created || (a.id < b.id ? -1 : 1),
+      );
+      const limit = Math.max(1, Number(url.searchParams.get("limit") ?? "50") || 50);
+      let order = url.searchParams.get("order") ?? "desc";
+      let direction = "next";
+      let anchor = -1;
+      const raw = url.searchParams.get("cursor");
+      if (raw) {
+        try {
+          const dec = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+          order = dec.order ?? order;
+          direction = dec.direction ?? direction;
+          anchor = all.findIndex((r) => r.id === dec.id);
+        } catch {
+          anchor = -1;
+        }
+      }
+      if (raw && anchor < 0) {
+        json(res, 200, { data: [], cursor: {} });
+        return;
+      }
+      const eff = direction === "previous" ? (order === "asc" ? "desc" : "asc") : order;
+      let page;
+      if (anchor >= 0) {
+        const before = all.slice(0, anchor);
+        const after = all.slice(anchor + 1);
+        page = eff === "asc" ? after.slice(0, limit) : before.slice(-limit).reverse();
+      } else {
+        page = eff === "asc" ? all.slice(0, limit) : all.slice(-limit).reverse();
+      }
+      if (direction === "previous") page.reverse();
+      const last = page.at(-1);
+      const enc = (row, dir) =>
+        Buffer.from(JSON.stringify({ id: row.id, order, direction: dir })).toString("base64url");
+      json(res, 200, {
+        data: page,
+        cursor: last ? { next: enc(last, "next") } : {},
+      });
       return;
     }
     if ((m = path.match(/^\/api\/session\/([^/]+)\/(permission|question)$/))) {

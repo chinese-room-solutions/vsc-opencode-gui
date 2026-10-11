@@ -74,6 +74,7 @@ import {
   isTruncatedPart,
   stringifyError,
   tokensTotal,
+  MESSAGE_PAGE,
 } from "./api";
 import { connectEvents, type ServerEvent } from "./events";
 import { translateV2Event, v2RowID } from "./v2events";
@@ -3206,8 +3207,17 @@ export async function refreshMessages(id: string): Promise<void> {
     // The v2 page plus the legacy rows compaction writes (fetchLegacyMessages
     // for why the v2 feed never carries them); the v1 store is unpaged and
     // disjoint, so a merge by id is the whole transcript.
+    // The page must cover the rows already on screen: it serves the newest
+    // `size` rows, and rows the reader expanded via "Load older messages"
+    // are not in a default-size one — the retention filter below would read
+    // them as "not served" and drop them, collapsing an expanded view back
+    // to the window on every busy poll, reconnect resync, or remount. Past
+    // the endpoint's page cap the oldest expanded rows still fall off (the
+    // button reloads them), and a covering page honestly reports "no more"
+    // — the cursor no-downgrade below keeps the button from flickering.
+    const shown = messagesBySession.value.get(id)?.length ?? 0;
     const [page, legacy] = await Promise.all([
-      fetchMessages(id),
+      fetchMessages(id, shown > MESSAGE_PAGE ? { size: shown } : undefined),
       fetchLegacyMessages(id),
     ]);
     const fetchStart = Date.now();
@@ -3423,11 +3433,14 @@ export async function refreshMessages(id: string): Promise<void> {
     const cursors = new Map(messagesCursor.value);
     // `older`: true = the tail proved older rows (asc walk not started),
     // string = a started walk's continuation, undefined = complete. A
-    // refresh must not downgrade a started walk back to its start.
+    // refresh must not downgrade either: a covering fetch (sized to the
+    // rows on screen) proves "no more" where the default page said
+    // "maybe", but that proof flips with every new row — the button
+    // stays until a walk's own short page ends it.
     const prev = cursors.get(id);
     const older =
       typeof page?.older === "string" ? page.older : page?.older ? true : undefined;
-    cursors.set(id, typeof prev === "string" && older === true ? prev : older);
+    cursors.set(id, older === undefined && prev !== undefined ? prev : older);
     messagesCursor.value = cursors;
     // An idle session's loaded tail is settled — record it, or a page that
     // never saw the idle event (F5, a fresh open) treats the long-dead
