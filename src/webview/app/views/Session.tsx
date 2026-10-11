@@ -611,6 +611,25 @@ export function Session(props: { sessionId?: string; parent?: string }) {
                       live={m.info.id === liveId}
                     />
                   ))}
+                  {/* The stuck tool's wait stands where the wait is: under
+                      the live turn's rows, above its meta line — not below
+                      the footer it belongs to. */}
+                  {stallHold &&
+                    stalledAnchor !== undefined &&
+                    g.msgs.some((m) => m.info.id === liveId) && (
+                      <div class="msg assistant dot-running">
+                        <div class="status-line">
+                          <span class="dot" aria-hidden="true" />
+                          <div class="thinking-line">
+                            Waiting for the model...
+                            {/* The clock is the silence itself — from the
+                                newest arg delta or the stalled part's
+                                start, whichever is later. */}
+                            <StatusStats start={stalledAnchor} gen={0} />
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   {/* Only a turn that ran gets a footer: a queued prompt
                       sits alone in its group, and its user row carries
                       agent/model the footer would parade as if a turn
@@ -662,22 +681,6 @@ export function Session(props: { sessionId?: string; parent?: string }) {
                 <div class="status-line">
                   <span class="dot" aria-hidden="true" />
                   <div class="thinking-line">Working...</div>
-                </div>
-              </div>
-            </div>
-          )}
-          {stallHold && stalledAnchor !== undefined && (
-            <div class="turn">
-              <div class="msg assistant dot-running">
-                <div class="status-line">
-                  <span class="dot" aria-hidden="true" />
-                  <div class="thinking-line">
-                    Waiting for the model...
-                    {/* The clock is the silence itself — from the newest
-                        arg delta or the stalled part's start, whichever
-                        is later. */}
-                    <StatusStats start={stalledAnchor} gen={0} />
-                  </div>
                 </div>
               </div>
             </div>

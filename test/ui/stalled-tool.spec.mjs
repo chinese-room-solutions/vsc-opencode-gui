@@ -2,8 +2,9 @@
 // streams tool args as ephemeral deltas, and a stalled provider stream
 // leaves the part "running" with empty input for minutes (observed
 // 20-30+ on GLM). The wait reads as the transcript's standard
-// "Waiting for the model..." placeholder row under the turn — the same
-// place and shape it always shows — never a line inside the tool card.
+// "Waiting for the model..." placeholder row inside the live turn —
+// under the turn's rows, above its meta footer — the same shape it
+// always shows, never a line inside the tool card.
 // It only appears once the arg stream has been silent 30s: a refresh
 // wipes the streamed preview while the stream is healthy, and that
 // alone must not read as a stall. FAKE_API_STALLED seeds the shape: a
@@ -39,11 +40,24 @@ test("a stalled tool reads waiting for the model on the standard placeholder aft
     await expect(stalled.locator(".tool-name")).toHaveText("Edit", {
       timeout: 15_000,
     });
-    // The wait reads on the standard placeholder row under the turn; the
-    // card itself stays one line with its empty argument pill.
+    // The wait reads on the standard placeholder row under the turn's
+    // rows and ABOVE its meta footer; the card itself stays one line
+    // with its empty argument pill.
     await expect(waitRow(page)).toBeVisible({ timeout: 10_000 });
     await expect(stalled.locator(".thinking-line")).toHaveCount(0);
     await expect(stalled.locator(".tool-pill")).toHaveText("");
+    const waitAboveFooter = await page.evaluate(() => {
+      const row = [...document.querySelectorAll(".thinking-line")].find((el) =>
+        el.textContent.includes("Waiting for the model"),
+      );
+      const foot = row?.closest(".turn")?.querySelector(".turn-footer");
+      if (!row || !foot) return "missing";
+      return row.compareDocumentPosition(foot) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+        ? "before"
+        : "after";
+    });
+    expect(waitAboveFooter).toBe("before");
     // Settled rows keep their argument pill — the hint is only for the
     // running-and-silent shape.
     const settled = page
