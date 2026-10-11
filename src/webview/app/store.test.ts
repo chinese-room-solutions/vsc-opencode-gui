@@ -2773,6 +2773,71 @@ describe("revert fold", () => {
     assert.equal(sendError.value?.text, "The redo was rejected by the server.");
     assert.deepEqual(sessions.value[0].revert, { messageID: "u2" });
   });
+  it("a send commits the cut: rows that re-entered the store leave it", async () => {
+    const sid = "rv5";
+    sessions.value = [sessRow(sid, { revert: { messageID: "u2" } })];
+    // The fold only applies in refreshMessages; events for the dying turn
+    // (an interrupt settling, say) re-add folded rows to the store.
+    open(sid, [
+      row("u1", "user", 1),
+      row("a1", "assistant", 2),
+      row("u2", "user", 3),
+      row("a2", "assistant", 4),
+    ]);
+    // The commit truncated server-side: the truth is the rows before the
+    // marker only.
+    onApi(
+      messageMock(sid, {
+        data: [
+          { id: "u1", type: "user", time: { created: 1 }, text: "one" },
+          { id: "a1", type: "assistant", time: { created: 2 } },
+        ],
+        cursor: {},
+      }),
+    );
+    onApi((call) =>
+      call.method === "POST" &&
+      call.path.startsWith(`/session/${sid}/prompt_async`)
+        ? {}
+        : undefined,
+    );
+    await sendPrompt(sid, "two, edited");
+    await settle();
+    const ids = listOf(sid).map((m) => m.info.id);
+    assert.deepEqual(
+      ids.filter((i) => !i.startsWith("pending:")),
+      ["u1", "a1"],
+    );
+    // The new prompt's echo survives the cut until its durable row lands.
+    assert.equal(ids.some((i) => i.startsWith("pending:")), true);
+    assert.equal(sessions.value.find((s) => s.id === sid)?.revert, undefined);
+  });
+  it("the server clearing the marker takes the folded rows with it", async () => {
+    const sid = "rv6";
+    sessions.value = [sessRow(sid, { revert: { messageID: "u2" } })];
+    open(sid, [
+      row("u1", "user", 1),
+      row("a1", "assistant", 2),
+      row("u2", "user", 3),
+      row("a2", "assistant", 4),
+    ]);
+    onApi(
+      messageMock(sid, {
+        data: [
+          { id: "u1", type: "user", time: { created: 1 }, text: "one" },
+          { id: "a1", type: "assistant", time: { created: 2 } },
+        ],
+        cursor: {},
+      }),
+    );
+    await sseFlush("session.updated", { info: { id: sid, revert: null } });
+    await settle();
+    assert.deepEqual(
+      listOf(sid).map((m) => m.info.id),
+      ["u1", "a1"],
+    );
+    assert.equal(sessions.value.find((s) => s.id === sid)?.revert, undefined);
+  });
 });
 
 describe("unread tabs", () => {

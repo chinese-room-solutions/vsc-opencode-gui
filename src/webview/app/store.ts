@@ -1262,6 +1262,31 @@ export async function redoSession(id: string): Promise<boolean> {
   return true;
 }
 
+// The cut committing — the next prompt POSTs through it, or the server
+// announces the marker's end (v2's cleared/committed, a v1 row without
+// it). The rows the fold hid must leave the store, mirroring the fold's
+// slice in refreshMessages, or lifting the marker re-reveals the truncated
+// transcript under the newer rows. The pull adopts the server's truth.
+function commitRevertCut(id: string, revertID: string): void {
+  const list = messagesBySession.value.get(id);
+  const cut = list?.findIndex((m) => m.info.id === revertID) ?? -1;
+  if (list && cut >= 0) {
+    forgetTruncatedParts(
+      list.slice(cut).flatMap((m) => m.parts.map((p) => p.id)),
+    );
+    mutateMessages(id, (l) => {
+      const c = l.findIndex((m) => m.info.id === revertID);
+      // A pending echo for the committing prompt sits after the cut; its
+      // bubble survives until the durable row retires it.
+      return c < 0
+        ? l
+        : l.filter((m, i) => i < c || m.info.id.startsWith("pending:"));
+    });
+  }
+  patchSession(id, (s) => ({ ...s, revert: undefined }));
+  void refreshMessages(id);
+}
+
 // Turn a model citation into a path that opens. `client.go:322` is prose —
 // the model writes the basename it last had in context, and the real file
 // usually sits deeper — so a bare basename resolves to a real file: first
@@ -1808,6 +1833,8 @@ function applyEvent(event: ServerEvent): void {
     case "session.updated":
       if (data.info) {
         const info = data.info as Session & { directory?: string };
+        const hadRevert = sessions.value.find((s) => s.id === info.id)?.revert
+          ?.messageID;
         // Partial rows (the v2 event translation maps facts — usage,
         // creation — onto session.updated) merge into the stored row; a
         // full row upserts. Merging keeps a fact-only info (no title,
@@ -1853,6 +1880,13 @@ function applyEvent(event: ServerEvent): void {
               },
             }),
           );
+        // The marker leaving the row is the cut committing (or a redo in
+        // another window): the folded rows go with it.
+        if (
+          hadRevert !== undefined &&
+          sessions.value.find((s) => s.id === info.id)?.revert === undefined
+        )
+          commitRevertCut(info.id, hadRevert);
       }
       break;
     // The v1 stream's authoritative busy/idle (v1 turns have no step events
@@ -3787,6 +3821,11 @@ async function postPrompt(
     clearComposerFiles(id);
     // A v1 pick rode this prompt's body; the row converges on its turn.
     if (dialect() === "v1") v1Picks.delete(id);
+    // The send commits a pending revert: the server truncates at the
+    // marker. Cut the local rows BEFORE the new prompt's row lands —
+    // after, the cut's slice would take the new row with it.
+    const cutRevert = sessions.value.find((s) => s.id === id)?.revert;
+    if (cutRevert) commitRevertCut(id, cutRevert.messageID);
     // v2 replies the admitted user row with the POST — land it in place of
     // the optimistic echo (v1 hears it as message.updated on /event). The
     // row lands BEFORE the echo clears: the echo is the group separator,
@@ -3829,9 +3868,6 @@ async function postPrompt(
       // it for a ghost once a stop wipes the echo (see postedRows; the
       // pre-POST bump above is this counter).
     }
-    // The send commits a pending revert: the server truncates the store at
-    // the marker and clears it — drop the local copy so the fold lifts.
-    patchSession(id, (s) => ({ ...s, revert: undefined }));
     // prompt_async returns before any row exists — the user row arrives on
     // the v1 stream (message.updated) and swaps out the optimistic echo.
     // A turn that dies before its first step (e.g. an unavailable model)
