@@ -46,7 +46,7 @@ light weight.
   from tools; read its state from screenshots via OCR.
 - The top-level agent can be not multimodal (check). Screenshot/visual inspection is
   delegated to a subagent running the vision-capable model
-  (zhipuai/glm-5.3-flash), never judged from the top level.
+  (zai-coding-plan/glm-5.3-flash), never judged from the top level.
 
 ## Working style
 
