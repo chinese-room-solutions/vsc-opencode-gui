@@ -22,51 +22,15 @@ HTTP/SSE.
   session tabs.
 - **Projects × sessions home** - every session of every project on one
   screen. Projects rename in place, and sessions from other folders open
-  deep-linked. Ctrl/⌘+Click and Shift+Click pick rows for a bulk delete
-  through one confirm - sessions or whole projects, never both - from a
-  single floating Delete at the bottom; Esc or a click off the rows drops
-  the picks.
-- **Share a session** - publish a conversation as a public link from the
-  tab menu or a home row; the URL is copied to the clipboard and shown in
-  the context panel. Stop sharing takes it private again. opencode v1
-  servers only - v2.0.x has no share API yet (the entry hides there).
-- **Fork a session** - duplicate a conversation from the tab menu or a
-  home row and continue on the copy; the original stays untouched
-  (opencode's `session_fork`).
+  deep-linked.
 - **Sub-agents are sessions** - open one from its task chip, steer it, stop
-  it, and the parent's turn collects the result. A prompt sent into a turn
-  blocked on sub-agents moves them to the background (opencode v2 servers)
-  and is answered immediately; each finished child lands as a notice card
-  that opens onto its transcript.
-- **`/init`** - guided AGENTS.md setup for the project, mirroring the
-  opencode TUI's builtin (a user- or server-defined `/init` command wins).
+  it, and the parent's turn collects the result.
 - **Notifications, visual and sound** - tabs pulse yellow when a session
   waits on you and green when a turn finishes. Chimes cover ready,
   permission, and question events.
 - **Steer mid-turn** - a prompt sent while the agent works lands at the next
   step boundary. Prompts still waiting in the queue can be reverted (hover
   the bubble, Revert) - the text returns to the composer unposted.
-- **Shell commands live in the transcript** - a command run in the session
-  (`!` in the TUI, or the shell API) renders as its own row whose output
-  streams while it runs, with a stop control to kill it; a row left running
-  by a server restart settles with a note instead of spinning forever
-  (opencode 2.x).
-- **Dead turns don't haunt the transcript** - a turn that dies without its
-  final events (an interrupt racing a tool call, a server restart) leaves
-  its last command row "running" in the v2 store forever; the UI reads such
-  rows as settled the moment the session is idle, so they show no phantom
-  progress and never re-animate with a minutes-old timer when the next
-  prompt starts (opencode 2.x).
-- **History pages back from where you are** - the transcript opens on the
-  newest page and "Load older messages" walks the paged v2 transcript with
-  cursors, each click adding the rows just above the window (never a jump
-  to the session's start); a refresh (the busy poll, a reconnect's resync,
-  reopening a tab) re-fetches enough to cover what's on screen, so hours of
-  scrolled-back history don't collapse to the newest page mid-read
-  (opencode 2.x).
-- **Redo a revert** - a reverted turn folds out of the transcript until the
-  next prompt commits the cut; the fold line's Redo restores it (opencode's
-  `/redo`).
 - **Fast copy** - hold the copy modifier (Alt, or ⌘ - see
   `opencodeGui.codeCopyModifier`) and click a code block, quote, or inline
   code span to copy it.
@@ -77,9 +41,6 @@ HTTP/SSE.
   into the workspace before the turn starts, ready for the agent to reuse.
 - **Context & cost ring** - live context-window fill, click for the cost and
   token breakdown.
-- **Remote-ready** - over SSH, dev containers, WSL, or Codespaces the
-  extension runs on the remote host, so the server, files, and sessions
-  live where the project is.
 
 ## ⌨️ Commands
 
