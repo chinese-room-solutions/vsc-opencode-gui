@@ -375,7 +375,10 @@ export class ServerManager {
       let isV2 = false;
       try {
         const ver = await execFile(commandLine, ["--version"], {
-          timeout: 5000,
+          // Generous: a cold node-shim start can beat 5s on Windows, and
+          // a timeout here reads as v1 — the v2 spawn then lands without
+          // our password and the attach probe below never concludes.
+          timeout: 15_000,
           // Same resolution rule as the serve spawn below.
           shell: process.platform === "win32",
         });
@@ -384,7 +387,9 @@ export class ServerManager {
       } catch {
         // Unversioned binary: assume v1 (a misdetected v2 child prints a
         // password we never learn and every call 401s — but a binary whose
-        // --version fails won't serve either).
+        // --version fails won't serve either). Say it: this path leaves a
+        // v2 spawn unattachable with no other trace in the log.
+        log.warn("opencode --version probe failed; assuming a v1 server");
       }
       setSpawnedServerPassword(spawnPassword);
 
