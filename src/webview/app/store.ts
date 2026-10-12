@@ -1577,6 +1577,11 @@ function scheduleIdle(sessionID: string): void {
   clearTimeout(idleTimers[sessionID]);
   idleTimers[sessionID] = window.setTimeout(() => {
     delete idleTimers[sessionID];
+    // The heuristic never ends a turn that is mid-tool: silence over a
+    // running part is a hang, not an end — the server's own idle truth
+    // (an event or an adoption) ends it, and the stuck chip speaks for
+    // the hang while it holds busy.
+    if (hasLiveTools(sessionID)) return;
     dropQueued(sessionID);
     setIdle(sessionID);
   }, 3000);
@@ -1642,30 +1647,79 @@ const idleTails: Record<string, string> = {};
 // interrupt racing the tool call, a server restart) — the v2 store keeps
 // it "running" forever, and the row would spin dot-less with no timer,
 // then re-animate off its old stamps when the next prompt flips the
-// session busy. Settle it; a still-alive turn re-marks its parts on the
-// next tool event. Native shell rows are exempt — the tail poller owns
-// settling those, with its own note.
+// session busy. Settle it as an error with a note: it never finished,
+// and a bare "completed" reads green like success. A still-alive turn
+// re-marks its parts on the next tool event. Native shell rows are
+// exempt — the tail poller owns settling those, with its own note.
+const liveToolPart = (p: Part): p is ToolPart =>
+  isTool(p) &&
+  p.state?.metadata?.nativeShell !== true &&
+  (p.state?.status === "running" || p.state?.status === "pending");
+
+function hasLiveTools(sessionID: string): boolean {
+  return (messagesBySession.value.get(sessionID) ?? []).some((m) =>
+    m.parts.some(liveToolPart),
+  );
+}
+
 function settleDeadTools(sessionID: string): void {
-  const unsettled = (p: Part): p is ToolPart =>
-    isTool(p) &&
-    p.state?.metadata?.nativeShell !== true &&
-    (p.state?.status === "running" || p.state?.status === "pending");
   const rows = messagesBySession.value.get(sessionID);
-  if (!rows?.some((m) => m.parts.some(unsettled))) return;
+  if (!rows?.some((m) => m.parts.some(liveToolPart))) return;
   mutateMessages(sessionID, (list) =>
     list.map((m) =>
-      m.parts.some(unsettled)
+      m.parts.some(liveToolPart)
         ? {
             ...m,
             parts: m.parts.map((p) =>
-              unsettled(p)
-                ? { ...p, state: { ...p.state, status: "completed" } }
+              liveToolPart(p)
+                ? {
+                    ...p,
+                    state: {
+                      ...p.state,
+                      status: "error",
+                      error: "The turn ended before this tool finished.",
+                      time: { ...p.state?.time, end: Date.now() },
+                    },
+                  }
                 : p,
             ),
           }
         : m,
     ),
   );
+}
+
+// An idle that arrives while the transcript still holds live tools is
+// not adopted on one signal: the server's own status map gets the final
+// say. Busy there → the idle was a seam (a raced event, a transient map
+// gap in an adoption): stay busy, and the turn's next event re-marks the
+// parts. Absent (or the pull fails — a down server's sessions idle like
+// any other) → land the idle. One verification pull per gate; a second
+// idle arriving mid-verify is answered by the same pull.
+const idleVerifying = new Set<string>();
+function verifiedIdle(sessionID: string, land: () => void): void {
+  if (!hasLiveTools(sessionID)) {
+    land();
+    return;
+  }
+  if (idleVerifying.has(sessionID)) return;
+  idleVerifying.add(sessionID);
+  void fetchSessionStatus()
+    .then((map) => {
+      idleVerifying.delete(sessionID);
+      if (map && map[sessionID]) {
+        cancelIdle(sessionID);
+        cancelRing(sessionID);
+        sessionStatus.value = {
+          ...sessionStatus.value,
+          [sessionID]: { type: "busy" },
+        };
+      } else land();
+    })
+    .catch(() => {
+      idleVerifying.delete(sessionID);
+      land();
+    });
 }
 
 function setIdle(sessionID: string): void {
@@ -1854,12 +1908,15 @@ function applyEvent(event: ServerEvent): void {
         // or already ended).
         if (!hasQueued(data.sessionID) && !postedRows.has(data.sessionID))
           dropPending(data.sessionID);
-        setIdle(data.sessionID);
+        const idleSid = data.sessionID;
+        verifiedIdle(idleSid, () => setIdle(idleSid));
       }
       break;
     case "session.status":
       if (data.sessionID && data.status) {
-        if (data.status.type === "idle") setIdle(data.sessionID);
+        const idleSid = data.sessionID;
+        if (data.status.type === "idle")
+          verifiedIdle(idleSid, () => setIdle(idleSid));
         else {
           // A live status (busy, retry — backoffs run minutes) keeps the
           // turn going: a pending step-failed grace must not idle over it.
@@ -3170,21 +3227,39 @@ let statusesAdopted = false;
 export async function refreshStatuses(): Promise<void> {
   const statuses = await fetchSessionStatus();
   if (!statuses) return;
-  sessionStatus.value = statuses;
+  // Absence over a session that is mid-tool is not yet idle truth: hold
+  // its busy entry and its settle behind one verification pull — a raced
+  // map gap must not freeze live rows into false idle. Confirmed absence
+  // lands the idle (and the settle) through the gate below.
+  let next = statuses;
+  const held: string[] = [];
+  for (const sid of messagesBySession.value.keys()) {
+    if (
+      statuses[sid] ||
+      (sessionStatus.value[sid]?.type ?? "idle") === "idle" ||
+      !hasLiveTools(sid)
+    )
+      continue;
+    next = { ...next, [sid]: sessionStatus.value[sid] };
+    held.push(sid);
+  }
+  sessionStatus.value = next;
   statusesAdopted = true;
   // Absence from the busy-only map is idle truth (the ring's rule): a
   // session with no entry is as idle as one the map states — both may
   // hold parts of a turn that died without terminal events.
   for (const sid of messagesBySession.value.keys())
-    if (!statuses[sid]) settleDeadTools(sid);
+    if (!next[sid]) settleDeadTools(sid);
   // Idle truth retires every echo but a queued turn's (it rides the next
   // turn) and a steered POST's (its row lands with the next turn): a
   // stale echo would pin the session's busy backstop off its row pulls
   // and read as a session frozen until reload.
-  for (const [sid, st] of Object.entries(statuses)) {
+  for (const [sid, st] of Object.entries(next)) {
     if (st.type === "idle" && !hasQueued(sid) && !postedRows.has(sid))
       dropPending(sid);
   }
+  for (const sid of held)
+    verifiedIdle(sid, () => setIdle(sid));
 }
 
 export async function refreshMessages(id: string): Promise<void> {
@@ -3767,8 +3842,10 @@ async function postPrompt(
     // Keep the echo: dropping it deleted the user's text from the
     // transcript (the composer already cleared) — a failed send leaves the
     // bubble in place, the banner explains, and the 4s wait hold retires
-    // the spinner.
-    sessionStatus.value = { ...sessionStatus.value, [id]: { type: "idle" } };
+    // the spinner. A turn already running owns the status — a failed steer
+    // over live tools must not idle it.
+    if (!hasLiveTools(id))
+      sessionStatus.value = { ...sessionStatus.value, [id]: { type: "idle" } };
     setSendError(withReason("The message could not be sent", sent.error));
   } else {
     clearComposerFiles(id);
@@ -3825,13 +3902,20 @@ async function postPrompt(
     // the v1 stream (message.updated) and swaps out the optimistic echo.
     // A turn that dies before its first step (e.g. an unavailable model)
     // emits nothing but session.error — adopt the server's status map and
-    // pull rows once anyway, so optimistic state can't stick.
+    // pull rows once anyway, so optimistic state can't stick. Absence in
+    // the map is not idle over a session still mid-tool: a raced map gap
+    // here would freeze live rows (the pull's own state stands until the
+    // stream or an adoption settles it).
     setTimeout(() => {
       void fetchSessionStatus().then((map) => {
         if (map) {
           sessionStatus.value = {
             ...sessionStatus.value,
-            [id]: map[id] ?? { type: "idle" },
+            [id]:
+              map[id] ??
+              (hasLiveTools(id)
+                ? sessionStatus.value[id] ?? { type: "busy" }
+                : { type: "idle" }),
           };
         }
       });

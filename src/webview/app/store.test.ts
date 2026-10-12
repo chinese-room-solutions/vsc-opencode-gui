@@ -68,6 +68,7 @@ import {
   queuedTurns,
   redoSession,
   refreshMessages,
+  refreshStatuses,
   refreshPermissions,
   refreshQuestions,
   renameProject,
@@ -1934,6 +1935,126 @@ describe("a retrying turn stays working", () => {
     await sseFlush("session.next.step.failed", { sessionID: sid });
     fireExact(3000);
     assert.equal(sessionStatus.value[sid]?.type, "idle");
+  });
+});
+
+// One anomalous idle (a raced event, a transient status-map gap) landing
+// while a turn is mid-tool used to rewrite the running parts to bare
+// "completed" — green, timer-less, idle chrome — with every correcting
+// poll disarmed behind the idle belief. An idle over live tools is now
+// verified against the server's own map, and a confirmed settle reads
+// errored, not completed.
+describe("an idle over live tools", () => {
+  const liveTurn = (sid: string): void => {
+    const part: Part = {
+      id: "p1",
+      messageID: "a1",
+      sessionID: sid,
+      type: "tool",
+      tool: "bash",
+      state: {
+        status: "running",
+        time: { start: T0 + 1 },
+        input: { command: "taskkill /T" },
+      },
+    };
+    open(sid, [
+      row("u1", "user", T0),
+      {
+        info: { id: "a1", role: "assistant", time: { created: T0 + 1 } },
+        parts: [part],
+      },
+    ]);
+    setBusy(sid);
+  };
+  const toolState = (
+    sid: string,
+  ): Record<string, unknown> | undefined => {
+    const p = findPart(sid, "p1");
+    return p !== undefined && "state" in p
+      ? ((p as { state?: Record<string, unknown> }).state)
+      : undefined;
+  };
+
+  it("the heuristic grace never ends a mid-tool turn", async () => {
+    const sid = "lv1";
+    liveTurn(sid);
+    await sseFlush("session.next.step.started", { sessionID: sid });
+    await sseFlush("session.next.step.ended", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      finish: "stop",
+      tokens: tok({ output: 40 }),
+    });
+    fireExact(3000);
+    assert.equal(sessionStatus.value[sid]?.type, "busy");
+    assert.equal(toolState(sid)?.status, "running");
+  });
+
+  it("an idle event over live tools lands only when the map confirms", async () => {
+    const sid = "lv2";
+    liveTurn(sid);
+    onApi(
+      (call) =>
+        call.method === "GET" && call.path === "/session/status"
+          ? { [sid]: { type: "busy" } }
+          : undefined,
+    );
+    await sseFlush("session.idle", { sessionID: sid });
+    await settle(6);
+    assert.equal(sessionStatus.value[sid]?.type, "busy");
+    assert.equal(toolState(sid)?.status, "running");
+  });
+
+  it("a confirmed idle settles the dead tool as an error, not success", async () => {
+    const sid = "lv3";
+    liveTurn(sid);
+    await sseFlush("session.idle", { sessionID: sid });
+    await settle(6);
+    assert.equal(sessionStatus.value[sid]?.type, "idle");
+    const p = toolState(sid) as {
+      status?: string;
+      error?: string;
+      time?: { end?: number };
+    };
+    assert.equal(p?.status, "error");
+    assert.match(p?.error ?? "", /ended before this tool finished/);
+    assert.notEqual(p?.time?.end, undefined);
+  });
+
+  it("an adoption absence over live tools holds busy until confirmed", async () => {
+    const sid = "lv4";
+    liveTurn(sid);
+    let pulls = 0;
+    onApi((call) => {
+      if (call.method !== "GET" || call.path !== "/session/status")
+        return undefined;
+      pulls++;
+      return pulls === 1 ? {} : { [sid]: { type: "busy" } };
+    });
+    await refreshStatuses();
+    await settle(6);
+    assert.equal(sessionStatus.value[sid]?.type, "busy");
+    assert.equal(toolState(sid)?.status, "running");
+  });
+
+  it("the post-prompt status merge keeps a mid-tool turn busy on absence", async () => {
+    const sid = "lv5";
+    liveTurn(sid);
+    onApi(
+      (call) =>
+        call.method === "POST" &&
+        call.path === `/session/${sid}/prompt_async`
+          ? {}
+          : call.method === "GET" && call.path === "/session/status"
+            ? {}
+            : undefined,
+    );
+    await sendPrompt(sid, "are we stuck?");
+    fireExact(2500);
+    await settle(6);
+    assert.equal(sessionStatus.value[sid]?.type, "busy");
+    assert.equal(toolState(sid)?.status, "running");
   });
 });
 
