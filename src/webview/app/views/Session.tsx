@@ -11,6 +11,7 @@ import {
 import { StopIcon, WordmarkIcon, OcResetIcon } from "../icons";
 import { isText, isTool } from "../api";
 import { modelWaitAnchor } from "../components/ToolCard";
+import { interruptStuckNow, stuckState } from "../stuck";
 import {
   failedMsgLoads,
   interruptedPrompts,
@@ -118,6 +119,19 @@ export function Session(props: { sessionId?: string; parent?: string }) {
   const restore = useRef(id ? scrollMemo.get(id) : undefined);
   const st = id ? sessionStatus.value[id] : undefined;
   const busy = st?.type === "busy";
+
+  // The stuck detector's verdict for this session (marks exist only
+  // while it reads busy): the earliest silenced stamp across the turn
+  // and its parts clocks the Interrupt chip.
+  const stuckSince = (() => {
+    const m = id ? stuckState.value[id] : undefined;
+    if (!m) return undefined;
+    const sinces = [
+      ...(m.turn ? [m.turn.since] : []),
+      ...Object.values(m.parts).map((p) => p.since),
+    ];
+    return sinces.length ? Math.min(...sinces) : undefined;
+  })();
 
   // Backstop for events lost without the stream ever dropping (a
   // suspended webview's host messages can vanish): while this session
@@ -683,6 +697,27 @@ export function Session(props: { sessionId?: string; parent?: string }) {
                   <div class="thinking-line">Working...</div>
                 </div>
               </div>
+            </div>
+          )}
+          {/* The stuck detector spoke (opencodeGui.stuckToolSeconds,
+              default 5 minutes of silence): the turn is alive
+              server-side but has made no progress — a provider stream
+              can die without an error and sit like this forever. The
+              chip aborts exactly what the mark names, the same reach as
+              the composer's Stop. */}
+          {id && stuckSince !== undefined && (
+            <div class="interrupted">
+              <StopIcon />
+              <span>
+                No progress for <StatusStats start={stuckSince} gen={0} />
+              </span>
+              <button
+                class="redo-link"
+                title="Interrupt the stuck turn"
+                onClick={() => void interruptStuckNow(id)}
+              >
+                Interrupt
+              </button>
             </div>
           )}
           {/* A pending revert folds the transcript here; the cut line is

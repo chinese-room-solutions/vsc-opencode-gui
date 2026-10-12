@@ -229,6 +229,19 @@ function stuckTick(): void {
 
 window.setInterval(stuckTick, 1000);
 
+// The transcript's Interrupt chip: abort what the mark names — a stuck
+// sub-agent child (its aborted result returns to the parent's turn,
+// which continues on its own) or the stalled turn itself.
+export async function interruptStuckNow(id: string): Promise<void> {
+  const mark = stuckState.value[id];
+  if (!mark) return;
+  const child = Object.values(mark.parts).find((m) => m.childId)?.childId;
+  await interruptStuck(
+    id,
+    child ? { kind: "tool", childId: child } : { kind: "turn" },
+  );
+}
+
 type StuckReason =
   | { kind: "tool"; childId?: string }
   | { kind: "turn" };

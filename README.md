@@ -31,6 +31,11 @@ HTTP/SSE.
 - **Steer mid-turn** - a prompt sent while the agent works lands at the next
   step boundary. Prompts still waiting in the queue can be reverted (hover
   the bubble, Revert) - the text returns to the composer unposted.
+- **Stuck turns surface a way out** - a provider stream can die silently and
+  leave a turn "busy" forever; after the stuck threshold
+  (`opencodeGui.stuckToolSeconds`) the transcript shows how long it has
+  been silent with an **Interrupt** chip, and an optional auto-abort
+  (`opencodeGui.stuckAutoAbortSeconds`) can end it for you.
 - **Fast copy** - hold the copy modifier (Alt, or ⌘ - see
   `opencodeGui.codeCopyModifier`) and click a code block, quote, or inline
   code span to copy it.
@@ -74,7 +79,7 @@ All commands live under the **`Open Code:`** prefix in the command palette.
 | `opencodeGui.readySound` | `true` | Chime when a turn finishes (1.5 s grace cancels on follow-ups). |
 | `opencodeGui.permissionSound` | `true` | Chime on permission asks. |
 | `opencodeGui.questionSound` | `true` | Chime on questions. |
-| `opencodeGui.stuckToolSeconds` | `300` | Silence before a tool counts as stuck (gates auto-abort). `0` disables. |
+| `opencodeGui.stuckToolSeconds` | `300` | Silence before a tool counts as stuck (shows the transcript's Interrupt chip; gates auto-abort). `0` disables. |
 | `opencodeGui.stuckAutoAbortSeconds` | `0` | Silence past the stuck threshold before the turn is stopped automatically (sends nothing into the session). `0` disables. Tool rows show elapsed time on hover - ticking while running, the total once settled - and preview a call's arguments live while the model streams them; a running call whose argument stream has been silent for 30s shows the transcript's standard "Waiting for the model..." placeholder row under the turn, where every wait reads (a refresh wiping the streamed preview alone doesn't - arriving deltas count as alive). |
 
 ## 📦 Install

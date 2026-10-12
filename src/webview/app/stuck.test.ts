@@ -1,11 +1,11 @@
 import "./setup.test";
 import { strict as assert } from "node:assert";
-import { runStuckTick, setNow } from "./setup.test";
+import { callsFor, onApi, runStuckTick, setNow } from "./setup.test";
 import { messagesBySession, pendingPermissions, sessionStatus } from "./store";
 import type { ChatMessage } from "./store";
 import type { Part } from "./api";
 import type { StuckSessionMark } from "./stuck";
-import { silenceLabel, stuckState } from "./stuck";
+import { interruptStuckNow, silenceLabel, stuckState } from "./stuck";
 
 const T0 = 5_000_000;
 
@@ -306,6 +306,63 @@ describe("stuck", () => {
       setNow(T0 + 5_000);
       runStuckTick();
       assert.equal(marksOf("sk9"), undefined);
+    });
+  });
+
+  describe("interruptStuckNow (the Interrupt chip)", () => {
+    it("aborts the session a plain stuck mark names", async () => {
+      const sid = "skc1";
+      busySession(sid);
+      open(sid, [runningToolMsg("m1", "p1", T0)]);
+      setNow(T0 + 100);
+      runStuckTick();
+      setNow(T0 + 5_000);
+      runStuckTick();
+      assert.ok(marksOf(sid));
+      onApi(
+        (call) =>
+          call.method === "POST" && call.path === `/session/${sid}/abort`
+            ? {}
+            : undefined,
+      );
+      await interruptStuckNow(sid);
+      assert.equal(callsFor(`/session/${sid}/abort`).length, 1);
+    });
+
+    it("a stuck sub-agent task aborts its child, not the parent", async () => {
+      const sid = "skc2";
+      busySession(sid);
+      open(sid, [
+        runningToolMsg("m1", "p1", T0, {
+          tool: "task",
+          state: {
+            status: "running",
+            time: { start: T0 },
+            metadata: { sessionId: "skc2-child" },
+          },
+        }),
+      ]);
+      setNow(T0 + 100);
+      runStuckTick();
+      setNow(T0 + 5_000);
+      runStuckTick();
+      assert.ok(marksOf(sid)?.parts["p1"].childId === "skc2-child");
+      onApi(
+        (call) =>
+          call.method === "POST" && call.path.endsWith("/abort") ? {} : undefined,
+      );
+      await interruptStuckNow(sid);
+      assert.equal(callsFor(`/session/skc2-child/abort`).length, 1);
+      assert.equal(callsFor(`/session/${sid}/abort`).length, 0);
+    });
+
+    it("no mark, no call", async () => {
+      onApi(
+        (call) =>
+          call.method === "POST" && call.path.endsWith("/abort") ? {} : undefined,
+      );
+      await interruptStuckNow("skc3");
+      assert.equal(callsFor("/session/skc3/abort").length, 0);
     });
   });
 });
