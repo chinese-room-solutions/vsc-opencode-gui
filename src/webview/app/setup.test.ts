@@ -143,20 +143,7 @@ function installGlobal(name: string, value: unknown): void {
 installGlobal("window", windowStub as unknown as Window & typeof globalThis);
 installGlobal("document", documentStub as unknown as Document);
 installGlobal("localStorage", localStorageStub as unknown as Storage);
-// The store's share action copies the link — record what the clipboard got.
-export const clipboardWrites: string[] = [];
-installGlobal(
-  "navigator",
-  {
-    platform: "Win32",
-    clipboard: {
-      writeText(text: string): Promise<void> {
-        clipboardWrites.push(text);
-        return Promise.resolve();
-      },
-    },
-  } as unknown as Navigator,
-);
+installGlobal("navigator", { platform: "Win32" } as unknown as Navigator);
 installGlobal(
   "AudioContext",
   FakeAudioContext as unknown as typeof AudioContext,

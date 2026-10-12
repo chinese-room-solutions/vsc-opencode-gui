@@ -15,9 +15,6 @@ import {
   sessionTile,
   sessionTitle,
   sessions,
-  shareSession,
-  shareSupported,
-  unshareSession,
 } from "../store";
 import { useArm } from "../useArm";
 
@@ -241,24 +238,6 @@ export function TabsBar() {
             >
               <span class="menu-label">Copy Session ID</span>
             </button>
-            {shareSupported() && (
-              <button
-                class="menu-item"
-                onClick={() => {
-                  const shared = !!sessions.value.find(
-                    (s) => s.id === menu.id,
-                  )?.share?.url;
-                  void (shared ? unshareSession(menu.id) : shareSession(menu.id));
-                  closeMenu();
-                }}
-              >
-                <span class="menu-label">
-                  {sessions.value.find((s) => s.id === menu.id)?.share?.url
-                    ? "Stop sharing"
-                    : "Share session..."}
-                </span>
-              </button>
-            )}
             <button
               class="menu-item"
               onClick={() => {

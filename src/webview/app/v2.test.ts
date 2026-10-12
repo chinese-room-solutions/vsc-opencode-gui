@@ -43,9 +43,7 @@ import {
   revertSession,
   runCommand,
   setDialect,
-  shareSession,
   unrevertSession,
-  unshareSession,
 } from "./api";
 import type { FilePart, Session } from "./api";
 import { translateV2Event } from "./v2events";
@@ -253,62 +251,6 @@ describe("dialect detection (probe logic)", () => {
       sleep: async () => {},
     });
     assert.equal(verdict, "v1");
-  });
-});
-
-// v1 (1.18.x) share: POST/DELETE /session/{id}/share with the directory
-// query; both reply the updated row carrying share:{url} (the SDK's
-// SessionShare service — wire shape from the 1.18 gen types).
-describe("share/unshare wire shape (v1)", () => {
-  it("posts the bare route with the directory query and reads share.url off the row", async () => {
-    onApi((call) =>
-      call.method === "POST" && call.path.startsWith("/session/ses_1/share")
-        ? {
-            ...sessRow("ses_1"),
-            directory: "C:\\work\\repo",
-            share: { url: "https://opncd.ai/s/y" },
-          }
-        : undefined,
-    );
-    const res = await shareSession("ses_1", "C:\\work\\repo");
-    assert.equal(res.ok, true);
-    assert.equal(res.url, "https://opncd.ai/s/y");
-    assert.equal(res.row?.location.directory, "C:\\work\\repo");
-    assert.equal(res.row?.share?.url, "https://opncd.ai/s/y");
-    const call = callsFor("/session/ses_1/share")[0];
-    assert.equal(call.method, "POST");
-    assert.match(
-      call.path,
-      /^\/session\/ses_1\/share\?directory=C%3A%5Cwork%5Crepo$/,
-    );
-    assert.equal(call.body, undefined);
-  });
-
-  it("adopts a legacy bare {url} reply without treating it as a row", async () => {
-    onApi((call) =>
-      call.method === "POST" && call.path.startsWith("/session/ses_2/share")
-        ? { url: "https://opncd.ai/s/z" }
-        : undefined,
-    );
-    const res = await shareSession("ses_2");
-    assert.equal(res.ok, true);
-    assert.equal(res.url, "https://opncd.ai/s/z");
-    assert.equal(res.row, undefined);
-  });
-
-  it("unshare DELETEs the same route and normalizes the reply row", async () => {
-    onApi((call) =>
-      call.method === "DELETE" && call.path.startsWith("/session/ses_3/share")
-        ? { ...sessRow("ses_3"), directory: "C:\\work\\repo" }
-        : undefined,
-    );
-    const res = await unshareSession("ses_3", "C:\\work\\repo");
-    assert.equal(res.ok, true);
-    assert.equal(res.row?.location.directory, "C:\\work\\repo");
-    assert.equal(res.row?.share, undefined);
-    const call = callsFor("/session/ses_3/share")[0];
-    assert.equal(call.method, "DELETE");
-    assert.match(call.path, /directory=/);
   });
 });
 
@@ -673,43 +615,6 @@ describe("v2 route/body/envelope translation", () => {
     assert.deepEqual(rename.body, { title: "renamed" });
     await deleteSession("ses_1", "C:\\w");
     assert.equal(callsFor("/api/session/ses_1")[1].method, "DELETE");
-  });
-
-  it("share/unshare go to /api/session/{id}/share and unwrap {data}", async () => {
-    onApi((call) =>
-      call.path === "/api/session/ses_1/share"
-        ? call.method === "POST"
-          ? { data: sessRow("ses_1", { share: { url: "https://opncd.ai/s/x" } }) }
-          : { data: sessRow("ses_1") }
-        : undefined,
-    );
-    const res = await shareSession("ses_1");
-    assert.equal(res.ok, true);
-    assert.equal(res.url, "https://opncd.ai/s/x");
-    assert.equal(res.row?.share?.url, "https://opncd.ai/s/x");
-    const post = callsFor("/api/session/ses_1/share")[0];
-    assert.equal(post.method, "POST");
-    assert.equal(post.path, "/api/session/ses_1/share");
-    assert.equal(post.body, undefined);
-    const un = await unshareSession("ses_1");
-    assert.equal(un.ok, true);
-    assert.equal(un.row?.share, undefined);
-    const del = callsFor("/api/session/ses_1/share")[1];
-    assert.equal(del.method, "DELETE");
-  });
-
-  it("a v2 server without the share route (2.0.x) fails the call once", async () => {
-    onApi((call) =>
-      call.path === "/api/session/ses_9/share"
-        ? apiFailWith("HTTP 404")
-        : undefined,
-    );
-    assert.deepEqual(await shareSession("ses_9"), {
-      ok: false,
-      error: "HTTP 404",
-    });
-    assert.equal((await unshareSession("ses_9")).ok, false);
-    assert.equal(callsFor("/api/session/ses_9/share").length, 2);
   });
 
   it("forkSession posts an empty JSON body to /api/session/{id}/fork and unwraps {data}", async () => {

@@ -5,7 +5,6 @@ import {
   ApiCall,
   bellRang,
   callsFor,
-  clipboardWrites,
   dispatchWindowMessage,
   fireExact,
   fireTimeouts,
@@ -91,14 +90,12 @@ import {
   providerColors,
   setProjectColor,
   setSelection,
-  shareSession,
   status,
   stepUsage,
   stopSession,
   stoppedPrompts,
   tombstones,
   toolArgsDeltaAt,
-  unshareSession,
   homeFilter,
   agents,
   hiddenModels,
@@ -3096,53 +3093,6 @@ describe("project purge", () => {
       "Deleted 1 of 2 sessions — the project was not removed.",
     );
     assert.equal(tombstones.value.includes("C:/work/repo"), false);
-  });
-});
-
-describe("session share", () => {
-  it("shares: posts the v1 route, copies the link, stamps the row", async () => {
-    clipboardWrites.length = 0;
-    sessions.value = [sessRow("sh1")];
-    onApi((call) =>
-      call.method === "POST" && call.path.startsWith("/session/sh1/share")
-        ? {
-            ...sessRow("sh1"),
-            directory: "C:\\work\\repo",
-            share: { url: "https://opncd.ai/s/a" },
-          }
-        : undefined,
-    );
-    assert.equal(await shareSession("sh1"), true);
-    assert.deepEqual(clipboardWrites, ["https://opncd.ai/s/a"]);
-    assert.equal(sessions.value[0].share?.url, "https://opncd.ai/s/a");
-    assert.equal(sendError.value, undefined);
-  });
-
-  it("a rejected share surfaces once and leaves the row untouched", async () => {
-    clipboardWrites.length = 0;
-    sessions.value = [sessRow("sh2")];
-    onApi((call) =>
-      call.path.startsWith("/session/sh2/share")
-        ? apiFailWith("HTTP 404")
-        : undefined,
-    );
-    assert.equal(await shareSession("sh2"), false);
-    assert.equal(clipboardWrites.length, 0);
-    assert.equal(sendError.value?.text, "Could not share the session: HTTP 404.");
-    assert.equal(sendError.value?.for, "sh2");
-    assert.equal(sessions.value[0].share, undefined);
-  });
-
-  it("unshares: drops the row marker on a bodyless reply", async () => {
-    sessions.value = [sessRow("sh3", { share: { url: "https://opncd.ai/s/b" } })];
-    onApi((call) =>
-      call.method === "DELETE" && call.path.startsWith("/session/sh3/share")
-        ? {}
-        : undefined,
-    );
-    assert.equal(await unshareSession("sh3"), true);
-    assert.equal(sessions.value[0].share, undefined);
-    assert.equal(sessions.value[0].title, "t-sh3");
   });
 });
 
