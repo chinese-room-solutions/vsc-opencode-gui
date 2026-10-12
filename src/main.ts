@@ -698,11 +698,19 @@ export function activate(context: vscode.ExtensionContext) {
   // Dead-tab watchdog: a page can die (renderer crash, boot that never
   // finished) while the server stays healthy, and then nothing else ever
   // rebuilds the tab — the grey placeholder sits until a manual Restart.
-  // Poll the heartbeat and recreate the panel when it reads dead. A
-  // genuinely unloadable app (broken install) keeps recycling the tab,
+  // Poll the heartbeat and recreate the panel when it reads dead — but
+  // only a VISIBLE one: VS Code suspends hidden webviews entirely
+  // (retained context included), so a hidden tab's silent heartbeat is
+  // suspension, not death. Destroying it mid-turn would drop live state
+  // for nothing; a renderer that dies hidden is caught on its next show.
+  // A genuinely unloadable app (broken install) keeps recycling the tab,
   // which is the same retry VS Code itself does for crashed webviews.
   const watchdog = setInterval(() => {
-    if (ChatPanel.instance?.chat.isUnresponsive) recreateChatPanel();
+    const panel = ChatPanel.instance;
+    if (panel?.isVisible && panel.chat.isUnresponsive) {
+      log.info("watchdog: visible chat tab unresponsive, recreating panel");
+      recreateChatPanel();
+    }
   }, 5_000);
   context.subscriptions.push({ dispose: () => clearInterval(watchdog) });
 
