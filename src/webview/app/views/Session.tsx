@@ -1,3 +1,4 @@
+import { Fragment } from "preact";
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { Composer } from "../components/Composer";
 import { ContextRing, foldFreedTokens } from "../components/ContextRing";
@@ -522,6 +523,51 @@ export function Session(props: { sessionId?: string; parent?: string }) {
   const empty =
     !props.parent && (!id || (list !== undefined && visible?.length === 0));
 
+  // Rows with two render sites. The stuck chip (opencodeGui.stuckToolSeconds,
+  // default 5 minutes of silence): the turn is alive server-side but has
+  // made no progress — a provider stream can die without an error and sit
+  // like this forever. It aborts exactly what the mark names, the same
+  // reach as the composer's Stop, and stands in the live turn's group,
+  // above its meta line. The pending-revert fold line marks the cut —
+  // Redo restores the folded rows until the next prompt commits it — in
+  // the last group, above its meta line.
+  const stuckRow =
+    id && stuckSince !== undefined ? (
+      <div class="interrupted">
+        <StopIcon />
+        <span>
+          No progress for <StatusStats start={stuckSince} gen={0} />
+        </span>
+        <button
+          class="redo-link"
+          title="Interrupt the stuck turn"
+          onClick={() => void interruptStuckNow(id)}
+        >
+          Interrupt
+        </button>
+      </div>
+    ) : undefined;
+  const revertRow =
+    id && session?.revert ? (
+      <div class="interrupted">
+        <OcResetIcon />
+        <span>Reverted</span>
+        <button
+          class="redo-link"
+          title="Restore the reverted messages"
+          onClick={() => void redoSession(id)}
+        >
+          Redo
+        </button>
+      </div>
+    ) : undefined;
+  // True when no regular group holds the live row — it never streamed, or
+  // the transcript filtered it (an empty step) — so the chip has no group
+  // to stand in.
+  const liveTurnMissing = !groups.some((g) =>
+    g.msgs.some((m) => m.info.id === liveId),
+  );
+
   return (
     <div class={empty ? "chat empty" : "chat"}>
       {id && (
@@ -608,12 +654,14 @@ export function Session(props: { sessionId?: string; parent?: string }) {
                       m.info.role === "assistant" && !foldIds.has(m.info.id),
                   );
                 return (
-                  <CompactedTurn
-                    key={g.key}
-                    msgs={g.msgs}
-                    live={busy === true && !laterTurn}
-                    freedK={freed ? Math.round(freed / 1000) : undefined}
-                  />
+                  <Fragment key={g.key}>
+                    <CompactedTurn
+                      msgs={g.msgs}
+                      live={busy === true && !laterTurn}
+                      freedK={freed ? Math.round(freed / 1000) : undefined}
+                    />
+                    {g.key === lastGroup?.key && revertRow}
+                  </Fragment>
                 );
               }
               return (
@@ -644,6 +692,30 @@ export function Session(props: { sessionId?: string; parent?: string }) {
                         </div>
                       </div>
                     )}
+                  {/* The meta line closes the turn: every dot row and
+                      action that speaks for it stands above the footer,
+                      never below it. The inter-step "Working..." is one
+                      of those rows — it used to render under the footer
+                      for the seconds a silent gap ran. */}
+                  {working && g.msgs.some((m) => m.info.id === liveId) && (
+                    <div class="msg assistant dot-running">
+                      <div class="status-line">
+                        <span class="dot" aria-hidden="true" />
+                        <div class="thinking-line">Working...</div>
+                      </div>
+                    </div>
+                  )}
+                  {/* The user stopped this turn: a quiet marker where the
+                      reply would have continued — the server announces an
+                      abort with nothing on the stream. */}
+                  {stoppedPrompts.value.has(g.key) && (
+                    <div class="interrupted">
+                      <StopIcon />
+                      <span>Interrupted</span>
+                    </div>
+                  )}
+                  {g.msgs.some((m) => m.info.id === liveId) && stuckRow}
+                  {g.key === lastGroup?.key && revertRow}
                   {/* Only a turn that ran gets a footer: a queued prompt
                       sits alone in its group, and its user row carries
                       agent/model the footer would parade as if a turn
@@ -654,15 +726,6 @@ export function Session(props: { sessionId?: string; parent?: string }) {
                       sid={id}
                       live={g.msgs.some((m) => m.info.id === liveId)}
                     />
-                  )}
-                  {/* The user stopped this turn: a quiet marker where the
-                      reply would have continued — the server announces an
-                      abort with nothing on the stream. */}
-                  {stoppedPrompts.value.has(g.key) && (
-                    <div class="interrupted">
-                      <StopIcon />
-                      <span>Interrupted</span>
-                    </div>
                   )}
                 </div>
               );
@@ -689,52 +752,17 @@ export function Session(props: { sessionId?: string; parent?: string }) {
               </div>
             </div>
           )}
-          {working && (
-            <div class="turn">
-              <div class="msg assistant dot-running">
-                <div class="status-line">
-                  <span class="dot" aria-hidden="true" />
-                  <div class="thinking-line">Working...</div>
-                </div>
-              </div>
-            </div>
-          )}
-          {/* The stuck detector spoke (opencodeGui.stuckToolSeconds,
-              default 5 minutes of silence): the turn is alive
-              server-side but has made no progress — a provider stream
-              can die without an error and sit like this forever. The
-              chip aborts exactly what the mark names, the same reach as
-              the composer's Stop. */}
-          {id && stuckSince !== undefined && (
-            <div class="interrupted">
-              <StopIcon />
-              <span>
-                No progress for <StatusStats start={stuckSince} gen={0} />
-              </span>
-              <button
-                class="redo-link"
-                title="Interrupt the stuck turn"
-                onClick={() => void interruptStuckNow(id)}
-              >
-                Interrupt
-              </button>
-            </div>
-          )}
-          {/* A pending revert folds the transcript here; the cut line is
-              the way back — Redo restores the folded rows until the next
-              prompt commits the cut. */}
-          {id && session?.revert && (
-            <div class="interrupted">
-              <OcResetIcon />
-              <span>Reverted</span>
-              <button
-                class="redo-link"
-                title="Restore the reverted messages"
-                onClick={() => void redoSession(id)}
-              >
-                Redo
-              </button>
-            </div>
+          {/* A stuck turn whose live row shows nowhere (nothing streamed
+              yet, or the streaming row is an empty step the transcript
+              filters) has no group to hold the chip: it stands at the
+              bottom beside the wait it names. A revert that folded away
+              every turn likewise has no group — the fold line is the
+              transcript's whole content. */}
+          {(liveTurnMissing || groups.length === 0) && (
+            <Fragment>
+              {liveTurnMissing && stuckRow}
+              {groups.length === 0 && revertRow}
+            </Fragment>
           )}
         </div>
         <div class="msgs-fade" />

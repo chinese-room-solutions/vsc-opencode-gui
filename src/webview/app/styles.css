@@ -1214,7 +1214,9 @@ body {
 
 /* The stop marker on a user-stopped turn: the stop glyph on the assistant
    dot column (12px — .msg.assistant's own outdent doesn't apply, this is a
-   direct .turn child), a muted label where the reply would have continued. */
+   direct .turn child), a muted label where the reply would have continued.
+   Also the stuck chip and the pending-revert fold line — every .interrupted
+   row stands above its turn's footer. */
 .interrupted {
   display: flex;
   align-items: center;
@@ -1407,7 +1409,7 @@ body {
 }
 
 /* The meta text joins the dot-row label column (copy button 17 + 6 + gap 10
-   = 33) — the Interrupted marker under it labels from the same column. */
+   = 33) — the Interrupted marker above it labels from the same column. */
 .turn-meta {
   margin-left: 6px;
 }
