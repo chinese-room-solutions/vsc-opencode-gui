@@ -431,9 +431,15 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
           ? sessions.value.find((s) => s.id === props.sessionId)?.location
               ?.directory
           : currentDir.value) || undefined;
-      void findFiles(atQuery, dir).then((rows) => {
-        if (seq === atSeq.current) setAtFiles(rows);
-      });
+      // A failed finder query must degrade to an empty menu, not reject
+      // unhandled — that path funnels into the crash card.
+      void findFiles(atQuery, dir)
+        .then((rows) => {
+          if (seq === atSeq.current) setAtFiles(rows);
+        })
+        .catch(() => {
+          if (seq === atSeq.current) setAtFiles([]);
+        });
     }, 150);
     return () => clearTimeout(t);
   }, [atQuery, props.sessionId]);

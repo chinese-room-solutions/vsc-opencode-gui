@@ -2031,17 +2031,23 @@ export async function promptSession(
 }
 
 // GET /find/file (v1) / GET /api/fs/find (v2, {location,data} envelope) —
-// the file finder behind "@" mentions. Bare array of paths relative to the
-// directory; directories carry the platform trailing separator. Normalized
-// to "/" so display, inserted text and the send-time parser agree.
+// the file finder behind "@" mentions. v2.1 rows are {path, type} objects;
+// older serves (and v1) return bare path strings. Normalized to "/"-joined
+// relative paths, directories with their trailing "/" (both row shapes
+// carry it), so display, inserted text and the send-time parser agree.
 export async function findFiles(
   query: string,
   directory?: string,
 ): Promise<string[]> {
   if (serverDialect === "v2") {
     const qs = new URLSearchParams({ query, limit: "20" });
-    const body = await getJson<{ data?: string[] }>(`/api/fs/find?${qs}`);
-    return (body?.data ?? []).map((p) => p.replace(/\\/g, "/"));
+    const body = await getJson<{ data?: unknown[] }>(`/api/fs/find?${qs}`);
+    return (body?.data ?? []).map((r) => {
+      if (typeof r === "string") return r.replace(/\\/g, "/");
+      const o = r as { path?: string; type?: string };
+      const p = (o.path ?? "").replace(/\\/g, "/");
+      return o.type === "directory" && !p.endsWith("/") ? `${p}/` : p;
+    });
   }
   const qs = new URLSearchParams({ query, limit: "20" });
   if (directory) qs.set("directory", directory);

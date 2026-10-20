@@ -594,11 +594,32 @@ describe("v2 route/body/envelope translation", () => {
   it("findFiles queries /api/fs/find?query= and unwraps {data}", async () => {
     onApi((call) =>
       call.path.startsWith("/api/fs/find")
-        ? { data: ["src\\a.ts"] }
+        ? { data: [{ path: "src/a.ts", type: "file" }] }
         : undefined,
     );
     assert.deepEqual(await findFiles("md"), ["src/a.ts"]);
     assert.match(callsFor("/api/fs/find")[0].path, /^\/api\/fs\/find\?query=md/);
+  });
+
+  it("findFiles keeps legacy string rows and stamps directory slashes", async () => {
+    onApi((call) =>
+      call.path.startsWith("/api/fs/find")
+        ? // The mixed belt: v2.1 objects (one directory missing its slash)
+          // and pre-2.1 bare strings in one response.
+          {
+            data: [
+              { path: "src", type: "directory" },
+              { path: "src\\a.ts", type: "file" },
+              "docs\\b.md",
+            ],
+          }
+        : undefined,
+    );
+    assert.deepEqual(await findFiles("s"), [
+      "src/",
+      "src/a.ts",
+      "docs/b.md",
+    ]);
   });
 
   it("writes go to the v2 routes: interrupt, compact {}, rename, delete", async () => {
