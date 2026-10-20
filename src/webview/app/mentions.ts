@@ -1,17 +1,24 @@
 // @-mentions, the official app's text dialect. Typing "@" (line start or
 // after whitespace) opens a file finder; selection inserts plain "@path"
-// text — the textarea keeps plain text (drafts, history sweep and edits all
+// text — quoted, @"path with spaces.md", when the path has whitespace,
+// because the bare form ends at the first space — and the textarea keeps
+// plain text (drafts, history sweep and edits all
 // stay string-shaped; the composer renders chips from a mirror layer over
-// it), and parsing happens once, at send, on the final immutable text:
+// it), while parsing happens once, at send, on the final immutable text:
 // every mention token becomes a structured part (file/agent) whose source
 // range points back into it, and the text itself stays inline so the model
 // sees the mention where the user wrote it.
 import { isText, type FilePart, type Part, type PromptPart } from "./api";
 
 // The live token before the caret: "@" preceded by start/whitespace, query
-// of non-space non-@ chars (the app's PromptInputV2 machine trigger).
+// of non-space non-@ chars (the app's PromptInputV2 machine trigger). A
+// quoted token in the making — @"My Draft — queries up to the caret inside
+// the quotes, so the menu follows a spaced path being typed.
 export function atTrigger(value: string, caret: number): string | undefined {
-  const m = /(?:^|\s)@([^\s@]*)$/.exec(value.slice(0, caret));
+  const head = value.slice(0, caret);
+  const q = /(?:^|\s)@"([^"\n]*)$/.exec(head);
+  if (q) return q[1];
+  const m = /(?:^|\s)@([^\s@]*)$/.exec(head);
   return m ? m[1] : undefined;
 }
 
@@ -109,7 +116,10 @@ export function resolve(base: string, rel: string): string {
 
 // Mention tokens: "@" after start/whitespace/opening punctuation (the app's
 // comment-mention parser — the only text-level regex its submit path runs).
-const TOKEN = /(^|[\s([{"'])@(\S+)/g;
+// A path with spaces is quoted — @"My Draft.md" — because the bare form
+// ends at the first space; the optional #line / #start-end range follows
+// the closing quote.
+const TOKEN = /(^|[\s([{"'])@(?:"([^"\n]+)"(#\d+(?:-\d+)?)?|(\S+))/g;
 // Punctuation that reads as sentence structure, not path.
 const TRAILING = /[.,!?;:)}\]"']+$/;
 
@@ -146,13 +156,19 @@ export function mentionTokens(
   const out: MentionToken[] = [];
   const seen = new Set<string>();
   for (const m of text.matchAll(TOKEN)) {
-    const token = m[2].replace(TRAILING, "");
+    const quoted = m[2] !== undefined;
+    const raw = quoted ? m[2]! : m[4]!;
+    // Bare tokens shed sentence punctuation; a quoted path is exact.
+    const token = quoted ? raw : raw.replace(TRAILING, "");
     if (!token) continue;
     const start = m.index + m[1].length;
-    const end = start + token.length + 1;
-    if (agentNames.includes(token)) {
+    const value = quoted
+      ? `@"${raw}"${m[3] ?? ""}`
+      : text.slice(start, start + token.length + 1);
+    const end = start + value.length;
+    if (!quoted && agentNames.includes(token)) {
       out.push({
-        value: text.slice(start, end),
+        value,
         start,
         end,
         kind: "agent",
@@ -161,25 +177,30 @@ export function mentionTokens(
       continue;
     }
     // Bare words are mention-style prose — "@here", "@channel" — not paths;
-    // only path-shaped tokens (separator, extension, #range, ~) attach files.
-    if (!/[/.#~\\]/.test(token)) continue;
+    // only path-shaped tokens (separator, extension, #range, ~) attach
+    // files. Quoting is explicit intent: any quoted path attaches.
+    if (!quoted && !/[/.#~\\]/.test(token)) continue;
     let path = token;
     let range = "";
     let line: string | undefined;
     let endLine: string | undefined;
-    const lr = /^(.*)#(\d+)(?:-(\d+))?$/.exec(token);
+    const lr = quoted
+      ? m[3] && /^#(\d+)(?:-(\d+))?$/.exec(m[3])
+      : /^(.*)#(\d+)(?:-(\d+))?$/.exec(token);
     if (lr) {
-      path = lr[1];
-      line = lr[2];
-      endLine = lr[3];
-      range = lr[3] ? `?start=${lr[2]}&end=${lr[3]}` : `?start=${lr[2]}`;
+      if (!quoted) path = lr[1];
+      line = quoted ? lr[1] : lr[2];
+      endLine = quoted ? lr[2] : lr[3];
+      range = endLine
+        ? `?start=${line}&end=${endLine}`
+        : `?start=${line}`;
     }
     const abs = resolve(base, path);
     const url = `file://${fileUrl(abs)}${range}`;
     if (seen.has(url)) continue;
     seen.add(url);
     out.push({
-      value: text.slice(start, end),
+      value,
       start,
       end,
       kind: /[\\/]$/.test(path) ? "dir" : "file",

@@ -21,6 +21,12 @@ describe("mentions", () => {
       assert.equal(atTrigger("mail@x", 6), undefined);
       assert.equal(atTrigger("", 0), undefined);
     });
+    it("queries inside a quoted token in the making", () => {
+      assert.equal(atTrigger('see @"Why Chea', 14), "Why Chea");
+      assert.equal(atTrigger('@"', 2), "");
+      // A closed quoted token is no longer a live query.
+      assert.equal(atTrigger('see @"My Draft.md" ok', 20), undefined);
+    });
   });
 
   describe("parseMentions", () => {
@@ -168,6 +174,31 @@ describe("mentions", () => {
       assert.equal(file.endLine, "20");
       assert.equal(file.range, "?start=10&end=20");
       assert.equal(file.value, "@a.go#10-20");
+    });
+    it("quoted tokens carry spaced paths, ranges and spans", () => {
+      const text = 'see @"Why Cheap Inference.md" and @"My Draft.md"#4-9 ok';
+      const [a, b] = mentionTokens(text, "/r", []);
+      assert.equal(a.kind, "file");
+      assert.equal(a.rel, "Why Cheap Inference.md");
+      assert.equal(a.path, "/r/Why Cheap Inference.md");
+      assert.equal(a.value, '@"Why Cheap Inference.md"');
+      assert.equal(text.slice(a.start, a.end), a.value);
+      assert.equal(b.rel, "My Draft.md");
+      assert.equal(b.line, "4");
+      assert.equal(b.endLine, "9");
+      assert.equal(b.range, "?start=4&end=9");
+      assert.equal(b.value, '@"My Draft.md"#4-9');
+      assert.equal(text.slice(b.start, b.end), b.value);
+    });
+    it("unquoted spaced paths stay prose, quoting is explicit", () => {
+      // The bare token ends at the first space — "Why" is not path-shaped,
+      // so the sentence reads as prose, no part attached.
+      const toks = mentionTokens(
+        "In style, please orient more to @Why Cheap Inference Keeps Costing More.md",
+        "/r",
+        [],
+      );
+      assert.equal(toks.length, 0);
     });
   });
 

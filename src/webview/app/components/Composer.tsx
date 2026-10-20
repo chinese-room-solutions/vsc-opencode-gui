@@ -638,16 +638,28 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
     const el = ref.current;
     if (!el) return;
     const caret = el.selectionStart ?? el.value.length;
-    const m = /(?:^|\s)@([^\s@]*)$/.exec(el.value.slice(0, caret));
-    if (!m) {
+    const head = el.value.slice(0, caret);
+    // The in-progress token may be a quoted one (@"My Draft) — its span
+    // opens at the @, not at the last space.
+    const q = /(?:^|\s)@"([^"\n]*)$/.exec(head);
+    const b = /(?:^|\s)@([^\s@]*)$/.exec(head);
+    const at = q
+      ? caret - q[1].length - 2
+      : b
+        ? caret - b[1].length - 1
+        : -1;
+    if (at < 0) {
       setAtQuery(undefined);
       return;
     }
-    const at = caret - m[1].length - 1;
+    // Paths with spaces go in quoted — the parser ends a bare token at the
+    // first space, so an unquoted spaced path would never re-parse.
+    const cite = (p: string) =>
+      /[\s"()]/.test(p) ? `"${p.replaceAll('"', "")}"` : p;
     const ins =
       item.kind === "agent"
         ? `@${item.name} `
-        : `@${item.path}${item.kind === "dir" ? "" : " "}`;
+        : `@${cite(item.path)}${item.kind === "dir" ? "" : " "}`;
     el.value = el.value.slice(0, at) + ins + el.value.slice(caret);
     el.focus();
     const c = at + ins.length;
@@ -656,7 +668,14 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
     syncText(el);
     putDraft(draftKey, el.value);
     setAtIndex(0);
-    setAtQuery(item.kind === "dir" ? item.path : undefined);
+    // Drill-down keeps the menu open on the deeper query — only a bare
+    // directory path can serve as one (a quoted query typed by hand still
+    // works, the menu just closes).
+    setAtQuery(
+      item.kind === "dir" && !/[\s"()]/.test(item.path)
+        ? item.path
+        : undefined,
+    );
   };
 
   // Complete the live "/query" with a match (Tab); Enter is the one that
