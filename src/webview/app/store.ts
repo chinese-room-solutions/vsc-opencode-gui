@@ -2494,9 +2494,10 @@ function applyEvent(event: ServerEvent): void {
           sessionID: sid,
           type: "tool",
           tool: data.name ?? "",
-          // The stamp rides along as the span's start: `called` refines
-          // it, but a tool that settles without a called frame must not
-          // lose its elapsed tip with an end and no start.
+          // The stamp rides along as the span's start — args streaming
+          // counts toward it; `called` only fills it in when missing
+          // (a tool that settles without a called frame must not lose
+          // its elapsed tip with an end and no start).
           state: {
             status: "pending",
             ...(data.timestamp !== undefined
@@ -2558,7 +2559,11 @@ function applyEvent(event: ServerEvent): void {
           ...s,
           status: "running",
           ...(data.input ? { input: data.input } : {}),
-          time: { ...s.time, start: data.timestamp },
+          // input.started already stamped the true span start — args
+          // streaming counts (v2's durable rows time a big write's args
+          // in minutes while the run itself is ms). Restamping here cut
+          // that span out and settled long calls at ~0s.
+          time: { ...s.time, start: s.time?.start ?? data.timestamp },
         }));
       }
       break;

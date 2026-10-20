@@ -1218,7 +1218,9 @@ describe("v2 transcript normalization (fetchMessages)", () => {
     assert.equal(tool.tool, "shell");
     assert.equal(tool.state?.status, "running");
     assert.deepEqual(tool.state?.input, { command: "ls" });
-    assert.deepEqual(tool.state?.time, { start: 3, end: 4 });
+    // `created` (args start), not `ran` (execution start) — the user's
+    // long writes run ms but stream args for minutes.
+    assert.deepEqual(tool.state?.time, { start: 2, end: 4 });
     assert.ok(isBashTool(tool.tool));
   });
 
@@ -2481,7 +2483,7 @@ describe("v2 turn through the store (recorded frame sequence)", () => {
         .find((p) => p.id === pid) as
       | { state?: { status?: string; time?: { start?: number; end?: number } } }
       | undefined;
-    // Full sequence — called refines the start, success stamps the end.
+    // Full sequence — called keeps the streamed start, success stamps the end.
     v2sse(
       "session.tool.input.started",
       { sessionID: sid, assistantMessageID: "msg_t", id: "c1", name: "bash" },
@@ -2505,7 +2507,7 @@ describe("v2 turn through the store (recorded frame sequence)", () => {
     await flushEvents();
     assert.equal(partOf("c1")?.state?.status, "completed");
     assert.deepEqual(partOf("c1")?.state?.time, {
-      start: T0 + 150,
+      start: T0 + 100,
       end: T0 + 900,
     });
     // Short-circuited tool — no called frame: the input.started stamp IS

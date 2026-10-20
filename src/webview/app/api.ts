@@ -1523,8 +1523,11 @@ export async function fetchMessages(
       // lives part-level as {created, completed} (wire-verified 2.0.18;
       // only live-streamed tools get state.time from the SSE events).
       // Without lifting it, every fetched row loses its elapsed tip.
-      // Older shapes that did stamp the run keep working: {created, ran,
-      // completed} → the live dialect's {start, end}.
+      // `created` (the model began streaming the call) is the display
+      // start — `ran` (execution start) is a slice after it and reads
+      // 0s for file tools whose args stream for minutes. Older shapes
+      // that did stamp the run keep working: {created, ran, completed}
+      // → the live dialect's {start, end}.
       const t = (p.state.time ??
         (p as unknown as { time?: Record<string, unknown> }).time) as
         | {
@@ -1544,7 +1547,7 @@ export async function fetchMessages(
         p.state = {
           ...p.state,
           time: {
-            start: t.start ?? t.ran ?? t.created,
+            start: t.start ?? t.created ?? t.ran,
             end: t.end ?? t.completed,
           },
         };
