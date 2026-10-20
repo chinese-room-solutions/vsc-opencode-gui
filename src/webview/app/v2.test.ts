@@ -2108,6 +2108,19 @@ describe("v2 SSE → pipeline translation", () => {
     assert.deepEqual((success[0].data as { structured?: unknown }).structured, {
       files: [],
     });
+    // 2.1 renamed resultState → native (call+result merged blob).
+    const native = translateV2Event(
+      ev("session.tool.success", {
+        sessionID: "s",
+        assistantMessageID: "msg_a",
+        id: "call_1",
+        native: { todos: [{ content: "x", status: "pending" }] },
+      }),
+    );
+    assert.deepEqual(
+      (native[0].data as { structured?: unknown }).structured,
+      { todos: [{ content: "x", status: "pending" }] },
+    );
   });
 
   it("translates tool input streaming frames for live previews", () => {

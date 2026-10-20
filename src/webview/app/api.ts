@@ -1295,7 +1295,6 @@ export async function fetchMessages(
       const c = r as V2MessageRow & {
         type: "compaction";
         summary?: string;
-        recent?: string;
         reason?: string;
       };
       const trigger = v2CompactionTrigger(r.id, id, r.time, c.reason);

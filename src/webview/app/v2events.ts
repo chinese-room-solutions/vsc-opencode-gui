@@ -58,6 +58,10 @@ interface V2Data {
   messageID?: string;
   content?: unknown;
   reason?: string;
+  // session.tool.success/failed: the machine result (2.1 `native`,
+  // merged call+result blob; `resultState` pre-2.1)
+  native?: Record<string, unknown> | null;
+  resultState?: Record<string, unknown> | null;
   // session.permissions
   permissions?: unknown;
   // form.created
@@ -75,6 +79,15 @@ interface V2Data {
   metadata?: Record<string, unknown>;
   [key: string]: unknown;
 }
+
+// The structured payload a tool success frame carries: 2.1 `native`
+// (the merged call+result blob — result values win), `resultState` pre-2.1.
+const structuredOf = (
+  d: V2Data,
+): Record<string, unknown> | undefined => {
+  const v = d.native ?? d.resultState;
+  return v !== null && typeof v === "object" ? v : undefined;
+};
 
 export function translateV2Event(event: ServerEvent): ServerEvent[] {
   const d = (event.data ?? {}) as V2Data;
@@ -276,14 +289,11 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
               callID: d.id,
               // v2 carries the readable result as content items (the
               // store folds them into output) and the machine result in
-              // resultState (~ the structured patches/todos). metadata
-              // carries the subagent's child session, edit diffs, and
-              // background flags — the chips read it.
+              // `native` (~ the structured patches/todos; `resultState`
+              // pre-2.1). metadata carries the subagent's child session,
+              // edit diffs, and background flags — the chips read it.
               ...(Array.isArray(d.content) ? { content: d.content } : {}),
-              ...(d.resultState !== null &&
-              typeof d.resultState === "object"
-                ? { structured: d.resultState }
-                : {}),
+              ...(structuredOf(d) ? { structured: structuredOf(d) } : {}),
               ...(d.metadata !== undefined ? { metadata: d.metadata } : {}),
               timestamp: at,
             }),
