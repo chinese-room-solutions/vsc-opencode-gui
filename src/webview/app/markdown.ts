@@ -1,6 +1,6 @@
 // Markdown → sanitized HTML. Host- and model-authored text must never inject
 // markup, so every render goes through DOMPurify before it touches the DOM.
-import { marked } from "marked";
+import { marked, type Tokens } from "marked";
 import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
 import { postToHost } from "./host";
@@ -22,9 +22,26 @@ const decodeSafe = (s: string) => {
 // highlightAuto's grammar sweep over it — enough to kill the renderer.
 const CODE_HL_MAX = 16_384;
 
+// CommonMark numbers every ordered list from its first item, so "5." then
+// "7." renders as 5, 6 — reworking numbers the author meant (steps quoted
+// from a doc, ticket ids). Pin each item to its typed number via the li
+// value attribute. Lists whose markers are all identical ("1." × N) keep
+// the sequential default: that idiom asks for auto-numbering.
+const typedItemNum = new WeakMap<Tokens.ListItem, string>();
+const markerNum = (raw: string): string | undefined =>
+  /^[ \t]*(\d{1,9})[.)][ \t\n]/.exec(raw)?.[1];
+
 marked.use({
   gfm: true,
   breaks: true,
+  walkTokens(t) {
+    const token = t as Tokens.List;
+    if (token.type !== "list" || !token.ordered) return;
+    const nums = token.items.map((it) => markerNum(it.raw));
+    if (nums.length && !nums.every((n) => n !== undefined && n === nums[0]))
+      for (const [i, it] of token.items.entries())
+        if (nums[i]) typedItemNum.set(it, nums[i]);
+  },
   renderer: {
     code({ text, lang }: { text: string; lang?: string }): string {
       const name = (lang ?? "").trim().split(/\s+/)[0];
@@ -40,6 +57,12 @@ marked.use({
         body = escapeHtml(text);
       }
       return `<pre><code class="hljs${name ? ` language-${name}` : ""}">${body}</code></pre>`;
+    },
+    // marked's default listitem plus the pinned number; the pinned map is
+    // only set for ordered items, so unordered lists render unchanged.
+    listitem(item: Tokens.ListItem): string {
+      const num = typedItemNum.get(item);
+      return `<li${num ? ` value="${num}"` : ""}>${this.parser.parse(item.tokens)}</li>\n`;
     },
   },
 });
@@ -313,12 +336,21 @@ function mdPre(pre: Element): string {
 
 function mdList(el: Element, depth: number): string {
   const pad = "  ".repeat(depth);
+  const ordered = el.tagName === "OL";
+  // Mirror the browser's marker arithmetic so a copy reproduces the
+  // displayed numbers: ol start seeds the counter, a li value attribute
+  // (a pinned typed number) resets it, otherwise it increments.
+  let counter = Number.parseInt(el.getAttribute("start") ?? "", 10);
   const lines: string[] = [];
-  let n = 0;
   for (const li of [...el.children]) {
     if (li.tagName !== "LI") continue;
-    n++;
-    const marker = el.tagName === "OL" ? `${n}. ` : "- ";
+    const pinned = Number.parseInt(li.getAttribute("value") ?? "", 10);
+    counter = Number.isNaN(pinned)
+      ? Number.isNaN(counter)
+        ? 1
+        : counter + 1
+      : pinned;
+    const marker = ordered ? `${counter}. ` : "- ";
     const check = li.querySelector(":scope > input[type=checkbox]");
     const tick = check
       ? (check as HTMLInputElement).checked
