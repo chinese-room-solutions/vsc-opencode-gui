@@ -923,6 +923,65 @@ describe("queued turns apply in publish order (0382677)", () => {
     assert.equal(callsFor(`/session/${sid}/command`).length, 1);
   });
 
+  it("a queued prompt owns its files: composer clears, echo pills them", async () => {
+    const sid = "q5f";
+    const file = { uri: "data:text/plain;base64,aGk=", name: "notes.txt" };
+    commands.value = [{ name: "foo" }];
+    composerFiles.value = { [sid]: [file] };
+    setBusy(sid);
+    queueCommand(sid, "/foo");
+    await sendPrompt(sid, "with file", composerFiles.value[sid]);
+    assert.equal(queuedTurns.value.length, 2);
+    assert.equal(queuedTurns.value[1].files?.length, 1);
+    assert.deepEqual(composerFiles.value[sid], []);
+    const echo = listOf(sid).find((m) => m.info.id.startsWith("pending:"));
+    const fp = echo?.parts.find((p) => p.type === "file") as {
+      filename?: string;
+      url?: string;
+    };
+    assert.equal(fp?.filename, "notes.txt");
+    assert.ok(fp?.url?.startsWith("data:"));
+    // Drained into the POST with the file part intact.
+    await sseFlush("session.idle", { sessionID: sid });
+    await sseFlush("session.idle", { sessionID: sid });
+    const body = callsFor(`/session/${sid}/prompt_async`)[0].body as {
+      parts: { type: string; url?: string }[];
+    };
+    assert.ok(body.parts.some((p) => p.type === "file" && p.url === file.uri));
+  });
+
+  it("revertQueuedTurn hands the files back to the composer", async () => {
+    const sid = "q6f";
+    const file = { uri: "data:image/png;base64,eA==", name: "shot.png" };
+    commands.value = [{ name: "foo" }];
+    composerFiles.value = { [sid]: [file] };
+    setBusy(sid);
+    queueCommand(sid, "/foo");
+    await sendPrompt(sid, "give back", composerFiles.value[sid]);
+    assert.deepEqual(composerFiles.value[sid], []);
+    assert.equal(revertQueuedTurn(sid, "give back"), true);
+    assert.deepEqual(composerFiles.value[sid], [file]);
+  });
+
+  it("a re-appended queued echo keeps its file parts", async () => {
+    const sid = "q7f";
+    const file = { uri: "data:text/plain;base64,eHg=", name: "x.txt" };
+    commands.value = [{ name: "foo" }];
+    setBusy(sid);
+    queueCommand(sid, "/foo");
+    await sendPrompt(sid, "re-added", [file]);
+    // Tab closed mid-queue: the cached transcript lost the echo row.
+    messagesBySession.value = new Map([[sid, []]]);
+    await sseFlush("session.idle", { sessionID: sid });
+    await sseFlush("session.idle", { sessionID: sid });
+    const echo = listOf(sid).find((m) => m.info.id.startsWith("pending:"));
+    assert.ok(echo?.parts.some((p) => p.type === "file"));
+    const body = callsFor(`/session/${sid}/prompt_async`)[0].body as {
+      parts: { type: string; url?: string }[];
+    };
+    assert.ok(body.parts.some((p) => p.type === "file" && p.url === file.uri));
+  });
+
   it("queueCommand rejects unknown commands", () => {
     commands.value = [];
     queueCommand("q3", "/nope");

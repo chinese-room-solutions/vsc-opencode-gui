@@ -237,6 +237,8 @@ export function revertQueuedTurn(id: string, text: string): boolean {
   );
   if (!hit) return false;
   queuedTurns.value = queuedTurns.value.filter((q) => q !== hit);
+  // The queued entry owned the attachments — hand them back with the text.
+  if (hit.files?.length) addComposerFiles(id, hit.files);
   retirePending(id, t);
   return true;
 }
@@ -3661,19 +3663,31 @@ export async function loadOlderMessages(id: string): Promise<boolean> {
 let pendingSeq = 0;
 
 // Optimistic user bubble; replaced when the echo event or the next fetch
-// lands (by then the server list carries the real message).
-function appendPending(id: string, text: string): void {
+// lands (by then the server list carries the real message). Attachments
+// ride along as file parts so the echo pills them — a queued turn holds
+// the echo for the whole queue wait.
+function appendPending(id: string, text: string, files?: ComposerFile[]): void {
   const pid = `pending:${++pendingSeq}`;
-  const part: Part = {
-    id: `${pid}:text`,
-    messageID: pid,
-    sessionID: id,
-    type: "text",
-    text,
-  };
+  const parts: Part[] = [
+    {
+      id: `${pid}:text`,
+      messageID: pid,
+      sessionID: id,
+      type: "text",
+      text,
+    },
+  ];
+  let fi = 0;
+  for (const p of attachmentParts(files ?? []))
+    parts.push({
+      ...p,
+      id: `${pid}:f${fi++}`,
+      messageID: pid,
+      sessionID: id,
+    });
   mutateMessages(id, (list) => [
     ...list,
-    { info: { id: pid, role: "user", time: { created: Date.now() } }, parts: [part] },
+    { info: { id: pid, role: "user", time: { created: Date.now() } }, parts },
   ]);
 }
 
@@ -3815,7 +3829,7 @@ export async function sendPrompt(
   setSendError(undefined);
   // The pending echo shows either way: a held turn's runs when the flush
   // watcher below picks it up, a steered one swaps for the server's row.
-  appendPending(id, body);
+  appendPending(id, body, files);
   if (target === "draft") {
     moveComposerFiles("draft", id);
     navigate({ view: "session", id });
@@ -3826,6 +3840,10 @@ export async function sendPrompt(
       ...queuedTurns.value,
       { id, kind: "prompt", text: body, files },
     ];
+    // The queue entry owns the attachments from here — the composer's
+    // chips go now (a take-back hands them back); postPrompt's clear on
+    // flush would leave them stuck through the whole queue wait.
+    clearComposerFiles(id);
     return;
   }
   // Busy with nothing held ahead: the prompt POSTs now and the server
@@ -4168,7 +4186,7 @@ effect(() => {
         (m.parts.find(isText)?.text ?? "") === hit.text,
     )
   )
-    appendPending(hit.id, hit.text);
+    appendPending(hit.id, hit.text, hit.files);
   if (hit.kind === "command") void runSlashCommand(hit.id, hit.text, true, hit.echoCid);
   else void postPrompt(hit.id, hit.text, hit.files ?? []);
 });
