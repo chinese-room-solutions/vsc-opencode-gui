@@ -1074,6 +1074,80 @@ describe("reasoning-effort variant guard (443203b)", () => {
   });
 });
 
+// The selector follows the model a turn actually ran on: subagent and
+// agent-pinned runs never rewrite the session row.
+describe("ran-model adoption into the selector", () => {
+  beforeEach(() => setDialect("v2"));
+  afterEach(() => setDialect("v1"));
+  const step = (sid: string, model: { id: string; providerID: string }) =>
+    sseFlush("session.next.step.started", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      timestamp: T0,
+      agent: "build",
+      model,
+    });
+  const rowModel = (sid: string) =>
+    sessions.value.find((s) => s.id === sid)?.model;
+  it("adopts the model the turn ran on", async () => {
+    const sid = "ra1";
+    await sseFlush("session.updated", {
+      info: sessRow(sid, { model: { id: "m-default", providerID: "p1" } }),
+    });
+    open(sid, []);
+    await step(sid, { id: "m-flash", providerID: "p1" });
+    assert.deepEqual(rowModel(sid), { providerID: "p1", id: "m-flash" });
+  });
+  it("keeps the row's variant while adopting", async () => {
+    const sid = "ra2";
+    await sseFlush("session.updated", {
+      info: sessRow(sid, {
+        model: { id: "m-default", providerID: "p1", variant: "high" },
+      }),
+    });
+    open(sid, []);
+    await step(sid, { id: "m-flash", providerID: "p1" });
+    assert.deepEqual(rowModel(sid), {
+      providerID: "p1",
+      id: "m-flash",
+      variant: "high",
+    });
+  });
+  it("an explicit pick survives later turns", async () => {
+    const sid = "ra3";
+    await sseFlush("session.updated", {
+      info: sessRow(sid, { model: { id: "m-default", providerID: "p1" } }),
+    });
+    open(sid, []);
+    await setSelection(sid, { model: { providerID: "p1", id: "m-picked" } });
+    await step(sid, { id: "m-flash", providerID: "p1" });
+    assert.equal(rowModel(sid)?.id, "m-picked");
+  });
+  it("a fetched transcript adopts on boot too", async () => {
+    const sid = "ra4";
+    await sseFlush("session.updated", {
+      info: sessRow(sid, { model: { id: "m-default", providerID: "p1" } }),
+    });
+    onApi(
+      messageMock(sid, {
+        data: [
+          {
+            id: "a1",
+            type: "assistant",
+            time: { created: T0 },
+            model: { providerID: "p1", id: "m-flash" },
+            parts: [],
+            content: [],
+          },
+        ],
+        cursor: {},
+      }),
+    );
+    await refreshMessages(sid);
+    assert.deepEqual(rowModel(sid), { providerID: "p1", id: "m-flash" });
+  });
+});
+
 // 19592cc
 describe("interrupted-mark writes (19592cc)", () => {
   it("skips redundant mark writes", () => {

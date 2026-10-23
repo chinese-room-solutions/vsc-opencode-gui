@@ -837,6 +837,10 @@ export async function setSelection(
       agent: sel.agent ?? prev?.agent,
       model: sel.model ?? prev?.model,
     });
+    if (sel.model) {
+      modelPicks.add(id);
+      saveModelPicks();
+    }
     patchSession(id, (s) =>
       sel.agent !== undefined
         ? { ...s, agent: sel.agent }
@@ -862,6 +866,8 @@ export async function setSelection(
   // The picker's model/effort choice: the session row itself is corruptible
   // (see guardVariant), so the user's intent lives here too.
   if (id && sel.model) {
+    modelPicks.add(id);
+    saveModelPicks();
     if (sel.model.variant) pickedVariants.set(id, sel.model);
     else pickedVariants.delete(id);
     savePickedVariants();
@@ -913,6 +919,51 @@ function savePickedVariants(): void {
   }
 }
 const restoringVariants = new Set<string>();
+
+// Sessions whose model the user picked explicitly: from then on the selector
+// follows the user, not the turns. Same lifecycle as pickedVariants.
+const modelPicks = new Set<string>(
+  (() => {
+    try {
+      const parsed: unknown = JSON.parse(
+        localStorage.getItem("opencode-model-picks") ?? "[]",
+      );
+      return Array.isArray(parsed)
+        ? parsed.filter((x): x is string => typeof x === "string")
+        : [];
+    } catch {
+      return [];
+    }
+  })(),
+);
+function saveModelPicks(): void {
+  try {
+    localStorage.setItem("opencode-model-picks", JSON.stringify([...modelPicks]));
+  } catch {
+    // Quota or privacy mode — the picks stay in-memory only.
+  }
+}
+
+// A turn's assistant row names the model that actually ran it. Agent-pinned
+// and subagent runs never rewrite the session row (plain turns do), so the
+// selector would keep showing the row's stale default while the footer tells
+// the truth. Adopt the ran model unless the user has picked here (modelPicks).
+function adoptTurnModel(sessionID: string, info: Message): void {
+  if (info.role !== "assistant") return;
+  const providerID = info.providerID;
+  const modelID = info.modelID;
+  if (!providerID || !modelID) return;
+  if (modelPicks.has(sessionID)) return;
+  const row = sessions.value.find((x) => x.id === sessionID);
+  if (!row) return;
+  if (row.model?.providerID === providerID && row.model?.id === modelID) return;
+  patchSession(sessionID, (s) => ({
+    ...s,
+    model: s.model?.variant
+      ? { providerID, id: modelID, variant: s.model.variant }
+      : { providerID, id: modelID },
+  }));
+}
 
 function guardVariant(id: string, model: Session["model"] | undefined): void {
   if (!model) return;
@@ -1441,6 +1492,7 @@ function upsertMessage(sessionID: string, info: Message): void {
       : [...list, { info, parts: [] }];
     return next.sort(byCreated);
   });
+  if (info.role === "assistant") adoptTurnModel(sessionID, info);
 }
 
 // Patch one stored message's info in place (completion time, usage, error).
@@ -3304,6 +3356,12 @@ export async function refreshMessages(id: string): Promise<void> {
       if (!merged.has(m.info.id)) merged.set(m.info.id, m);
     }
     const sorted = [...merged.values()].sort(byCreated);
+    // Boot/remount path for the ran-model adoption: the event path rides
+    // upsertMessage, a fetched transcript never does.
+    const lastAssistant = sorted
+      .filter((m) => m.info.role === "assistant")
+      .at(-1);
+    if (lastAssistant) adoptTurnModel(id, lastAssistant.info);
     // Local-only rows spliced back in by time: command echoes ("cmd:") have
     // no server row to merge from, and a queued turn's echo ("pending:")
     // outlives the running turn — the remount refresh during it must not
