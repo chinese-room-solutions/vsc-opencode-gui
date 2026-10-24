@@ -2412,6 +2412,19 @@ export async function revertSession(
   return row ? normalizeSession(row) : undefined;
 }
 
+// POST /api/session/{id}/revert/commit (v2) — publish a staged cut: the
+// server deletes the marker message and everything after it. The server
+// itself commits a staged revert when the next prompt or compact is
+// admitted, but NOT when a command or skill runs — so the client commits
+// before dispatching one (see store's runSlashCommand); a run through an
+// un-committed marker would see the un-truncated story while the client
+// shows the folded transcript.
+export async function commitRevert(id: string): Promise<boolean> {
+  if (serverDialect !== "v2") return false;
+  const res = await sendJson("POST", `/api/session/${id}/revert/commit`);
+  return res?.ok === true;
+}
+
 // POST /session/{id}/unrevert (v1) / DELETE /api/session/{id}/revert (v2)
 // — redo: lift a pending revert before the next prompt commits the cut.
 // The server restores the folded rows and the file snapshot and clears the

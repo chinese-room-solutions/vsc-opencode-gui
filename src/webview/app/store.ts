@@ -7,6 +7,7 @@ import {
   attachMime,
   createSession,
   compactSession,
+  commitRevert,
   deleteSession as deleteSessionApi,
   dialect,
   type TextPart,
@@ -4255,6 +4256,24 @@ export async function runSlashCommand(
   // Skills (v2 rows off /api/skill) run on their own route.
   const isSkill = commands.value.find((c) => c.name === name)?.skill === true;
   const sel = currentSelection(id);
+  // The server commits a staged revert when a prompt or compact is
+  // admitted, but not for a command run — fired through the fold, the
+  // command would run on the un-truncated story while the transcript
+  // shows the folded one. Commit first (v2 only; v1's server stages the
+  // cut differently) and land the local cut BEFORE the command's own rows
+  // arrive. A failed commit must not run the command: surface it, stay
+  // staged (the optimistic busy above retires — nothing fired).
+  if (dialect() === "v2") {
+    const stagedRevert = sessions.value.find((s) => s.id === id)?.revert;
+    if (stagedRevert) {
+      if (!(await commitRevert(id))) {
+        sessionStatus.value = { ...sessionStatus.value, [id]: { type: "idle" } };
+        setSendError("The revert could not be committed.");
+        return;
+      }
+      commitRevertCut(id, stagedRevert.messageID);
+    }
+  }
   if (!(await runCommand(id, name, m?.[2] ?? "", sel, isSkill))) {
     // The call can fail while the command's turn still runs server-side
     // (relay abort, server churn): status decides. Busy keeps the echo —

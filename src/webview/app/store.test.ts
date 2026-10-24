@@ -3372,6 +3372,80 @@ describe("revert fold", () => {
     );
     assert.ok(ids.some((i) => i.startsWith("cmd:")));
   });
+  it("on v2 a command commits the staged revert before it runs", async () => {
+    setDialect("v2");
+    try {
+      const sid = "rvc1";
+      commands.value = [{ name: "foo" }];
+      sessions.value = [sessRow(sid, { revert: { messageID: "u2" } })];
+      open(sid, [
+        row("u1", "user", 1),
+        row("a1", "assistant", 2),
+        row("u2", "user", 3),
+        row("a2", "assistant", 4),
+      ]);
+      const commitPath = `/api/session/${sid}/revert/commit`;
+      const cmdPath = `/api/session/${sid}/command`;
+      onApi((call) => {
+        if (call.method === "POST" && call.path === commitPath) return {};
+        if (call.method === "POST" && call.path === cmdPath) return {};
+        return undefined;
+      });
+      // The commit truncated server-side: the truth is the rows before
+      // the marker only.
+      onApi(
+        messageMock(sid, {
+          data: [
+            { id: "u1", type: "user", time: { created: 1 }, text: "one" },
+            { id: "a1", type: "assistant", time: { created: 2 } },
+          ],
+          cursor: {},
+        }),
+      );
+      await runSlashCommand(sid, "/foo");
+      const order = apiLog
+        .map((c) => c.path.split("?")[0])
+        .filter((p) => p === commitPath || p === cmdPath);
+      assert.deepEqual(order, [commitPath, cmdPath]);
+      const ids = listOf(sid).map((m) => m.info.id);
+      assert.deepEqual(
+        ids.filter((i) => !i.startsWith("cmd:")),
+        ["u1", "a1"],
+      );
+      assert.ok(ids.some((i) => i.startsWith("cmd:")), "command echo stays");
+      assert.equal(sessions.value.find((s) => s.id === sid)?.revert, undefined);
+    } finally {
+      setDialect("v1");
+    }
+  });
+  it("on v2 a failed commit blocks the command and surfaces the error", async () => {
+    setDialect("v2");
+    try {
+      const sid = "rvc2";
+      commands.value = [{ name: "foo" }];
+      sessions.value = [sessRow(sid, { revert: { messageID: "u2" } })];
+      open(sid, [row("u1", "user", 1)]);
+      onApi((call) =>
+        call.method === "POST" &&
+        call.path === `/api/session/${sid}/revert/commit`
+          ? apiFailWith("HTTP 500")
+          : undefined,
+      );
+      await runSlashCommand(sid, "/foo");
+      assert.equal(callsFor(`/api/session/${sid}/command`).length, 0);
+      assert.equal(
+        sendError.value?.text,
+        "The revert could not be committed.",
+      );
+      // Still staged, and the optimistic busy retired — nothing fired.
+      assert.deepEqual(sessions.value.find((s) => s.id === sid)?.revert, {
+        messageID: "u2",
+      });
+      assert.equal(sessionStatus.value[sid]?.type, "idle");
+    } finally {
+      setDialect("v1");
+    }
+  });
 });
 
 describe("unread tabs", () => {
