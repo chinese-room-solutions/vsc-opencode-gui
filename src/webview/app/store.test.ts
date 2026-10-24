@@ -998,6 +998,23 @@ describe("queued turns apply in publish order (0382677)", () => {
     assert.ok(listOf(sid).some((m) => m.info.id.startsWith("cmd:")));
     assert.ok(localStorageStub.getItem(`opencode-cmd-${sid}`));
   });
+
+  it("a directly-fired command flips busy in the dispatch tick — a second one queues", async () => {
+    const sid = "q8";
+    commands.value = [{ name: "foo" }, { name: "bar" }];
+    const run = runSlashCommand(sid, "/foo");
+    // Synchronous: the composer reads busy on the very tick of the first
+    // Enter, before any POST or stream event could say it.
+    assert.equal(sessionStatus.value[sid]?.type, "busy");
+    // What the composer then does with a second command line: queue it.
+    queueCommand(sid, "/bar");
+    assert.equal(queuedTurns.value.length, 1);
+    await settle(4);
+    // Only the first dispatched; the second waits for a real idle.
+    assert.equal(callsFor(`/session/${sid}/command`).length, 1);
+    assert.equal(queuedTurns.value.length, 1);
+    await run;
+  });
 });
 
 // 9a595b4

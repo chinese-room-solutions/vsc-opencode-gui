@@ -4217,6 +4217,14 @@ export async function runSlashCommand(
   // is appended inside runCompact, the rest here (durable: the server
   // writes no user row for a command run).
   if (name !== "compact" && !echoed) appendCommandEcho(id, text.trim());
+  // A directly-fired command owns the session from this tick: the dispatch
+  // is async (the POST resolves at the turn's end), and until the first
+  // stream event the composer reads this map — without the flip a second
+  // Enter bypasses the client queue entirely. The flush effect already
+  // flipped busy for a queued run (`echoed`), and its failure path below
+  // resets idle from server truth.
+  if (!echoed)
+    sessionStatus.value = { ...sessionStatus.value, [id]: { type: "busy" } };
   // The command must run on what the session is on — a bare command turn
   // would otherwise rewrite the row (agent back to build, effort to
   // default). The draft just became a session carrying its preset.
