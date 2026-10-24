@@ -15,6 +15,7 @@ import {
   revertQueuedCommand,
   revertQueuedTurn,
   revertSession,
+  setSendError,
   sessionStatus,
   sessions,
   queuedTurns,
@@ -281,7 +282,10 @@ function UserActions(props: {
       return;
     }
     // A running turn can't be rewound under itself.
-    if (sessionStatus.value[props.sid]?.type === "busy") return;
+    if (sessionStatus.value[props.sid]?.type === "busy") {
+      setSendError("Wait for the running turn to finish.", props.sid);
+      return;
+    }
     void revertSession(props.sid, props.id).then((ok) => {
       // The point of taking a message back is editing and resending it.
       if (ok) insertComposerText(props.text, true);
