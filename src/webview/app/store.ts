@@ -243,6 +243,22 @@ export function revertQueuedTurn(id: string, text: string): boolean {
   retirePending(id, t);
   return true;
 }
+
+// Same take-back for a command still waiting in the local queue: its turn
+// never reached the server either, so the dequeue is the whole rewind —
+// the durable echo goes and the line returns to the composer. False when
+// no queued command owns that echo (a fired command's echo has no server
+// row to rewind to, so it stays).
+export function revertQueuedCommand(id: string, cid: string): boolean {
+  const hit = queuedTurns.value.find(
+    (q) => q.id === id && q.kind === "command" && q.echoCid === cid,
+  );
+  if (!hit) return false;
+  queuedTurns.value = queuedTurns.value.filter((q) => q !== hit);
+  removeCommandEcho(id, cid);
+  insertComposerText(hit.text, true);
+  return true;
+}
 export const providers = signal<Providers | undefined>(undefined);
 export const agents = signal<Agent[]>([]);
 export const commands = signal<Command[]>([]);

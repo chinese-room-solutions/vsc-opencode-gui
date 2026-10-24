@@ -12,6 +12,7 @@ import {
   modelLabel,
   peerNames,
   resolveFileRef,
+  revertQueuedCommand,
   revertQueuedTurn,
   revertSession,
   sessionStatus,
@@ -250,10 +251,11 @@ function dotState(m: ChatMessage, live: boolean): "error" | "running" | "done" {
 
 // Hover row under a user pill (OpenCode's own glyph pair): copy the
 // prompt, or revert the session to before it — the server drops the prompt,
-// its reply, and everything after. A command line ("cmd:" id) keeps copy
-// but never reverts: the server stores no row for it to rewind to. A
-// queued echo ("queued") reverts locally: the turn never reached the
-// server, so the dequeue is the whole rewind.
+// its reply, and everything after. A queued echo ("pending:" or a "cmd:"
+// still owned by the queue) reverts locally: the turn never reached the
+// server, so the dequeue is the whole rewind. A SENT command line's "cmd:"
+// echo keeps copy but never reverts: the server stores no row for it to
+// rewind to.
 function UserActions(props: {
   sid: string;
   id: string;
@@ -271,7 +273,10 @@ function UserActions(props: {
   const revert = (e: MouseEvent) => {
     e.stopPropagation();
     if (props.queued) {
-      if (revertQueuedTurn(props.sid, props.text))
+      // A queued command's line is handed back inside the store; a queued
+      // prompt's text is inserted here.
+      if (props.id.startsWith("cmd:")) revertQueuedCommand(props.sid, props.id);
+      else if (revertQueuedTurn(props.sid, props.text))
         insertComposerText(props.text, true);
       return;
     }
@@ -909,10 +914,16 @@ function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
     // act on it (the dequeue is local); an already-POSTed steer has no
     // server row to rewind and its actions stay hidden until the row
     // replaces the echo. A "cmd:" id is a command line's durable local
-    // echo — copy, but never revert.
+    // echo: while the queue still owns it, it reverts like a queued
+    // prompt; once fired, copy only.
     const sid = parts[0]?.sessionID;
     const pending = info.id.startsWith("pending:");
     const command = info.id.startsWith("cmd:");
+    const queuedCmd =
+      command &&
+      queuedTurns.value.some(
+        (q) => q.id === sid && q.kind === "command" && q.echoCid === info.id,
+      );
     // The server can strip mention sources (images come back as inlined
     // data: parts) — re-derive them so pills stay put in the text.
     const view = resourcedParts(
@@ -964,8 +975,8 @@ function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
                 sid={sid}
                 id={info.id}
                 text={ownText(parts)}
-                revert={!command || pending}
-                queued={pending}
+                revert={!command || pending || queuedCmd}
+                queued={pending || queuedCmd}
               />
             )
           }

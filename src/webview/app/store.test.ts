@@ -74,6 +74,7 @@ import {
   renameProject,
   resyncFromServer,
   resolveFileRef,
+  revertQueuedCommand,
   revertQueuedTurn,
   revertSession,
   runSlashCommand,
@@ -921,6 +922,33 @@ describe("queued turns apply in publish order (0382677)", () => {
     await sseFlush("session.idle", { sessionID: sid });
     assert.equal(callsFor(`/session/${sid}/prompt_async`).length, 0);
     assert.equal(callsFor(`/session/${sid}/command`).length, 1);
+  });
+
+  it("revertQueuedCommand takes back a queued command without posting it", async () => {
+    const sid = "q2c";
+    commands.value = [{ name: "foo" }];
+    setBusy(sid);
+    queueCommand(sid, "/foo bar");
+    assert.equal(queuedTurns.value.length, 1);
+    const cid = queuedTurns.value[0].echoCid;
+    assert.ok(cid);
+    assert.ok(listOf(sid).some((m) => m.info.id === cid));
+    // No queued command owns that echo — the take-back refuses.
+    assert.equal(revertQueuedCommand(sid, "cmd:none"), false);
+    assert.equal(revertQueuedCommand(sid, cid), true);
+    assert.equal(queuedTurns.value.length, 0);
+    assert.equal(listOf(sid).some((m) => m.info.id === cid), false);
+    // The line returns to the composer, and the durable echo left
+    // localStorage with the transcript.
+    assert.equal(composerInsert.value?.text, "/foo bar");
+    assert.equal(composerInsert.value?.replace, true);
+    assert.deepEqual(
+      JSON.parse(localStorageStub.getItem(`opencode-cmd-${sid}`) ?? "null"),
+      [],
+    );
+    // The dequeued command must never fire.
+    await sseFlush("session.idle", { sessionID: sid });
+    assert.equal(callsFor(`/session/${sid}/command`).length, 0);
   });
 
   it("a queued prompt owns its files: composer clears, echo pills them", async () => {
@@ -3531,15 +3559,16 @@ describe("unread tabs", () => {
 
 describe("hostMessage routing", () => {
   it("insert-text routes home to the draft composer", () => {
+    const prev = composerInsert.value?.seq ?? 0;
     hostMessage({ type: "insert-text", text: "hello" });
     assert.deepEqual(route.value, { view: "draft" });
     assert.deepEqual(composerInsert.value, {
       text: "hello",
-      seq: 1,
+      seq: prev + 1,
       replace: false,
     });
     hostMessage({ type: "insert-text", text: "again" });
-    assert.equal(composerInsert.value?.seq, 2);
+    assert.equal(composerInsert.value?.seq, prev + 2);
   });
   it("hidden-models filters to strings", () => {
     hostMessage({ type: "hidden-models", ids: ["a", 2, "b"] });
