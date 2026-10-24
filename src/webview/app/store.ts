@@ -1632,7 +1632,7 @@ function retirePending(sessionID: string, text?: string): void {
 // freezes a live turn dead (static dot, stopped counter). The server sends
 // no turn-end signal, so an ambiguous step end schedules the idle a beat
 // out — a step.started within the grace re-busies without a flicker; real
-// silence lets it fire.
+// silence asks the server before landing anything.
 const idleTimers: Record<string, number> = {};
 
 function scheduleIdle(sessionID: string): void {
@@ -1644,8 +1644,20 @@ function scheduleIdle(sessionID: string): void {
     // (an event or an adoption) ends it, and the stuck chip speaks for
     // the hang while it holds busy.
     if (hasLiveTools(sessionID)) return;
-    dropQueued(sessionID);
-    setIdle(sessionID);
+    // The turn's own idle event can lag the silence (SSE buffering, a
+    // reconnect): firing the queue on the heuristic alone could jump a
+    // live turn (commands are not queued server-side), and the old
+    // behavior silently DROPPED the queue on that false positive. Ask
+    // the status map first. Busy stands down; confirmed idle lands
+    // without dropping anything — the flush then fires the queue, which
+    // is safe exactly when the server says nothing is running. A failed
+    // pull changes nothing: the resync or the next event settles it.
+    void fetchSessionStatus().then((map) => {
+      if (!map) return;
+      if (map[sessionID] && map[sessionID]!.type !== "idle") return;
+      const cur = sessionStatus.value[sessionID]?.type ?? "idle";
+      if (cur === "busy" || cur === "retry") setIdle(sessionID);
+    });
   }, 3000);
 }
 

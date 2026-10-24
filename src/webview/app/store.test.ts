@@ -2078,13 +2078,79 @@ describe("a retrying turn stays working", () => {
     assert.equal(sessionWorking(sid), false);
   });
 
-  it("a failed step with no follow-up idles after the grace", async () => {
+  it("a failed step with no follow-up idles after the grace, once the server agrees", async () => {
     const sid = "rk3";
     open(sid, [row("u1", "user", T0)]);
+    onApi(
+      (call) =>
+        call.method === "GET" && call.path === "/session/status" ? {} : undefined,
+    );
     await sseFlush("session.next.step.started", { sessionID: sid });
     await sseFlush("session.next.step.failed", { sessionID: sid });
     fireExact(3000);
+    await settle(4);
     assert.equal(sessionStatus.value[sid]?.type, "idle");
+  });
+
+  it("the grace asks the server: a live turn stands down and the queue survives", async () => {
+    const sid = "rk4";
+    commands.value = [{ name: "start" }];
+    sessions.value = [sessRow(sid)];
+    setBusy(sid);
+    queueCommand(sid, "/start");
+    onApi(
+      (call) =>
+        call.method === "GET" && call.path === "/session/status"
+          ? { [sid]: { type: "busy" } }
+          : undefined,
+    );
+    await sseFlush("session.next.step.failed", { sessionID: sid });
+    fireExact(3000);
+    await settle(4);
+    // The turn lives server-side: no idle, no drop, nothing fired.
+    assert.equal(sessionStatus.value[sid]?.type, "busy");
+    assert.equal(queuedTurns.value.length, 1);
+    assert.equal(callsFor(`/session/${sid}/command`).length, 0);
+  });
+
+  it("a confirmed idle fires the queue instead of dropping it", async () => {
+    const sid = "rk5";
+    commands.value = [{ name: "start" }];
+    sessions.value = [sessRow(sid)];
+    setBusy(sid);
+    queueCommand(sid, "/start");
+    onApi((call) => {
+      if (call.method === "GET" && call.path === "/session/status") return {};
+      if (call.method === "POST" && call.path === `/session/${sid}/command`)
+        return {};
+      return undefined;
+    });
+    await sseFlush("session.next.step.failed", { sessionID: sid });
+    fireExact(3000);
+    await settle(6);
+    assert.equal(queuedTurns.value.length, 0);
+    assert.equal(callsFor(`/session/${sid}/command`).length, 1);
+  });
+
+  it("a failed status pull changes nothing — the resync settles it", async () => {
+    const sid = "rk6";
+    commands.value = [{ name: "start" }];
+    sessions.value = [sessRow(sid)];
+    setBusy(sid);
+    queueCommand(sid, "/start");
+    // The pull itself fails (server blip) — not the default responder's
+    // idle-shaped {}.
+    onApi(
+      (call) =>
+        call.method === "GET" && call.path === "/session/status"
+          ? API_FAIL
+          : undefined,
+    );
+    await sseFlush("session.next.step.failed", { sessionID: sid });
+    fireExact(3000);
+    await settle(4);
+    assert.equal(sessionStatus.value[sid]?.type, "busy");
+    assert.equal(queuedTurns.value.length, 1);
   });
 });
 
