@@ -1282,11 +1282,18 @@ function commitRevertCut(id: string, revertID: string): void {
     );
     mutateMessages(id, (l) => {
       const c = l.findIndex((m) => m.info.id === revertID);
-      // A pending echo for the committing prompt sits after the cut; its
-      // bubble survives until the durable row retires it.
+      // A queued echo (a pending prompt's "pending:", a command's "cmd:")
+      // sits after the cut; its bubble survives it — its queue entry still
+      // fires through, and a pending echo retires when its durable row
+      // lands.
       return c < 0
         ? l
-        : l.filter((m, i) => i < c || m.info.id.startsWith("pending:"));
+        : l.filter(
+            (m, i) =>
+              i < c ||
+              m.info.id.startsWith("pending:") ||
+              m.info.id.startsWith("cmd:"),
+          );
     });
   }
   patchSession(id, (s) => ({ ...s, revert: undefined }));
@@ -3465,10 +3472,21 @@ export async function refreshMessages(id: string): Promise<void> {
     sorted.sort(byCreated);
     // A pending revert folds the transcript at its marker: the message and
     // everything after hide (the server still serves them until the next
-    // prompt commits the cut). A marker pointing nowhere folds nothing.
+    // prompt commits the cut) — except this client's own queued echoes
+    // ("pending:", "cmd:"): they append after the marker, the server
+    // truncation can't touch them, and their queue entries still fire
+    // through the commit. A marker pointing nowhere folds nothing.
     const revertID = sessions.value.find((s) => s.id === id)?.revert?.messageID;
     const cut = revertID ? sorted.findIndex((m) => m.info.id === revertID) : -1;
-    const all = cut >= 0 ? sorted.slice(0, cut) : sorted;
+    const all =
+      cut >= 0
+        ? sorted.filter(
+            (m, i) =>
+              i < cut ||
+              m.info.id.startsWith("pending:") ||
+              m.info.id.startsWith("cmd:"),
+          )
+        : sorted;
     // Chunked display: the legacy store is unpaged, so a cold open (VS
     // Code restart, F5) would otherwise render the whole transcript even
     // though the v2 page keeps its cursor. Show only the newest window;

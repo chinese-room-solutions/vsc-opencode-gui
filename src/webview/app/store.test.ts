@@ -3304,6 +3304,74 @@ describe("revert fold", () => {
       setDialect("v1");
     }
   });
+  it("the fold keeps queued echoes visible past the marker", async () => {
+    const sid = "rvq1";
+    commands.value = [{ name: "foo" }];
+    sessions.value = [sessRow(sid, { revert: { messageID: "u2" } })];
+    open(sid, [
+      row("u1", "user", 1),
+      row("a1", "assistant", 2),
+      row("u2", "user", 3),
+      row("a2", "assistant", 4),
+    ]);
+    // Busy holds both turns in the queue; their echoes land after the
+    // staged marker.
+    setBusy(sid);
+    queueCommand(sid, "/foo");
+    await sendPrompt(sid, "queued echo");
+    assert.equal(queuedTurns.value.length, 2);
+    onApi(
+      messageMock(sid, {
+        data: [
+          { id: "u1", type: "user", time: { created: 1 }, text: "one" },
+          { id: "a1", type: "assistant", time: { created: 2 } },
+          { id: "u2", type: "user", time: { created: 3 }, text: "two" },
+          { id: "a2", type: "assistant", time: { created: 4 } },
+        ],
+        cursor: {},
+      }),
+    );
+    await refreshMessages(sid);
+    const ids = listOf(sid).map((m) => m.info.id);
+    assert.deepEqual(
+      ids.filter((i) => !i.startsWith("pending:") && !i.startsWith("cmd:")),
+      ["u1", "a1"],
+    );
+    assert.ok(ids.some((i) => i.startsWith("pending:")), "queued prompt echo");
+    assert.ok(ids.some((i) => i.startsWith("cmd:")), "queued command echo");
+  });
+  it("the commit keeps a queued command's echo", async () => {
+    const sid = "rvq2";
+    commands.value = [{ name: "foo" }];
+    sessions.value = [sessRow(sid, { revert: { messageID: "u2" } })];
+    open(sid, [
+      row("u1", "user", 1),
+      row("a1", "assistant", 2),
+      row("u2", "user", 3),
+      row("a2", "assistant", 4),
+    ]);
+    setBusy(sid);
+    queueCommand(sid, "/foo");
+    // The commit truncated server-side: the truth is the rows before the
+    // marker only.
+    onApi(
+      messageMock(sid, {
+        data: [
+          { id: "u1", type: "user", time: { created: 1 }, text: "one" },
+          { id: "a1", type: "assistant", time: { created: 2 } },
+        ],
+        cursor: {},
+      }),
+    );
+    await sseFlush("session.updated", { info: { id: sid, revert: null } });
+    await settle();
+    const ids = listOf(sid).map((m) => m.info.id);
+    assert.deepEqual(
+      ids.filter((i) => !i.startsWith("cmd:")),
+      ["u1", "a1"],
+    );
+    assert.ok(ids.some((i) => i.startsWith("cmd:")));
+  });
 });
 
 describe("unread tabs", () => {
