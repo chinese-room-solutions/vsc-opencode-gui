@@ -3844,15 +3844,13 @@ export async function sendPrompt(
     id = target;
   }
   setSendError(undefined);
-  // The pending echo shows either way: a held turn's runs when the flush
-  // watcher below picks it up, a steered one swaps for the server's row.
-  appendPending(id, body, files);
-  if (target === "draft") {
-    moveComposerFiles("draft", id);
-    navigate({ view: "session", id });
-  }
+  // Pre-conversion truth: the release below ends the blocked turn, and the
+  // branches under it must see the session as it was at submit.
   const wasBusy = (sessionStatus.value[id]?.type ?? "idle") !== "idle";
   if (wasBusy && hasQueued(id)) {
+    // The pending echo shows either way: a held turn's runs when the flush
+    // watcher below picks it up, a steered one swaps for the server's row.
+    appendPending(id, body, files);
     queuedTurns.value = [
       ...queuedTurns.value,
       { id, kind: "prompt", text: body, files },
@@ -3872,6 +3870,14 @@ export async function sendPrompt(
   // for. Behind held turns it must wait above, or it would jump the queue.
   if (wasBusy && backgroundSupported() && blockingSubagentLive(id)) {
     await backgroundSession(id);
+  }
+  // The echo lands only past that await: inside it no postedRows guard
+  // protects the bubble (the counter bumps in postPrompt), and an idle or
+  // status adoption landing in the gap would wipe it until the POST reply.
+  appendPending(id, body, files);
+  if (target === "draft") {
+    moveComposerFiles("draft", id);
+    navigate({ view: "session", id });
   }
   await postPrompt(id, body, files);
 }

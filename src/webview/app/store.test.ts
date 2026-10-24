@@ -3536,6 +3536,22 @@ describe("background sub-agent (sendPrompt release)", () => {
     assert.equal(callsFor(`/api/session/${sid}/prompt`).length, 1);
     assert.equal(sendError.value, undefined);
   });
+  it("the echo lands after the release await — no unprotected window inside it", async () => {
+    setDialect("v2");
+    const sid = "bg6";
+    sessions.value = [sessRow(sid)];
+    open(sid, blockedTurn(sid));
+    setBusy(sid);
+    const sent = sendPrompt(sid, "steer");
+    // The release is in flight and nothing echo-shaped is on screen yet —
+    // an idle/status adoption landing inside this await has no bubble to
+    // wipe; the echo that lands after rides inside postPrompt's
+    // postedRows guard until the POST's row replaces it.
+    assert.equal(callsFor(`/api/session/${sid}/background`).length, 1);
+    assert.equal(listOf(sid).some((m) => m.info.id.startsWith("pending:")), false);
+    await sent;
+    assert.ok(listOf(sid).some((m) => m.info.id.startsWith("pending:")));
+  });
 });
 
 describe("session fork", () => {
