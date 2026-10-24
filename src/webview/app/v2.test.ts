@@ -709,11 +709,9 @@ describe("v2 route/body/envelope translation", () => {
     assert.equal(await fetchSession("dead"), undefined);
   });
 
-  it("revertSession stages and commits, answering with the refetched row", async () => {
+  it("revertSession stages and answers with the refetched marker row — no commit", async () => {
     onApi((call) => {
       if (call.method === "POST" && call.path === "/api/session/ses_1/revert/stage")
-        return {};
-      if (call.method === "POST" && call.path === "/api/session/ses_1/revert/commit")
         return {};
       if (call.path === "/api/session/ses_1")
         return { data: sessRow("ses_1", { revert: { messageID: "m1" } }) };
@@ -723,7 +721,9 @@ describe("v2 route/body/envelope translation", () => {
     assert.deepEqual(callsFor("/api/session/ses_1/revert/stage")[0].body, {
       messageID: "m1",
     });
-    assert.equal(callsFor("/api/session/ses_1/revert/commit").length, 1);
+    // Staged only: the cut commits with the next message, not here —
+    // the marker (and the Redo affordance) must survive the revert.
+    assert.equal(callsFor("/api/session/ses_1/revert/commit").length, 0);
     assert.deepEqual(row?.revert, { messageID: "m1" });
   });
 

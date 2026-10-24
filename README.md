@@ -29,8 +29,10 @@ HTTP/SSE.
   waits on you and green when a turn finishes. Chimes cover ready,
   permission, and question events.
 - **Steer mid-turn** - a prompt sent while the agent works lands at the next
-  step boundary. Prompts still waiting in the queue can be reverted (hover
-  the bubble, Revert) - the text returns to the composer unposted.
+  step boundary. Hover any prompt for **Revert**: a queued one returns to the
+  composer unposted; a sent one rewinds the session - it and everything after
+  fold out of the transcript, **Redo** restores them, and the next message
+  sent commits the cut.
 - **Stuck turns surface a way out** - a provider stream can die silently and
   leave a turn "busy" forever; after the stuck threshold
   (`opencodeGui.stuckToolSeconds`) the transcript shows how long it has

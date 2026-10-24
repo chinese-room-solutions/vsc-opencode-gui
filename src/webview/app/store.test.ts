@@ -3186,6 +3186,124 @@ describe("revert fold", () => {
     );
     assert.equal(sessions.value.find((s) => s.id === sid)?.revert, undefined);
   });
+  it("on v2 the revert stays staged: marker on the row, transcript folded", async () => {
+    setDialect("v2");
+    try {
+      const sid = "rv7";
+      sessions.value = [sessRow(sid)];
+      open(sid, []);
+      onApi((call) => {
+        if (
+          call.method === "POST" &&
+          call.path === `/api/session/${sid}/revert/stage`
+        )
+          return {};
+        if (call.method === "GET" && call.path === `/api/session/${sid}`)
+          return { data: sessRow(sid, { revert: { messageID: "u2" } }) };
+        return undefined;
+      });
+      onApi(
+        messageMock(sid, {
+          data: [
+            { id: "u1", type: "user", time: { created: 1 }, text: "one" },
+            { id: "a1", type: "assistant", time: { created: 2 } },
+            { id: "u2", type: "user", time: { created: 3 }, text: "two" },
+            { id: "a2", type: "assistant", time: { created: 4 } },
+          ],
+          cursor: {},
+        }),
+      );
+      assert.equal(await revertSession(sid, "u2"), true);
+      // Staged only — no commit POST; the marker (and Redo) persists.
+      assert.equal(callsFor(`/api/session/${sid}/revert/commit`).length, 0);
+      assert.deepEqual(sessions.value.find((s) => s.id === sid)?.revert, {
+        messageID: "u2",
+      });
+      assert.deepEqual(
+        listOf(sid).map((m) => m.info.id),
+        ["u1", "a1"],
+      );
+    } finally {
+      setDialect("v1");
+    }
+  });
+  it("on v2 redo lifts the staged revert: marker clears, rows return", async () => {
+    setDialect("v2");
+    try {
+      const sid = "rv8";
+      sessions.value = [sessRow(sid, { revert: { messageID: "u2" } })];
+      onApi((call) => {
+        if (
+          call.method === "DELETE" &&
+          call.path === `/api/session/${sid}/revert`
+        )
+          return {};
+        if (call.method === "GET" && call.path === `/api/session/${sid}`)
+          return { data: sessRow(sid) };
+        return undefined;
+      });
+      onApi(
+        messageMock(sid, {
+          data: [
+            { id: "u1", type: "user", time: { created: 1 }, text: "one" },
+            { id: "a1", type: "assistant", time: { created: 2 } },
+            { id: "u2", type: "user", time: { created: 3 }, text: "two" },
+            { id: "a2", type: "assistant", time: { created: 4 } },
+          ],
+          cursor: {},
+        }),
+      );
+      await refreshMessages(sid);
+      assert.deepEqual(
+        listOf(sid).map((m) => m.info.id),
+        ["u1", "a1"],
+      );
+      assert.equal(await redoSession(sid), true);
+      assert.equal(sessions.value.find((s) => s.id === sid)?.revert, undefined);
+      assert.deepEqual(
+        listOf(sid).map((m) => m.info.id),
+        ["u1", "a1", "u2", "a2"],
+      );
+    } finally {
+      setDialect("v1");
+    }
+  });
+  it("on v2 the next prompt POSTs through the staged marker and commits the cut", async () => {
+    setDialect("v2");
+    try {
+      const sid = "rv9";
+      sessions.value = [sessRow(sid, { revert: { messageID: "u2" } })];
+      open(sid, [
+        row("u1", "user", 1),
+        row("a1", "assistant", 2),
+        row("u2", "user", 3),
+        row("a2", "assistant", 4),
+      ]);
+      // The commit truncated server-side: the truth is the rows before the
+      // marker only.
+      onApi(
+        messageMock(sid, {
+          data: [
+            { id: "u1", type: "user", time: { created: 1 }, text: "one" },
+            { id: "a1", type: "assistant", time: { created: 2 } },
+          ],
+          cursor: {},
+        }),
+      );
+      await sendPrompt(sid, "two, edited");
+      await settle();
+      assert.equal(callsFor(`/api/session/${sid}/prompt`).length, 1);
+      const ids = listOf(sid).map((m) => m.info.id);
+      assert.deepEqual(
+        ids.filter((i) => !i.startsWith("pending:")),
+        ["u1", "a1"],
+      );
+      assert.equal(ids.some((i) => i.startsWith("pending:")), true);
+      assert.equal(sessions.value.find((s) => s.id === sid)?.revert, undefined);
+    } finally {
+      setDialect("v1");
+    }
+  });
 });
 
 describe("unread tabs", () => {

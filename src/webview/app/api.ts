@@ -2380,12 +2380,16 @@ export async function forkSession(
     : { error: res?.error };
 }
 
-// POST /session/{id}/revert (v1) / v2's two-step: POST /revert/stage
-// {messageID, files?} marks the cut, POST /revert/commit applies it (the
-// bare POST /revert 404s on v2 — wire-verified). Rewind semantics: the
-// message, its reply, and everything after fold out of the transcript.
-// v1 replies the updated session row carrying the revert marker; v2
-// commits with 204, so the row is refetched either way.
+// POST /session/{id}/revert (v1) / POST /api/session/{id}/revert/stage
+// {messageID, files?} — rewind to before a user prompt: it, its reply, and
+// everything after fold out of the transcript. Both dialects only STAGE
+// the cut — the marker persists on the session row (the server keeps
+// serving the rows; DELETE /revert lifts it as Redo) until the next
+// message commits it: the server commits a prompt or compact, and the
+// client commits before a command run (see store's runSlashCommand).
+// v1 replies the updated session row carrying the marker; v2 stages with
+// 204 (the bare POST /revert 404s on v2 — wire-verified), so the row is
+// refetched either way.
 export async function revertSession(
   id: string,
   messageID: string,
@@ -2396,8 +2400,6 @@ export async function revertSession(
       messageID,
     });
     if (!staged?.ok) return undefined;
-    const committed = await sendJson("POST", `/api/session/${id}/revert/commit`);
-    if (!committed?.ok) return undefined;
     const row = await fetchSession(id);
     return row === "missing" ? undefined : row;
   }
