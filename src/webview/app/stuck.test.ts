@@ -226,10 +226,53 @@ describe("stuck", () => {
       assert.equal(mark?.since, T0 + 2_000);
     });
 
+    it("a busy child holds the parent's clock; the mark forms once it ends", () => {
+      const sid = "sk11";
+      busySession(sid);
+      busySession("childB");
+      open(sid, [
+        {
+          info: { id: "m1", role: "assistant", time: { created: T0 } },
+          parts: [
+            {
+              id: "p1",
+              messageID: "m1",
+              sessionID: sid,
+              type: "tool",
+              tool: "task",
+              state: {
+                status: "running",
+                time: { start: T0 },
+                metadata: { sessionId: "childB" },
+              },
+            },
+          ],
+        },
+      ]);
+      setNow(T0 + 100);
+      runStuckTick();
+      setNow(T0 + 5_000); // far past the threshold, but the child works
+      runStuckTick();
+      assert.equal(marksOf(sid), undefined);
+      setNow(T0 + 8_000);
+      runStuckTick();
+      assert.equal(marksOf(sid), undefined);
+      // The child ends — the still-running parent part is the hang now.
+      sessionStatus.value = {
+        ...sessionStatus.value,
+        childB: { type: "idle" },
+      };
+      setNow(T0 + 8_100); // fresh grace from the child's end
+      runStuckTick();
+      assert.equal(marksOf(sid), undefined);
+      setNow(T0 + 9_500);
+      runStuckTick();
+      assert.equal(marksOf(sid)?.parts["p1"]?.childId, "childB");
+    });
+
     it("a backgrounded task part completing clears its child mark", () => {
       const sid = "sk10";
-      busySession(sid);
-      busySession("child1"); // the child keeps working after the background
+      busySession(sid); // no child status entry — the child ended unseen
       open(sid, [
         {
           info: { id: "m1", role: "assistant", time: { created: T0 } },

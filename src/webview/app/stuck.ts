@@ -170,6 +170,19 @@ function stuckTick(): void {
           seen.set(p.id, now);
           continue;
         }
+        // A sub-agent still working is progress elsewhere, not silence: the
+        // parent's part fingerprint can sit still for the whole life of a
+        // healthy long child turn, so the child's own busy status holds the
+        // clock too. No status entry (never seen, or already ended) keeps
+        // the wedge detection — a child done while this part still runs is
+        // the hang worth flagging.
+        if (
+          childId &&
+          (sessionStatus.value[childId]?.type ?? "idle") !== "idle"
+        ) {
+          seen.set(p.id, now);
+          continue;
+        }
         if (now - since >= toolMs)
           parts[p.id] = {
             since,

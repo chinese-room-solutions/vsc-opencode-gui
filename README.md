@@ -35,7 +35,9 @@ HTTP/SSE.
   leave a turn "busy" forever; after the stuck threshold
   (`opencodeGui.stuckToolSeconds`) the transcript shows how long it has
   been silent with an **Interrupt** chip, and an optional auto-abort
-  (`opencodeGui.stuckAutoAbortSeconds`) can end it for you.
+  (`opencodeGui.stuckAutoAbortSeconds`) can end it for you. A sub-agent
+  still working never counts as silence - the parent's chip waits until the
+  child session itself stops.
 - **Fast copy** - hold the copy modifier (Alt, or ⌘ - see
   `opencodeGui.codeCopyModifier`) and click a code block, quote, or inline
   code span to copy it.
