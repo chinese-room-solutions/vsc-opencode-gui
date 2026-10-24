@@ -2436,6 +2436,86 @@ describe("/compact (store side of ff714f0)", () => {
   });
 });
 
+// v2 resolves the compact POST at admission — completion is the
+// session.compaction.done the v2 translation synthesizes, and the session
+// must stay busy until it lands (see runCompact).
+describe("v2 compact waits for compaction.done", () => {
+  beforeEach(() => {
+    setDialect("v2");
+    // The status adoption pulls read as idle (nothing active).
+    onApi(
+      (call) =>
+        call.method === "GET" && call.path === "/api/session/active"
+          ? { data: {} }
+          : undefined,
+    );
+  });
+  afterEach(() => setDialect("v1"));
+  it("a queued command behind a /compact fires only after the done frame", async () => {
+    const sid = "cw1";
+    commands.value = [{ name: "start" }];
+    sessions.value = [sessRow(sid)];
+    open(sid, [
+      row("u1", "user", T0),
+      row("a1", "assistant", T0 + 1, { providerID: "pp", modelID: "mm" }),
+    ]);
+    setBusy(sid);
+    queueCommand(sid, "/compact");
+    queueCommand(sid, "/start");
+    const compactEcho = queuedTurns.value[0].echoCid;
+    // The running turn ends — the flush fires the queued /compact.
+    await sseFlush("session.execution.succeeded", { sessionID: sid });
+    await settle(4);
+    assert.equal(callsFor(`/api/session/${sid}/compact`).length, 1);
+    // The POST resolved at admission; the fold still runs — the /start
+    // behind it must not fire into it.
+    assert.equal(callsFor(`/api/session/${sid}/command`).length, 0);
+    assert.equal(sessionStatus.value[sid]?.type, "busy");
+    // The fold ends — only now the queue drains past the compact.
+    await sseFlush("session.compaction.ended", { sessionID: sid });
+    await settle(6);
+    assert.equal(callsFor(`/api/session/${sid}/command`).length, 1);
+    assert.equal(queuedTurns.value.length, 0);
+    assert.equal(listOf(sid).some((m) => m.info.id === compactEcho), false);
+  });
+  it("a direct /compact holds busy between the POST reply and the done frame", async () => {
+    const sid = "cw2";
+    sessions.value = [sessRow(sid)];
+    open(sid, [
+      row("u1", "user", T0),
+      row("a1", "assistant", T0 + 1, { providerID: "pp", modelID: "mm" }),
+    ]);
+    const run = runSlashCommand(sid, "/compact");
+    await settle(4);
+    assert.equal(callsFor(`/api/session/${sid}/compact`).length, 1);
+    // Admission replied, the fold still runs: the composer-facing status
+    // stays busy and the echo stays up.
+    assert.equal(sessionStatus.value[sid]?.type, "busy");
+    assert.ok(listOf(sid).some((m) => m.info.id.startsWith("pending:")));
+    await sseFlush("session.compaction.ended", { sessionID: sid });
+    await run;
+    assert.equal(sessionStatus.value[sid]?.type, "idle");
+    assert.equal(listOf(sid).some((m) => m.info.id.startsWith("pending:")), false);
+  });
+  it("a lost done event times out into adopted server truth, not a wedge", async () => {
+    const sid = "cw3";
+    sessions.value = [sessRow(sid)];
+    open(sid, [
+      row("u1", "user", T0),
+      row("a1", "assistant", T0 + 1, { providerID: "pp", modelID: "mm" }),
+    ]);
+    const run = runSlashCommand(sid, "/compact");
+    await settle(4);
+    assert.equal(sessionStatus.value[sid]?.type, "busy");
+    // The frame never arrives (dropped stream): the wait gives up and the
+    // status pull decides.
+    fireExact(300_000);
+    await run;
+    assert.equal(sessionStatus.value[sid]?.type, "idle");
+    assert.ok(callsFor("/api/session/active").length >= 1);
+  });
+});
+
 describe("/init builtin", () => {
   it("sends the template as a prompt with the directory and args folded in", async () => {
     const sid = "in1";

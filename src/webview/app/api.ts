@@ -2163,10 +2163,14 @@ export async function runCommand(
 
 // POST /session/{id}/summarize (v1) / POST /api/session/{id}/compact (v2,
 // body {} required): native compaction, what the TUI's /compact runs — the
-// server folds the history into an AI summary, freeing the context. The
-// POST resolves only when the summary turn is done, so it carries its own
-// long timeout — the relay's default cap would abort mid-compaction and
-// read as failure while the server keeps folding.
+// server folds the history into an AI summary, freeing the context. v1
+// resolves the POST only when the summary turn is done; v2 admits the
+// compact into the session's inbox and resolves immediately — completion
+// arrives as session.compaction.ended/.failed on the event stream
+// (translated to the synthesized session.compaction.done), which runCompact
+// waits for. The long timeout guards v1's await through the whole fold (the
+// relay's default cap would abort mid-compaction and read as failure while
+// the server keeps folding) and v2's admission hop alike.
 export async function compactSession(
   id: string,
   providerID: string,

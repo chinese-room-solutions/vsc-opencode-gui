@@ -2070,6 +2070,23 @@ function applyEvent(event: ServerEvent): void {
     // /compact echo (v1's trigger row does that on the stream; v2 has
     // none). Synthesized by the v2 event translation; v1 never emits it.
     case "session.compaction.done":
+      if (data.sessionID) {
+        // Stamp and release first (see waitForCompaction): a runCompact
+        // parked on this session must unblock even if the row below is
+        // gated — the sessions list may not have loaded yet.
+        compactionStamps.set(
+          data.sessionID,
+          (compactionStamps.get(data.sessionID) ?? 0) + 1,
+        );
+        const waiting = compactionWaiters.get(data.sessionID);
+        if (waiting) {
+          compactionWaiters.delete(data.sessionID);
+          for (const w of waiting) {
+            clearTimeout(w.timer);
+            w.resolve(true);
+          }
+        }
+      }
       if (
         data.sessionID &&
         sessions.value.some((s) => s.id === data.sessionID)
@@ -4006,6 +4023,37 @@ async function postPrompt(
   }
 }
 
+// v2 completion gate for /compact: the POST resolves at admission (see
+// compactSession), so the run's real end is the synthesized
+// session.compaction.done on the stream. A per-session stamp of observed
+// done events — the event can beat the POST reply, so waiters compare the
+// stamp they took before posting — plus the waiters themselves.
+const compactionStamps = new Map<string, number>();
+interface CompactionWaiter {
+  resolve: (byEvent: boolean) => void;
+  timer: number;
+}
+const compactionWaiters = new Map<string, Set<CompactionWaiter>>();
+const COMPACT_DONE_WAIT_MS = 300_000;
+
+// Park until the session's next done event past `stamp`. Resolves true when
+// the event landed, false on the timeout — a dropped stream must not wedge
+// the run; the caller adopts server truth and unblocks.
+function waitForCompaction(target: string, stamp: number): Promise<boolean> {
+  if ((compactionStamps.get(target) ?? 0) > stamp) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const waiter: CompactionWaiter = { resolve, timer: 0 };
+    const set = compactionWaiters.get(target) ?? new Set<CompactionWaiter>();
+    compactionWaiters.set(target, set);
+    set.add(waiter);
+    waiter.timer = window.setTimeout(() => {
+      set.delete(waiter);
+      if (!set.size) compactionWaiters.delete(target);
+      resolve(false);
+    }, COMPACT_DONE_WAIT_MS);
+  });
+}
+
 // /compact — intercepted here, not sent to the server: there is no compact
 // command behind /command; compaction is a direct call to the summarize
 // endpoint, what the TUI's /compact runs. It folds the history into an AI
@@ -4013,6 +4061,10 @@ async function postPrompt(
 // Needs a session with turns, and an idle one — it runs a turn of its own
 // (a queue-fired compact is exempt: the flush effect checked idle and
 // flipped busy itself, so the guard would read its own optimism).
+// Completion timing differs by dialect: v1's POST resolves when the
+// summary turn is done; v2's resolves at admission and the wait below
+// holds busy until the done event, so the queued-turn flush can't fire
+// the next entry into a session still folding.
 async function runCompact(
   target: string | "draft",
   echoed = false,
@@ -4064,18 +4116,50 @@ async function runCompact(
   // lands under it mid-run; the echo retires by id when the run completes.
   // A failed run keeps it as the record.
   if (!echoed) appendPending(target, "/compact");
+  const v2 = dialect() === "v2";
+  // Taken before the POST: a done event that beats the admission reply
+  // still advances the stamp past this and resolves the wait immediately.
+  const stamp = v2 ? (compactionStamps.get(target) ?? 0) : 0;
   const ok = await compactSession(target, model.providerID, model.id);
-  sessionStatus.value = { ...sessionStatus.value, [target]: { type: "idle" } };
   if (!ok) {
+    // The POST itself failed — nothing is folding, or the relay dropped
+    // mid-run and the error banner tells that story. Idle is safe: a
+    // queued entry fired here can't collide with a live fold.
+    sessionStatus.value = { ...sessionStatus.value, [target]: { type: "idle" } };
     dropPending(target);
     setSendError("The session could not be compacted.");
     return;
   }
+  if (!v2) {
+    // v1 awaited the summary turn — the fold is committed. The summary
+    // itself already streamed over /event; this refresh picks up the
+    // trigger + summary rows' durable truth.
+    sessionStatus.value = { ...sessionStatus.value, [target]: { type: "idle" } };
+    if (echoCid) removeCommandEcho(target, echoCid);
+    await refreshMessages(target);
+    return;
+  }
+  // v2: hold busy through the fold. Then no blind idle write — the flush
+  // effect may already have fired the next queued turn's optimistic busy,
+  // or the stream landed execution.started busy for a next turn. Adopt
+  // the server's status for this session the way postPrompt's fallback
+  // does (absence in the busy-only map is idle); a failed pull keeps the
+  // current status for the stream to settle.
+  const byEvent = await waitForCompaction(target, stamp);
+  const map = await fetchSessionStatus();
+  if (map)
+    sessionStatus.value = {
+      ...sessionStatus.value,
+      [target]:
+        map[target] ??
+        (hasLiveTools(target)
+          ? sessionStatus.value[target] ?? { type: "busy" }
+          : { type: "idle" }),
+    };
   if (echoCid) removeCommandEcho(target, echoCid);
-  // The summarize POST resolves once the summary turn is done (the server
-  // awaits its loop) — the summary itself already streamed over /event.
-  // This refresh picks up the trigger + summary rows' durable truth.
-  await refreshMessages(target);
+  // The done event's handler already pulled rows; only the timeout path
+  // still owes the refresh.
+  if (!byEvent) await refreshMessages(target);
 }
 
 // Run a "/name args..." composer line. A draft is created first — commands
