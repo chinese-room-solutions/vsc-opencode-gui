@@ -5,6 +5,7 @@ import "./tile.test";
 import "./router.test";
 import "./markdown.test";
 import "./store.test";
+import "./components/ToolCard.test";
 import "./v2.test";
 import "./stuck.test";
 import "./disabledProviders.test";

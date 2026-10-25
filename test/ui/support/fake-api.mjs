@@ -33,6 +33,9 @@ const stalled = process.env.FAKE_API_STALLED === "1";
 // specs) plus a durable running row whose shell no server holds (the
 // restart-healing spec). See the registry after the SSE plumbing.
 const shellMode = process.env.FAKE_API_SHELL === "1";
+// FAKE_API_SKILL=1 appends a completed skill tool call to the last turn:
+// the pill names the skill (input.name, metadata.name, or the title).
+const skillMode = process.env.FAKE_API_SKILL === "1";
 // FAKE_API_GHOST=1 seeds a dead turn's fingerprint: the last assistant
 // row holds a bash tool part still status "running" with an old start
 // stamp (what the v2 store keeps when a turn dies without terminal tool
@@ -308,6 +311,23 @@ for (let i = 1; i <= SEED_TURNS; i++) {
                     status: "running",
                     input: {},
                     time: { start: ca + 10_600 },
+                  },
+                },
+              ]
+            : []),
+          ...(skillMode
+            ? [
+                {
+                  type: "tool",
+                  id: "pt_tskill",
+                  name: "skill",
+                  state: {
+                    status: "completed",
+                    input: { name: "concise" },
+                    output: '<skill_content name="concise">\n# Skill: concise\n</skill_content>',
+                    title: "Loaded skill: concise",
+                    metadata: { name: "concise", dir: "/skills/concise" },
+                    time: { start: ca + 10_800, end: ca + 11_000 },
                   },
                 },
               ]

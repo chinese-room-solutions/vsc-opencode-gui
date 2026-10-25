@@ -1252,6 +1252,76 @@ describe("ran-model adoption into the selector", () => {
   });
 });
 
+// The live skill row: args may never stream (no input), so the pill reads
+// the success frame's metadata.name - the store must keep it on the part.
+describe("skill tool part live path", () => {
+  beforeEach(() => setDialect("v2"));
+  afterEach(() => setDialect("v1"));
+  it("keeps the success metadata the pill names the skill by", async () => {
+    const sid = "sk1";
+    open(sid, [row("a1", "assistant", T0)]);
+    sse("session.next.tool.input.started", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      callID: "call_1",
+      name: "skill",
+      timestamp: T0 + 1,
+    });
+    sse("session.next.tool.called", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      callID: "call_1",
+      timestamp: T0 + 2,
+    });
+    sse("session.next.tool.success", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      callID: "call_1",
+      content: [{ type: "text", text: '<skill_content name="concise">x' }],
+      metadata: { name: "concise", dir: "C:\\x" },
+      timestamp: T0 + 3,
+    });
+    await flushEvents();
+    const p = findPart(sid, "call_1") as {
+      tool?: string;
+      state?: { input?: unknown; metadata?: { name?: string }; status?: string };
+    };
+    assert.equal(p?.tool, "skill");
+    assert.equal(p?.state?.status, "completed");
+    assert.equal(p?.state?.input, undefined);
+    assert.equal(p?.state?.metadata?.name, "concise");
+  });
+  it("keeps the parsed args when the provider streams them", async () => {
+    const sid = "sk2";
+    open(sid, [row("a1", "assistant", T0)]);
+    sse("session.next.tool.input.started", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      callID: "call_1",
+      name: "skill",
+      timestamp: T0 + 1,
+    });
+    sse("session.next.tool.input.ended", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      callID: "call_1",
+      text: '{"name":"concise"}',
+    });
+    sse("session.next.tool.success", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      callID: "call_1",
+      metadata: { name: "concise", dir: "C:\\x" },
+      timestamp: T0 + 3,
+    });
+    await flushEvents();
+    const p = findPart(sid, "call_1") as {
+      state?: { input?: { name?: string } };
+    };
+    assert.equal(p?.state?.input?.name, "concise");
+  });
+});
+
 // 19592cc
 describe("interrupted-mark writes (19592cc)", () => {
   it("skips redundant mark writes", () => {

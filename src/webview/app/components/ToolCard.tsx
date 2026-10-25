@@ -246,9 +246,22 @@ function BodyRow(props: { label: "IN" | "OUT"; text: string }) {
 // The pill text: the command for bash (v2's execute passes it as `code`),
 // the file path for edit/write, the todo progress, the tool's own title or
 // first descriptive argument otherwise.
-function summary(part: ToolPart): string {
+export function summary(part: ToolPart): string {
   if (isBashTool(part.tool)) {
     return inputStr(part, "command", "code") ?? part.state?.title ?? "";
+  }
+  // A skill call names itself three ways: the args (a provider that streams
+  // tool args), the result metadata (the live frame — args may never have
+  // streamed), and the settled title ("Loaded skill: X" on durable rows).
+  if (part.tool === "skill") {
+    return (
+      inputStr(part, "name") ??
+      (typeof part.state?.metadata?.name === "string"
+        ? part.state.metadata.name
+        : undefined) ??
+      part.state?.title ??
+      ""
+    );
   }
   if (
     part.tool === "edit" ||
