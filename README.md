@@ -62,7 +62,7 @@ All commands live under the **`Open Code:`** prefix in the command palette.
 | `Open Code: Add Selection to Chat` | Send the editor selection as context |
 | `Open Code: Add to Chat` | Insert the file's relative path into the chat |
 | `Open Code: Manage Models` | Provider and model picker |
-| `Open Code: Manage Providers` | Pick which providers the lists show. The plug on a row turns that provider on or off on the server. |
+| `Open Code: Manage Providers` | Pick which providers the lists show. The plug on a row turns that provider on or off on the server. The shield row goes further: only the checked providers may run anywhere — sub-agent sessions included (opencode 2.x only). |
 | `Open Code: Show Session Diff` | Working-tree diff of the session |
 | `Open Code: Toggle Context Breakdown` | Per-message context panel |
 | `Open Code: Open in Terminal` | Terminal bound to the session |

@@ -793,6 +793,10 @@ export function activate(context: vscode.ExtensionContext) {
         }
         const connected = catalog.connected;
         const disabled = new Set(await sm.disabledProviders());
+        // v2's allowlist (enabled_providers in the config): null = off.
+        // While on, only listed providers may run anywhere — sub-agent
+        // sessions and explicit model overrides included.
+        let allow: string[] | null = await sm.enabledProviders();
         if (connected.length === 0 && disabled.size === 0) {
           vscode.window.showInformationMessage(
             "No providers are connected yet — run `opencode auth login` in a terminal to connect one.",
@@ -803,6 +807,15 @@ export function activate(context: vscode.ExtensionContext) {
           (catalog.all ?? []).map((p) => [p.id, p.name ?? p.id]),
         );
         type Row = vscode.QuickPickItem & { pid: string };
+        // Under the allowlist a blocked provider drops out of `connected`
+        // server-side; the hidden list keeps it addressable here so it can
+        // be re-allowed without lifting the restriction first.
+        const universe = [
+          ...new Set([...connected, ...disabled, ...hiddenProviders.get()]),
+        ];
+        const hidden = new Set(hiddenProviders.get());
+        const allowed = (pid: string) =>
+          allow !== null && allow.includes(pid);
         const row = (pid: string): Row => ({
           pid,
           label: names.get(pid) ?? pid,
@@ -810,13 +823,42 @@ export function activate(context: vscode.ExtensionContext) {
           ...(disabled.has(pid)
             ? { detail: "$(circle-slash) Disabled on the server" }
             : {}),
-          picked: !disabled.has(pid) && !hiddenProviders.get().includes(pid),
+          ...(allow !== null && !allowed(pid)
+            ? { detail: "$(circle-slash) Blocked by the restriction" }
+            : {}),
+          picked:
+            allow !== null
+              ? allowed(pid)
+              : !disabled.has(pid) && !hidden.has(pid),
           buttons: [
             {
               iconPath: new vscode.ThemeIcon("plug"),
-              tooltip: disabled.has(pid)
-                ? "Enable on the server"
-                : "Disable on the server",
+              tooltip: allow !== null
+                ? allowed(pid)
+                  ? "Block on the server"
+                  : "Allow on the server"
+                : disabled.has(pid)
+                  ? "Enable on the server"
+                  : "Disable on the server",
+            },
+          ],
+        });
+        // The empty pid marks the mode row, ignored wherever providers are
+        // processed.
+        const modeRow = (): Row => ({
+          pid: "",
+          label: "$(shield) Only checked providers can run",
+          description:
+            allow === null
+              ? "off — turn on to enforce the checked set on the server"
+              : "on — enforced on the server, sub-agent sessions included",
+          buttons: [
+            {
+              iconPath: new vscode.ThemeIcon(allow === null ? "lock" : "unlock"),
+              tooltip:
+                allow === null
+                  ? "Restrict running to the checked providers"
+                  : "Lift the restriction",
             },
           ],
         });
@@ -824,11 +866,82 @@ export function activate(context: vscode.ExtensionContext) {
         qp.title = "Open Code: Manage Providers";
         qp.canSelectMany = true;
         qp.placeholder =
-          "Checked providers appear in the pickers — the plug toggles one on the server";
-        qp.items = [...new Set([...connected, ...disabled])].map(row);
+          "Checked providers appear in the pickers — the plug toggles one on the server; the shield enforces the checked set";
+        // v1 has no enabled_providers key — the shield row would only ever
+        // error, so it stays hidden there.
+        qp.items = [
+          ...(sm.dialect === "v2" ? [modeRow()] : []),
+          ...universe.map(row),
+        ];
         qp.onDidTriggerItemButton((e) => {
           const pid = (e.item as Row).pid;
           void (async () => {
+            // The shield row flips allowlist mode. Enabling takes the
+            // currently checked providers as the list; an empty list
+            // would deny everything, so it needs at least one.
+            if (!pid) {
+              if (allow !== null) {
+                if (!(await sm.setEnabledProviders(null))) {
+                  vscode.window.showErrorMessage(
+                    "Could not lift the restriction — the opencode config file is not writable.",
+                  );
+                  return;
+                }
+                allow = null;
+              } else {
+                const next = universe.filter(
+                  (p) => !disabled.has(p) && !hidden.has(p),
+                );
+                if (next.length === 0) {
+                  vscode.window.showWarningMessage(
+                    "Check at least one provider before restricting.",
+                  );
+                  return;
+                }
+                if (!(await sm.setEnabledProviders(next))) {
+                  vscode.window.showErrorMessage(
+                    "Could not write the restriction — the opencode config file is not writable.",
+                  );
+                  return;
+                }
+                allow = next;
+              }
+              qp.items = [modeRow(), ...universe.map(row)];
+              // The webview won't hear about it otherwise on v1 (v2's
+              // config.updated SSE maps to a base refresh server-side).
+              hub.noteVisible();
+              return;
+            }
+            // Under the allowlist the plug edits the allowlist —
+            // disabled_providers wins over enabled_providers server-side,
+            // so a denylist write here would block everything.
+            if (allow !== null) {
+              const next = new Set(allow);
+              if (next.has(pid)) next.delete(pid);
+              else next.add(pid);
+              if (next.size === 0) {
+                vscode.window.showWarningMessage(
+                  "At least one provider must stay runnable.",
+                );
+                return;
+              }
+              if (!(await sm.setEnabledProviders([...next]))) {
+                vscode.window.showErrorMessage(
+                  `Could not ${next.has(pid) ? "block" : "allow"} ${pid} — the opencode config file is not writable.`,
+                );
+                return;
+              }
+              allow = [...next];
+              // Keep the picker's visible set in step: blocked ⇒ hidden.
+              if (next.has(pid)) hidden.delete(pid);
+              else hidden.add(pid);
+              setHiddenProviders([...hidden]);
+              qp.items = qp.items.map((i) =>
+                !i.pid ? modeRow() : i.pid === pid ? row(pid) : i,
+              );
+              hub.noteVisible();
+              return;
+            }
             const next = new Set(await sm.disabledProviders());
             if (next.has(pid)) next.delete(pid);
             else next.add(pid);
@@ -855,9 +968,29 @@ export function activate(context: vscode.ExtensionContext) {
         );
         qp.dispose();
         if (!chosen) return;
-        const visible = new Set(chosen.map((i) => i.pid));
+        const visible = new Set(
+          chosen.filter((i) => i.pid).map((i) => i.pid),
+        );
+        // Under the allowlist the checked set IS the server-side rule —
+        // accept rewrites it (never to empty: that denies everything).
+        if (allow !== null) {
+          if (visible.size === 0) {
+            vscode.window.showWarningMessage(
+              "Leave at least one provider checked — nothing was changed.",
+            );
+            return;
+          }
+          if (!(await sm.setEnabledProviders([...visible]))) {
+            vscode.window.showErrorMessage(
+              "Could not write the restriction — the opencode config file is not writable.",
+            );
+            return;
+          }
+          setHiddenProviders(universe.filter((pid) => !visible.has(pid)));
+          return;
+        }
         setHiddenProviders(
-          [...new Set([...connected, ...disabled])].flatMap((pid) =>
+          universe.flatMap((pid) =>
             visible.has(pid) || disabled.has(pid) ? [] : [pid],
           ),
         );

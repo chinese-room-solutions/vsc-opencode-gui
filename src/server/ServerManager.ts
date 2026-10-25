@@ -11,7 +11,9 @@ import { awaitDialect, type Dialect } from "./dialect";
 import {
   globalConfigPath,
   readDisabledProviders,
+  readEnabledProviders,
   setDisabledProvidersInText,
+  setEnabledProvidersInText,
 } from "./disabledProviders";
 import { log } from "../log";
 
@@ -975,6 +977,46 @@ export class ServerManager {
       disabled_providers: ids,
     });
     return res !== undefined;
+  }
+
+  // The allowlist twin (see disabledProviders.ts): v2's
+  // enabled_providers config key. null = key absent = mode off; when
+  // present, the server denies every provider not on the list — sub-agent
+  // pins and explicit model overrides included. v1 has no such key: the
+  // mode reads as off and writes are refused (the denylist plug still
+  // works there).
+  async enabledProviders(): Promise<string[] | null> {
+    await this.ready;
+    if (this._dialect !== "v2") return null;
+    try {
+      return readEnabledProviders(
+        fs.readFileSync(globalConfigPath(this._configRoot()), "utf8"),
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  // ids === null turns the mode off (removes the key). An empty array is
+  // a valid deny-everything write server-side — callers guard it.
+  async setEnabledProviders(ids: string[] | null): Promise<boolean> {
+    await this.ready;
+    if (this._dialect !== "v2") return false;
+    const file = globalConfigPath(this._configRoot());
+    let prev = "";
+    try {
+      prev = fs.readFileSync(file, "utf8");
+    } catch {
+      // No config file yet — start one.
+    }
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, setEnabledProvidersInText(prev, ids));
+    } catch {
+      return false;
+    }
+    await this.hurryConfigReload();
+    return true;
   }
 
   // True only when the server behind baseUrl reports the given folder as

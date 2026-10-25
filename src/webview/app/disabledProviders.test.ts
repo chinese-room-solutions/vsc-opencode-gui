@@ -1,7 +1,9 @@
 import { strict as assert } from "node:assert";
 import {
   readDisabledProviders,
+  readEnabledProviders,
   setDisabledProvidersInText,
+  setEnabledProvidersInText,
   stripJsonc,
 } from "../../server/disabledProviders";
 
@@ -85,5 +87,82 @@ describe("disabled_providers config text layer", () => {
       ),
       [],
     );
+  });
+});
+
+describe("enabled_providers config text layer", () => {
+  it("reads the allowlist, distinguishing absent from empty", () => {
+    assert.equal(readEnabledProviders(`{}`), null);
+    assert.equal(readEnabledProviders(undefined), null);
+    assert.equal(
+      readEnabledProviders(`{"disabled_providers": ["openai"]}`),
+      null,
+    );
+    assert.equal(readEnabledProviders(`{broken`), null);
+    assert.deepEqual(
+      readEnabledProviders(`{"enabled_providers": []}`),
+      [],
+    );
+    assert.deepEqual(
+      readEnabledProviders(
+        `{
+          // only the coding plan may run
+          "enabled_providers": ["zai-coding-plan",
+          ], "model": "zai/glm-5.3",
+        }`,
+      ),
+      ["zai-coding-plan"],
+    );
+  });
+
+  it("replaces and inserts like the denylist writer", () => {
+    const before = `{
+  // keep me
+  "model": "zai/glm-5.3",
+  "enabled_providers": [
+    "zai"
+  ]
+}`;
+    const after = setEnabledProvidersInText(before, ["zai-coding-plan"]);
+    assert.deepEqual(readEnabledProviders(after), ["zai-coding-plan"]);
+    assert.ok(after.includes("// keep me"));
+    assert.ok(after.includes(`"model": "zai/glm-5.3"`));
+    assert.deepEqual(
+      readEnabledProviders(setEnabledProvidersInText(``, ["zai"])),
+      ["zai"],
+    );
+    assert.deepEqual(
+      readEnabledProviders(setEnabledProvidersInText(`{}`, ["zai"])),
+      ["zai"],
+    );
+  });
+
+  it("null removes the key with its separating comma, wherever it sits", () => {
+    const trailing = setEnabledProvidersInText(
+      `{\n  "enabled_providers": ["zai"],\n  "model": "zai/glm-5.3"\n}`,
+      null,
+    );
+    assert.equal(readEnabledProviders(trailing), null);
+    assert.deepEqual(
+      JSON.parse(stripJsonc(trailing)),
+      { model: "zai/glm-5.3" },
+    );
+    const leading = setEnabledProvidersInText(
+      `{\n  "model": "zai/glm-5.3",\n  "enabled_providers": ["zai"]\n}`,
+      null,
+    );
+    assert.equal(readEnabledProviders(leading), null);
+    assert.deepEqual(
+      JSON.parse(stripJsonc(leading)),
+      { model: "zai/glm-5.3" },
+    );
+    const sole = setEnabledProvidersInText(
+      `{\n  "enabled_providers": ["zai"]\n}`,
+      null,
+    );
+    assert.deepEqual(JSON.parse(stripJsonc(sole)), {});
+    // Absent key: byte-identical no-op.
+    const untouched = `{\n  "model": "zai/glm-5.3"\n}`;
+    assert.equal(setEnabledProvidersInText(untouched, null), untouched);
   });
 });
