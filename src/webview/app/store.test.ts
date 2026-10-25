@@ -1581,6 +1581,51 @@ describe("turn projection from stream events", () => {
     assert.equal(f.state?.error, "boom");
   });
 
+  it("tool.progress patches the subagent child binding into state", async () => {
+    const sid = "tprog";
+    open(sid, [row("a1", "assistant", T0)]);
+    await sseFlush("session.next.tool.input.started", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      callID: "c1",
+      name: "subagent",
+    });
+    await sseFlush("session.next.tool.progress", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      callID: "c1",
+      metadata: { sessionID: "ses_child", status: "running" },
+    });
+    const st = findPart(sid, "c1") as {
+      state?: { metadata?: Record<string, unknown> };
+    };
+    assert.equal(st.state?.metadata?.sessionID, "ses_child");
+  });
+
+  it("tool.failed keeps metadata so a cancelled subagent keeps its child", async () => {
+    const sid = "tfailm";
+    open(sid, [row("a1", "assistant", T0)]);
+    await sseFlush("session.next.tool.input.started", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      callID: "c1",
+      name: "subagent",
+    });
+    await sseFlush("session.next.tool.failed", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      callID: "c1",
+      error: { message: "Subagent cancelled" },
+      metadata: { sessionID: "ses_child", status: "running" },
+      timestamp: T0 + 1,
+    });
+    const f = findPart(sid, "c1") as {
+      state?: { status?: string; metadata?: Record<string, unknown> };
+    };
+    assert.equal(f.state?.status, "error");
+    assert.equal(f.state?.metadata?.sessionID, "ses_child");
+  });
+
   it("tool args stream: deltas preview live, ended parses, called supersedes", async () => {
     const sid = "tpq";
     open(sid, [row("a1", "assistant", T0)]);

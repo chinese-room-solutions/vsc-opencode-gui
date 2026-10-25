@@ -159,10 +159,16 @@ function stuckTick(): void {
         if (st !== "running") continue;
         anyRunning = true;
         const since = seen.get(p.id)!;
+        // v1's task tool writes the child as `sessionId`, v2's subagent
+        // tool as `sessionID`.
+        const meta = p.state.metadata as
+          | { sessionId?: unknown; sessionID?: unknown }
+          | undefined;
         const childId =
           isTaskTool(p.tool) &&
-          typeof p.state.metadata?.sessionId === "string"
-            ? p.state.metadata.sessionId
+          (typeof meta?.sessionId === "string" ||
+            typeof meta?.sessionID === "string")
+            ? ((meta?.sessionId ?? meta?.sessionID) as string)
             : undefined;
         // A child stalled on its own permission/question ask isn't stuck —
         // the ask is the explanation; hold the clock until it's answered.

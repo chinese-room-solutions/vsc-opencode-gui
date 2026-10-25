@@ -79,17 +79,24 @@ function diffText(part: ToolPart): string {
   return typeof meta === "string" ? meta : "";
 }
 
-// The child session this chip opens. Live parts carry it in state.metadata
-// (the tool records the id when it spawns the session); durable rows lose
-// that field in the fetch decode, so there it resolves from the session
-// store instead — the newest child of this session whose title is the task
-// description, which is the title the server gives every spawned sub-agent
-// ("<description> (@<agent> subagent)").
+// The child session this chip opens. Parts carry it in state.metadata:
+// v1's task tool writes `sessionId` there, v2's subagent tool `sessionID`
+// (from success, and from spawn once the progress frame lands). Without
+// it (mid-stream, older rows) the fallback resolves the newest child
+// whose title starts with the task description — the title the server
+// gives every spawned sub-agent. That prefix match is a guess: it must
+// never decide an old part's liveness, or settled chips resurrect
+// against the newest same-labeled child.
 export function childSessionId(part: ToolPart, description: string): string | undefined {
+  const meta = part.state?.metadata as
+    | { sessionId?: unknown; sessionID?: unknown }
+    | undefined;
   const live =
-    typeof part.state?.metadata?.sessionId === "string"
-      ? (part.state.metadata.sessionId as string)
-      : undefined;
+    typeof meta?.sessionId === "string"
+      ? (meta.sessionId as string)
+      : typeof meta?.sessionID === "string"
+        ? (meta.sessionID as string)
+        : undefined;
   if (live) return live;
   const parent = route.value.view === "session" ? route.value.id : undefined;
   if (!parent) return undefined;

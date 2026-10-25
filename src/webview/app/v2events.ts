@@ -266,8 +266,27 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
             }),
           ]
         : [];
-    case "session.tool.progress":
-      return [];
+    case "session.tool.progress": {
+      // The subagent tool reports its child here at spawn — metadata
+      // {sessionID, status:"running"} — the only early exact part→child
+      // binding (success repeats it minutes later). Forward just that
+      // shape; other tools' progress frames stay dropped.
+      const m = d.metadata as
+        | { sessionID?: unknown; sessionId?: unknown }
+        | undefined;
+      return typeof m?.sessionID === "string" || typeof m?.sessionId === "string"
+        ? d.assistantMessageID && d.id
+          ? [
+              synth("session.next.tool.progress", {
+                sessionID: sid,
+                assistantMessageID: d.assistantMessageID,
+                callID: d.id,
+                metadata: m,
+              }),
+            ]
+          : []
+        : [];
+    }
     case "session.tool.called":
       return d.assistantMessageID && d.id
         ? [
@@ -307,6 +326,10 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
               assistantMessageID: d.assistantMessageID,
               callID: d.id,
               error: d.error,
+              // A failed subagent call keeps its child binding here (the
+              // server merges the spawn-time report into the failure) —
+              // without it a cancelled sub-agent's chip loses its target.
+              ...(d.metadata !== undefined ? { metadata: d.metadata } : {}),
               timestamp: at,
             }),
           ]

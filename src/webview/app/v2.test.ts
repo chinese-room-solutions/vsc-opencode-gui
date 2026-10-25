@@ -2123,6 +2123,34 @@ describe("v2 SSE → pipeline translation", () => {
     );
   });
 
+  it("forwards the subagent spawn report from tool.progress, drops other progress", () => {
+    const [p] = translateV2Event(
+      ev("session.tool.progress", {
+        sessionID: "s",
+        assistantMessageID: "msg_a",
+        id: "call_1",
+        metadata: { sessionID: "ses_child", status: "running" },
+      }),
+    );
+    assert.equal(p.type, "session.next.tool.progress");
+    assert.equal((p.data as { callID?: string }).callID, "call_1");
+    assert.deepEqual((p.data as { metadata?: unknown }).metadata, {
+      sessionID: "ses_child",
+      status: "running",
+    });
+    assert.deepEqual(
+      translateV2Event(
+        ev("session.tool.progress", {
+          sessionID: "s",
+          assistantMessageID: "msg_a",
+          id: "call_2",
+          metadata: { percent: 50 },
+        }),
+      ),
+      [],
+    );
+  });
+
   it("translates tool input streaming frames for live previews", () => {
     const [d] = translateV2Event(
       ev("session.tool.input.delta", {
@@ -2367,6 +2395,21 @@ describe("v2 SSE → pipeline translation", () => {
     assert.deepEqual(
       (ok[0].data as { metadata?: unknown }).metadata,
       { sessionId: "child" },
+    );
+    // A failed call keeps its metadata too — a cancelled subagent's child
+    // binding rides the failure frame.
+    const bad = translateV2Event(
+      ev("session.tool.failed", {
+        sessionID: "s",
+        assistantMessageID: "am",
+        id: "cal",
+        error: { type: "aborted", message: "Tool execution interrupted" },
+        metadata: { sessionID: "child", status: "running" },
+      }),
+    );
+    assert.deepEqual(
+      (bad[0].data as { metadata?: unknown }).metadata,
+      { sessionID: "child", status: "running" },
     );
     // revert markers across clients
     const staged = translateV2Event(

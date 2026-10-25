@@ -2675,6 +2675,24 @@ function applyEvent(event: ServerEvent): void {
         }));
       }
       break;
+    case "session.next.tool.progress":
+      // v2's subagent tool reports its child session at spawn; the chip
+      // and the roster read the binding off state.metadata.
+      if (
+        data.assistantMessageID &&
+        data.callID &&
+        typeof data.metadata === "object" &&
+        data.metadata !== null
+      ) {
+        patchToolState(sid, data.assistantMessageID, data.callID, (s) => ({
+          ...s,
+          metadata: {
+            ...s.metadata,
+            ...(data.metadata as Record<string, unknown>),
+          },
+        }));
+      }
+      break;
     case "session.next.tool.success":
       if (data.assistantMessageID && data.callID) {
         patchToolState(sid, data.assistantMessageID, data.callID, (s) => ({
@@ -2712,6 +2730,11 @@ function applyEvent(event: ServerEvent): void {
           ...s,
           status: "error",
           error: stringifyError(data.error),
+          // A failed subagent call keeps its child binding (a cancelled
+          // chip must still open its child).
+          ...(data.metadata && typeof data.metadata === "object"
+            ? { metadata: data.metadata as Record<string, unknown> }
+            : {}),
           time: { ...s.time, end: data.timestamp },
         }));
       }
