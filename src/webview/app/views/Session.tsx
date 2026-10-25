@@ -9,6 +9,7 @@ import {
   StatusStats,
   TurnFooter,
 } from "../components/MessageView";
+import { SubagentMenu } from "../components/SubagentMenu";
 import { StopIcon, WordmarkIcon, OcResetIcon } from "../icons";
 import { isText, isTool } from "../api";
 import { modelWaitAnchor } from "../components/ToolCard";
@@ -587,6 +588,7 @@ export function Session(props: { sessionId?: string; parent?: string }) {
               <span class="crumb-here">{sessionTitle(session, id)}</span>
             </nav>
           )}
+          <SubagentMenu sessionId={id} liveId={liveId} />
           <ContextRing sessionId={id} />
         </div>
       )}

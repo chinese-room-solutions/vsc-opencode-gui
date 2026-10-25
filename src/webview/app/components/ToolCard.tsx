@@ -28,7 +28,7 @@ import { CheckIcon, CopyIcon, PixelMark, PixelSpinner, StopIcon } from "../icons
 // result) — folded by default like the thinking block, so the transcript
 // stays one line per tool until the reader asks for the details.
 
-function inputStr(part: ToolPart, ...keys: string[]): string | undefined {
+export function inputStr(part: ToolPart, ...keys: string[]): string | undefined {
   const input = part.state?.input;
   for (const k of keys) {
     const v = input?.[k];
@@ -85,7 +85,7 @@ function diffText(part: ToolPart): string {
 // store instead — the newest child of this session whose title is the task
 // description, which is the title the server gives every spawned sub-agent
 // ("<description> (@<agent> subagent)").
-function childSessionId(part: ToolPart, description: string): string | undefined {
+export function childSessionId(part: ToolPart, description: string): string | undefined {
   const live =
     typeof part.state?.metadata?.sessionId === "string"
       ? (part.state.metadata.sessionId as string)

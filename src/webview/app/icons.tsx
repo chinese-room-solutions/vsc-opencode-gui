@@ -18,6 +18,23 @@ export function GridIcon() {
   );
 }
 
+// The head's sub-agent roster: one large square, one small — a session and
+// the child it spawned.
+export function AgentsIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 14 14"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <rect x="1.5" y="1.5" width="7.5" height="7.5" rx="1.5" />
+      <rect x="9.4" y="9.4" width="3.1" height="3.1" rx="1" />
+    </svg>
+  );
+}
+
 export function NewSessionIcon() {
   return (
     <svg

@@ -3011,6 +3011,72 @@ a.tool-pill {
   text-decoration: none;
 }
 
+/* --- Sub-agent roster (head, left of the context ring) --- */
+
+/* The roster button appears only while a sub-agent of this session runs;
+   the count is the always-visible "which are in progress". */
+.sam {
+  position: relative;
+  display: flex;
+  flex: none;
+}
+
+.sam-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 7px;
+  background: none;
+  border: none;
+  border-radius: 14px;
+  color: var(--oc-text-2);
+  cursor: pointer;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sam-btn:hover,
+.sam.open .sam-btn {
+  background: var(--vscode-list-hoverBackground);
+  color: var(--oc-text);
+}
+
+/* A child waiting on an ask: a yellow pip on the button — the ask docks
+   only in the child's view, this is the parent's cue. Literal yellow:
+   some themes map editorWarning.foreground to green. */
+.sam-ask {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ffcc00;
+}
+
+/* The unfolded list: one transcript chip per row, opening downward from
+   the button (the pickers' upward anchoring is a composer thing). */
+.sam-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: max-content;
+  min-width: 260px;
+  max-width: 380px;
+  padding: 4px 8px 8px;
+}
+
+.sam-title {
+  padding: 6px 6px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--oc-text-2);
+}
+
+/* The chip sheds its transcript margins inside the menu. */
+.sam-row .subagent-chip {
+  margin: 6px 0 0;
+  max-width: 100%;
+}
+
 /* Sub-agent chip (the task tool): the spawned session is the detail view,
    so the tool renders as a link-shaped pill — status dot, agent name, task
    description — and falls through to that session on click. Surface stays

@@ -532,11 +532,12 @@ export function fmtDur(secs: number): string {
   return out;
 }
 
-// The one popover/menu currently open — composer pickers and the ring's
-// context panel ("ctx"). Mutually exclusive:
+// The one popover/menu currently open — composer pickers, the ring's
+// context panel ("ctx"), and the head's sub-agent roster ("agents").
+// Mutually exclusive:
 // opening one dismisses the others instead of stacking panels. The panel is
 // also toggled from the host command.
-export type Popover = "model" | "variant" | "agent" | "ctx" | "tile";
+export type Popover = "model" | "variant" | "agent" | "ctx" | "tile" | "agents";
 export const popover = signal<Popover | undefined>(undefined);
 
 export function setPopover(p: Popover | undefined): void {

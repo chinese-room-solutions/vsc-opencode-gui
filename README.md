@@ -24,7 +24,9 @@ HTTP/SSE.
   screen. Projects rename in place, and sessions from other folders open
   deep-linked.
 - **Sub-agents are sessions** - open one from its task chip, steer it, stop
-  it, and the parent's turn collects the result.
+  it, and the parent's turn collects the result. While any run, a roster
+  button left of the context ring counts them; opening it lists the live
+  chips, so one buried under follow-up turns stays reachable.
 - **Notifications, visual and sound** - tabs pulse yellow when a session
   waits on you and green when a turn finishes. Chimes cover ready,
   permission, and question events.
