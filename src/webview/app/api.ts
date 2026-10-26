@@ -213,11 +213,16 @@ const SESSION_PAGE = 50;
 // GET /api/session — newest first, paginated ({data, cursor} envelope).
 // Times coerced to ms and the model ref normalized (see toMs/v2ModelRef):
 // 2.0.x and newer builds disagree on both shapes.
+// `search` matches titles in the server's storage (every dialect's list
+// route takes it), so a query answers from the WHOLE history, not the
+// pages the client has loaded.
 export async function fetchSessions(
   cursor?: string,
+  opts: { search?: string } = {},
 ): Promise<SessionPage | undefined> {
   const params = new URLSearchParams({ limit: String(SESSION_PAGE) });
   if (cursor) params.set("cursor", cursor);
+  if (opts.search) params.set("search", opts.search);
   const body = await getJson<{
     data?: (Session & {
       time: { created: unknown; updated: unknown };

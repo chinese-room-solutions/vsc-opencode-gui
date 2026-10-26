@@ -79,9 +79,11 @@ import {
   revertSession,
   runSlashCommand,
   failedMsgLoads,
+  searchAllSessions,
   sendError,
   sendPrompt,
   serverDefaultModel,
+  sessionsSearching,
   sessionsStalled,
   sessionStatus,
   sessionTile,
@@ -712,6 +714,58 @@ describe("streaming deltas re-busy a mid-turn idle", () => {
       },
     });
     assert.equal(sessionStatus.value[sid]?.type, "busy");
+  });
+});
+
+describe("server-side session search (whole history)", () => {
+  it("sends the query to the list route and merges matches into the pool", async () => {
+    sessions.value = [sessRow("new1", { time: { created: T0, updated: T0 + 50 } })];
+    onApi((call) => {
+      if (
+        call.method === "GET" &&
+        call.path.includes("/api/session?") &&
+        call.path.includes("search=needle")
+      ) {
+        return {
+          data: [
+            // Older than everything loaded — proves the merge, not the
+            // first page, produced the row.
+            sessRow("old1", { time: { created: T0 - 100, updated: T0 - 100 } }),
+            // Already in the pool by id: must not duplicate.
+            sessRow("new1", { time: { created: T0, updated: T0 + 50 } }),
+          ],
+          cursor: {},
+        };
+      }
+      return undefined;
+    });
+    await searchAllSessions("  needle ");
+    assert.deepEqual(
+      sessions.value.map((s) => s.id),
+      ["new1", "old1"],
+    );
+    assert.equal(sessionsSearching.value, false);
+    assert.equal(
+      apiLog.filter((c) => c.path.includes("search=needle")).length,
+      1,
+    );
+    sessions.value = [];
+  });
+
+  it("refetches nothing for an empty query or a repeat of the last one", async () => {
+    onApi((call) => {
+      if (call.method === "GET" && call.path.includes("search=once"))
+        return { data: [], cursor: {} };
+      return undefined;
+    });
+    await searchAllSessions("");
+    assert.equal(apiLog.filter((c) => c.path.includes("search=")).length, 0);
+    await searchAllSessions("once");
+    await searchAllSessions("once");
+    assert.equal(
+      apiLog.filter((c) => c.path.includes("search=once")).length,
+      1,
+    );
   });
 });
 

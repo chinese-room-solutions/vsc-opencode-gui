@@ -36,8 +36,10 @@ import {
   purgeState,
   renameProject,
   renameSession,
+  searchAllSessions,
   sessionTile,
   sessionTitle,
+  sessionsSearching,
   sendError,
   sessions,
   sessionsNext,
@@ -271,11 +273,27 @@ export function Home() {
   // is computed in the render and passed as the dep — rows.length read
   // live inside the effect raced the boot, where the mount render's
   // stale closure (0 rows) met the first page's fresh cursor and pulled
-  // page 2 eagerly.
-  const walkOlder = rows.length === 0 && sessionsNext.value !== undefined;
+  // page 2 eagerly. An active query never walks: the server-side search
+  // below has already answered for the whole history, and paging every
+  // unloaded row to conclude "no match" is all cost.
+  const walkOlder = rows.length === 0 && sessionsNext.value !== undefined && !q;
   useEffect(() => {
     if (walkOlder) void loadMoreSessions();
   }, [walkOlder]);
+
+  // Server-side search: typing hands the query to the server, which
+  // matches titles across the whole history — the loaded pool alone
+  // can't see past the newest pages. Debounced: one request per pause
+  // in typing, not one per keystroke.
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    const t = window.setTimeout(
+      () => void searchAllSessions(trimmed),
+      250,
+    );
+    return () => clearTimeout(t);
+  }, [query]);
 
   return (
     <div
@@ -341,13 +359,15 @@ export function Home() {
             <div class="empty">Loading sessions…</div>
           ) : groups.length === 0 ? (
             <div class="empty">
-              {sessionsNext.value
-                ? "Loading older sessions…"
-                : q
-                  ? `No sessions match “${query.trim()}”.`
-                  : filter
-                    ? `No sessions in ${projectDisplayName(filter)} yet.`
-                    : "No sessions yet. Start one above — it shows up under this folder."}
+              {sessionsSearching.value
+                ? "Searching…"
+                : sessionsNext.value && !q
+                  ? "Loading older sessions…"
+                  : q
+                    ? `No sessions match “${query.trim()}”.`
+                    : filter
+                      ? `No sessions in ${projectDisplayName(filter)} yet.`
+                      : "No sessions yet. Start one above — it shows up under this folder."}
             </div>
           ) : (
             groups.map((g, i) => (

@@ -1057,6 +1057,35 @@ export async function loadMoreSessions(): Promise<void> {
   }
 }
 
+// Server-side title search: the list route's `search` param matches
+// titles in the server's storage, so the whole history answers, not
+// just the pages loaded so far. Rows merge into the same pool "Load
+// older sessions" fills; Home's client-side filter (title or project
+// name) still decides what shows. The query is remembered — re-asking
+// the same one refetches nothing.
+let searchedFor: string | undefined;
+let searchesInFlight = 0;
+export const sessionsSearching = signal(false);
+export async function searchAllSessions(query: string): Promise<void> {
+  const q = query.trim();
+  if (!q || q === searchedFor) return;
+  searchedFor = q;
+  searchesInFlight += 1;
+  sessionsSearching.value = true;
+  try {
+    const page = await fetchSessions(undefined, { search: q });
+    if (!page) return;
+    const seen = new Set(sessions.value.map((s) => s.id));
+    sessions.value = [
+      ...sessions.value,
+      ...page.sessions.filter((s) => !seen.has(s.id)),
+    ].sort((a, b) => b.time.updated - a.time.updated);
+  } finally {
+    searchesInFlight -= 1;
+    if (searchesInFlight === 0) sessionsSearching.value = false;
+  }
+}
+
 // --- Home: rename, delete, project purge/tombstones ---
 
 export async function renameSession(id: string, title: string): Promise<boolean> {
