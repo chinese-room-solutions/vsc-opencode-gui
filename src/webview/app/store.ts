@@ -1530,8 +1530,22 @@ function mutateMessages(
   messagesBySession.value = map;
 }
 
+// A waiting echo (a queued prompt's "pending:", a queued command's
+// "cmd:") is the newest submit — it pins to the transcript tail. A
+// durable row landing while it waits belongs to an EARLIER submit
+// firing late (the server stamps it at run time), so created-time
+// order alone would flip the two: the waiting message jumped above the
+// one sent ahead of it. A pending echo retires when its own row lands;
+// a fired command's echo is re-stamped to its fire time (the flush),
+// so unpinning keeps it under everything that ran before.
+const waitingEcho = (m: ChatMessage): boolean =>
+  m.info.id.startsWith("pending:") ||
+  (m.info.id.startsWith("cmd:") &&
+    queuedTurns.value.some((q) => q.echoCid === m.info.id));
+
 function byCreated(a: ChatMessage, b: ChatMessage): number {
-  return a.info.time.created - b.info.time.created;
+  const w = Number(waitingEcho(a)) - Number(waitingEcho(b));
+  return w !== 0 ? w : a.info.time.created - b.info.time.created;
 }
 
 function upsertMessage(sessionID: string, info: Message): void {
@@ -2471,7 +2485,18 @@ function applyEvent(event: ServerEvent): void {
     case "session.next.prompt.admitted":
     case "session.next.prompted":
       if (data.messageID) {
-        clearPending(sid);
+        // The admitted row supersedes exactly ONE echo — the oldest
+        // still outstanding from this client, and only while a POST of
+        // ours hasn't landed its row. The old wipe-everything took
+        // every held queue entry's bubble with it: a queued message
+        // vanished until its own turn fired, and an admission from
+        // another window retired ours.
+        if (postedRows.has(sid)) {
+          retirePending(sid);
+          const left = (postedRows.get(sid) ?? 1) - 1;
+          if (left > 0) postedRows.set(sid, left);
+          else postedRows.delete(sid);
+        }
         upsertMessage(sid, {
           id: data.messageID,
           role: "user",
@@ -3700,6 +3725,9 @@ export async function refreshMessages(id: string): Promise<void> {
       // map: before one, absence means unknown, not idle.
       if (statusesAdopted) settleDeadTools(id);
     }
+    // Held queue entries regain their bubbles if this pull came without
+    // them (a reopened tab's fresh fetch).
+    healQueuedEchoes(id);
   } finally {
     loadingMessages.delete(id);
   }
@@ -3815,6 +3843,31 @@ function dropPending(id: string): void {
   }
 }
 
+// A held queue entry's display IS its echo row — it must be on screen
+// for the whole wait. Any path that dropped it (a wiped admission, a
+// tab reopened mid-queue whose refetch came without the echo) heals
+// here: one echo per entry, matched by text count so duplicate queues
+// stay one-to-one.
+function healQueuedEchoes(id: string): void {
+  const entries = queuedTurns.value.filter(
+    (q) => q.id === id && q.kind === "prompt",
+  );
+  if (!entries.length) return;
+  const echoes = (messagesBySession.value.get(id) ?? [])
+    .filter((m) => m.info.id.startsWith("pending:"))
+    .map((m) => (m.parts.find(isText)?.text ?? "").trim());
+  for (const e of entries) {
+    const t = e.text.trim();
+    const i = echoes.indexOf(t);
+    if (i >= 0) {
+      echoes.splice(i, 1);
+      continue;
+    }
+    appendPending(id, e.text, e.files);
+    echoes.push(t);
+  }
+}
+
 // A command line's durable echo. The server persists no user row for a
 // command run, so this local row IS the transcript's record: never swept
 // by the pending-retire paths, spliced back in by refreshMessages, and
@@ -3908,6 +3961,30 @@ function removeCommandEcho(id: string, cid: string): void {
     const i = l.findIndex((m) => m.info.id === cid);
     return i < 0 ? l : [...l.slice(0, i), ...l.slice(i + 1)];
   });
+}
+
+// Re-stamp a durable command echo from its queue time to its fire time.
+// While queued it pinned to the transcript tail; fired, it unpins, and
+// its typed time would slot it ABOVE rows that ran after it was queued.
+function restampCommandEcho(id: string, cid: string): void {
+  const created = Date.now();
+  const all = storedCommands(id);
+  if (all.some((c) => c.cid === cid)) {
+    try {
+      localStorage.setItem(
+        cmdStoreKey(id),
+        JSON.stringify(
+          all.map((c) => (c.cid === cid ? { ...c, created } : c)),
+        ),
+      );
+    } catch {
+      // Quota or privacy mode — the in-memory restamp still applies.
+    }
+  }
+  patchMessage(id, cid, (info) => ({
+    ...info,
+    time: { ...info.time, created },
+  }));
 }
 
 function titleFrom(text: string): string {
@@ -4403,8 +4480,13 @@ effect(() => {
     )
   )
     appendPending(hit.id, hit.text, hit.files);
-  if (hit.kind === "command") void runSlashCommand(hit.id, hit.text, true, hit.echoCid);
-  else void postPrompt(hit.id, hit.text, hit.files ?? []);
+  if (hit.kind === "command") {
+    // Unpinning at fire time: the echo's typed time would jump it
+    // above rows landed since it was queued — the fire time is its
+    // place in the conversation.
+    if (hit.echoCid) restampCommandEcho(hit.id, hit.echoCid);
+    void runSlashCommand(hit.id, hit.text, true, hit.echoCid);
+  } else void postPrompt(hit.id, hit.text, hit.files ?? []);
 });
 
 // Permission docks. Request ids this client answered; a session-open fetch

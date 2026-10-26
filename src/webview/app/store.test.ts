@@ -895,9 +895,124 @@ describe("queued echo and command lines survive refreshes (50cba2d)", () => {
     );
     await refreshMessages(sid);
     const ids = listOf(sid).map((m) => m.info.id);
-    assert.deepEqual(ids, ["u1", "pending:1", "cmd:7"]);
+    // The pending echo pins to the tail (the newest submit); the stored
+    // command echo, queue long gone, keeps its created-time place.
+    assert.deepEqual(ids, ["u1", "cmd:7", "pending:1"]);
     const echo = findRow(sid, "pending:1");
     assert.equal((echo?.parts[0] as { text?: string }).text, "queued echo");
+  });
+});
+
+describe("queued echoes stay visible and ordered", () => {
+  it("an admission retires only its own echo, never a later one's", async () => {
+    const sid = "qe1";
+    setBusy(sid);
+    // Both steer into the server's inbox (nothing held locally), each
+    // with its echo up and its POST outstanding.
+    await sendPrompt(sid, "first");
+    await sendPrompt(sid, "second");
+    // The server admits "first"; the event beats the POST replies.
+    await sseFlush("session.next.prompt.admitted", {
+      sessionID: sid,
+      messageID: "u_first",
+      timestamp: T0,
+      prompt: { text: "first" },
+    });
+    assert.ok(findRow(sid, "u_first"));
+    // "second" hasn't run yet — its bubble must still be up.
+    const echo = listOf(sid).find((m) => m.info.id.startsWith("pending:"));
+    assert.equal(
+      (echo?.parts.find((p) => p.type === "text") as { text?: string })?.text,
+      "second",
+    );
+  });
+
+  it("an admission this client never posted retires nothing", async () => {
+    const sid = "qe3";
+    open(sid, [
+      {
+        info: { id: "pending:1", role: "user", time: { created: T0 } },
+        parts: [textPart("pending:1:text", "pending:1", sid, "held")],
+      },
+    ]);
+    await sseFlush("session.next.prompt.admitted", {
+      sessionID: sid,
+      messageID: "ext1",
+      timestamp: T0,
+      prompt: { text: "another window's prompt" },
+    });
+    assert.ok(findRow(sid, "ext1"));
+    assert.ok(
+      findRow(sid, "pending:1"),
+      "the held echo survives a foreign admission",
+    );
+  });
+
+  it("a waiting echo stays below a row that lands while it waits", async () => {
+    const sid = "qe2";
+    setNow(T0);
+    setBusy(sid);
+    await sendPrompt(sid, "first");
+    await sendPrompt(sid, "second");
+    // "first" runs at T0+50 — later than "second" was typed. Its row
+    // must land ABOVE the waiting echo (the old swap put it below).
+    await sseFlush("session.next.prompt.admitted", {
+      sessionID: sid,
+      messageID: "u1",
+      timestamp: T0 + 50,
+      prompt: { text: "first" },
+    });
+    const ids = listOf(sid).map((m) => m.info.id);
+    assert.equal(ids.at(-1)?.startsWith("pending:"), true);
+    assert.equal(ids.at(-2), "u1");
+  });
+
+  it("a waiting command echo stays below a row typed before it", async () => {
+    const sid = "qe5";
+    commands.value = [{ name: "foo" }];
+    setNow(T0);
+    setBusy(sid);
+    await sendPrompt(sid, "a prompt"); // steers; runs after the busy turn
+    queueCommand(sid, "/foo"); // queued behind, waiting
+    await sseFlush("session.next.prompt.admitted", {
+      sessionID: sid,
+      messageID: "u1",
+      timestamp: T0 + 100,
+      prompt: { text: "a prompt" },
+    });
+    const waiting = listOf(sid).map((m) => m.info.id);
+    assert.ok(
+      waiting.indexOf("u1") < waiting.findIndex((i) => i.startsWith("cmd:")),
+      `the waiting echo must sit below u1: ${waiting.join(", ")}`,
+    );
+    // The command fires at T0+200 — the fired echo stays below u1.
+    setNow(T0 + 200);
+    await sseFlush("session.idle", { sessionID: sid });
+    const ids = listOf(sid).map((m) => m.info.id);
+    assert.ok(
+      ids.indexOf("u1") < ids.findIndex((i) => i.startsWith("cmd:")),
+      `the fired echo must sit below u1: ${ids.join(", ")}`,
+    );
+  });
+
+  it("a reopened tab regains its held queue entry's echo", async () => {
+    const sid = "qe4";
+    commands.value = [{ name: "foo" }];
+    sessions.value = [sessRow(sid)];
+    setBusy(sid);
+    queueCommand(sid, "/foo");
+    await sendPrompt(sid, "held");
+    assert.equal(queuedTurns.value.length, 2);
+    // The tab closed mid-queue: the cached transcript (echo included)
+    // died with it; the reopen refetches without it.
+    closeSessionTab(sid);
+    open(sid, []);
+    onApi(messageMock(sid, { data: [], cursor: {} }));
+    await refreshMessages(sid);
+    assert.equal(
+      listOf(sid).filter((m) => m.info.id.startsWith("pending:")).length,
+      1,
+    );
   });
 });
 
@@ -1535,19 +1650,23 @@ describe("turn projection from stream events", () => {
 
   it("prompt.admitted clears the echo and writes the prompt row", async () => {
     const sid = "tp2";
-    open(sid, [
-      {
-        info: { id: "pending:1", role: "user", time: { created: T0 } },
-        parts: [textPart("pending:1:text", "pending:1", sid, "x")],
-      },
-    ]);
+    // Sent while idle; the reply carries no row (older v2 shapes), so
+    // the admission event is where the echo swaps for the real row.
+    await sendPrompt(sid, "the prompt");
+    assert.ok(
+      listOf(sid).some((m) => m.info.id.startsWith("pending:")),
+      "the optimistic echo is up",
+    );
     await sseFlush("session.next.prompt.admitted", {
       sessionID: sid,
       messageID: "u1",
       timestamp: T0,
       prompt: { text: "the prompt" },
     });
-    assert.equal(findRow(sid, "pending:1"), undefined);
+    assert.equal(
+      listOf(sid).some((m) => m.info.id.startsWith("pending:")),
+      false,
+    );
     assert.equal(
       (findPart(sid, "u1:text") as { text?: string }).text,
       "the prompt",
