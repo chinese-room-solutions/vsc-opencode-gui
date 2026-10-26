@@ -74,6 +74,18 @@ interface V2Data {
   // session.retry.scheduled
   attempt?: number;
   at?: number;
+  // session.inbox.enqueued: the server's injection envelope (the peers
+  // plugin's POST /api/session/{id}/synthetic lands here) — item.type
+  // selects the note kind, payload carries the note, inboxID the row id.
+  inboxID?: string;
+  item?: {
+    type?: string;
+    payload?: {
+      text?: string;
+      description?: string;
+      metadata?: Record<string, unknown>;
+    };
+  };
   // session.synthetic: the injector's metadata (peer messages tag
   // metadata.peerMessage — the peer card's provenance).
   metadata?: Record<string, unknown>;
@@ -475,18 +487,31 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
     // background sub-agent (metadata.source "subagent") tags
     // metadata.subagentNotice the same way. The durable fetch later serves
     // both as the v1-shaped user row (same id).
-    case "session.synthetic": {
-      const rowID = v2RowID(undefined, event.id);
-      const peer = d.metadata?.peerMessage;
+    //
+    // Two wire shapes say the same thing: a bare session.synthetic, and —
+    // what the 2.1 server actually publishes for an injection — the
+    // session.inbox.enqueued envelope, whose inboxID is the durable row id
+    // (preferring it keeps the live row on the id a refetch serves).
+    case "session.synthetic":
+    case "session.inbox.enqueued": {
+      const item = event.type === "session.inbox.enqueued" ? d.item : undefined;
+      if (event.type === "session.inbox.enqueued" && item?.type !== "synthetic")
+        return [];
+      const src = (item?.payload ?? d) as V2Data;
+      const rowID =
+        (item && typeof d.inboxID === "string" && d.inboxID
+          ? d.inboxID
+          : undefined) ?? v2RowID(undefined, event.id);
+      const peer = src.metadata?.peerMessage;
       const sub =
-        typeof d.text === "string"
+        typeof src.text === "string"
           ? subagentNoticeMeta(
-              d.metadata,
-              typeof d.description === "string" ? d.description : undefined,
-              d.text,
+              src.metadata,
+              typeof src.description === "string" ? src.description : undefined,
+              src.text,
             )
           : undefined;
-      return sid && rowID && typeof d.text === "string"
+      return sid && rowID && typeof src.text === "string"
         ? [
             synth("message.updated", {
               sessionID: sid,
@@ -503,7 +528,7 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
                 messageID: rowID,
                 sessionID: sid,
                 type: "text",
-                text: d.text,
+                text: src.text,
                 ...(peer ? { synthetic: true, metadata: { peerMessage: peer } } : {}),
                 ...(sub
                   ? { synthetic: true, metadata: { subagentNotice: sub } }

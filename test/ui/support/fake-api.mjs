@@ -843,6 +843,32 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, { calls: backgroundCalls });
       return;
     }
+    // An inbound peer note on the real 2.1 wire: the injection lands as a
+    // session.inbox.enqueued envelope (inboxID = the durable row id, the
+    // note in item.payload) — the shape captured live from a real serve.
+    if (method === "POST" && path === "/__control/peer-note") {
+      const body = await readBody(req);
+      emitV2("session.inbox.enqueued", {
+        sessionID: SESSION_ID,
+        inboxID: body.inboxID ?? "msg_peerlive1",
+        item: {
+          type: "synthetic",
+          payload: {
+            text: body.text ?? "Ping from the peer rig.",
+            metadata: {
+              peerMessage: {
+                version: 2,
+                messageId: body.messageId ?? "pm-rig-1",
+                fromEndpointId: body.from ?? "ses_fakesender0000000000000",
+                toSessionId: SESSION_ID,
+              },
+            },
+          },
+        },
+      });
+      json(res, 200, { ok: true });
+      return;
+    }
     if (method === "GET" && path === "/__control/shell") {
       json(res, 200, { deletes: shellDeletes });
       return;

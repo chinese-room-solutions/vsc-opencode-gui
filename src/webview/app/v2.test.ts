@@ -1920,6 +1920,60 @@ describe("v2 SSE → pipeline translation", () => {
         },
       },
     );
+    // The 2.1 server publishes injections as an inbox envelope: item.type
+    // "synthetic", the note in payload, the durable row id in inboxID. The
+    // live row must land on inboxID so a refetch merges instead of
+    // duplicating (observed on the wire: session.inbox.enqueued carries
+    // {sessionID, inboxID: "msg_…", item: {type: "synthetic", payload}}).
+    const w = translateV2Event(
+      ev("session.inbox.enqueued", {
+        sessionID: "s",
+        inboxID: "msg_wire1",
+        item: {
+          type: "synthetic",
+          payload: {
+            text: "Ping from a peer",
+            metadata: {
+              peerMessage: { version: 2, messageId: "m1", fromEndpointId: "ses_a" },
+            },
+          },
+        },
+      }),
+    );
+    assert.equal(w.length, 2);
+    assert.equal(
+      (w[0].data as { info?: { id?: string; role?: string } }).info?.id,
+      "msg_wire1",
+    );
+    assert.equal(
+      (w[0].data as { info?: { role?: string } }).info?.role,
+      "assistant",
+    );
+    assert.deepEqual(
+      (w[1].data as { part?: { id?: string; synthetic?: boolean; metadata?: unknown } }).part,
+      {
+        id: "msg_wire1:text",
+        messageID: "msg_wire1",
+        sessionID: "s",
+        type: "text",
+        text: "Ping from a peer",
+        synthetic: true,
+        metadata: {
+          peerMessage: { version: 2, messageId: "m1", fromEndpointId: "ses_a" },
+        },
+      },
+    );
+    // Non-synthetic inbox items are not transcript notes — leave them alone.
+    assert.deepEqual(
+      translateV2Event(
+        ev("session.inbox.enqueued", {
+          sessionID: "s",
+          inboxID: "msg_other",
+          item: { type: "reminder", payload: { text: "n/a" } },
+        }),
+      ),
+      [],
+    );
     assert.deepEqual(
       translateV2Event(
         ev("session.moved", {
@@ -2439,9 +2493,10 @@ describe("v2 SSE → pipeline translation", () => {
   it("frames without a sessionID or coordinates translate to nothing", () => {
     assert.deepEqual(translateV2Event(ev("session.step.started", {})), []);
     assert.deepEqual(translateV2Event(ev("session.text.delta", { delta: "x" })), []);
+    // An inbox envelope without a synthetic item carries nothing renderable.
     assert.deepEqual(
       translateV2Event(ev("session.inbox.enqueued", { sessionID: "s" })),
-      [ev("session.inbox.enqueued", { sessionID: "s" })],
+      [],
     );
   });
 
