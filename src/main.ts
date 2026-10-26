@@ -52,7 +52,7 @@ export function activate(context: vscode.ExtensionContext) {
   // Shared chat state, fanned out to the sidebar and the editor tab
   const hub = new ChatHub();
 
-  // opencode-plugin-peers registry: names inbound peer-card senders.
+  // opencode-peers registry: names inbound peer-card senders.
   // A 10 s poll rides the plugin's own heartbeat cadence, so peer and
   // session renames reach open cards without a watcher.
   const peerRegistry = new PeerRegistry((peers) => hub.setPeers(peers));

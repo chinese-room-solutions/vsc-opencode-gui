@@ -9,8 +9,10 @@ export interface PeerInfo {
   title: string;
 }
 
-// Watches the opencode-plugin-peers registry so inbound peer cards can name
-// their sender: the injected message metadata carries only the endpoint id.
+// Watches the opencode-peers registry so inbound peer cards can name their
+// sender: the injected message metadata carries only the endpoint id. The
+// plugin renamed its data dir (opencode-plugin-peers → opencode-peers), so
+// both are polled — either plugin version can hold live entries.
 // The plugin rewrites each entry on a 10 s heartbeat (atomic renames), so a
 // poll of the same cadence picks up peer and session renames without
 // watching the churn.
@@ -35,45 +37,46 @@ export class PeerRegistry implements vscode.Disposable {
   }
 
   private async _poll(): Promise<void> {
-    const dir = peersDir();
-    let files: string[];
-    try {
-      files = await fs.promises.readdir(dir);
-    } catch {
-      return; // plugin absent — nothing to name cards with
-    }
     const map = new Map<string, PeerInfo>();
-    for (const file of files) {
-      if (!file.endsWith(".json")) continue;
+    for (const dir of peersDirs()) {
+      let files: string[];
       try {
-        const raw = JSON.parse(
-          await fs.promises.readFile(path.join(dir, file), "utf8"),
-        ) as {
-          endpointId?: unknown;
-          instanceId?: unknown;
-          name?: unknown;
-          title?: unknown;
-          activeSessionTitle?: unknown;
-        };
-        // v2 entries carry endpointId; v1 named it instanceId. Both spell
-        // the session title twice (title, activeSessionTitle alias).
-        const id =
-          typeof raw.endpointId === "string"
-            ? raw.endpointId
-            : typeof raw.instanceId === "string"
-              ? raw.instanceId
-              : undefined;
-        const name = typeof raw.name === "string" ? raw.name : "";
-        const title =
-          typeof raw.activeSessionTitle === "string"
-            ? raw.activeSessionTitle
-            : typeof raw.title === "string"
-              ? raw.title
-              : "";
-        if (!id || !name) continue;
-        map.set(id, { id, name, title: title.trim() });
+        files = await fs.promises.readdir(dir);
       } catch {
-        // mid-rewrite or unreadable — the next tick retries
+        continue; // that registry absent — try the other name
+      }
+      for (const file of files) {
+        if (!file.endsWith(".json")) continue;
+        try {
+          const raw = JSON.parse(
+            await fs.promises.readFile(path.join(dir, file), "utf8"),
+          ) as {
+            endpointId?: unknown;
+            instanceId?: unknown;
+            name?: unknown;
+            title?: unknown;
+            activeSessionTitle?: unknown;
+          };
+          // v2 entries carry endpointId; v1 named it instanceId. Both spell
+          // the session title twice (title, activeSessionTitle alias).
+          const id =
+            typeof raw.endpointId === "string"
+              ? raw.endpointId
+              : typeof raw.instanceId === "string"
+                ? raw.instanceId
+                : undefined;
+          const name = typeof raw.name === "string" ? raw.name : "";
+          const title =
+            typeof raw.activeSessionTitle === "string"
+              ? raw.activeSessionTitle
+              : typeof raw.title === "string"
+                ? raw.title
+                : "";
+          if (!id || !name) continue;
+          map.set(id, { id, name, title: title.trim() });
+        } catch {
+          // mid-rewrite or unreadable — the next tick retries
+        }
       }
     }
     const snapshot = [...map.values()].sort((a, b) => a.id.localeCompare(b.id));
@@ -85,8 +88,11 @@ export class PeerRegistry implements vscode.Disposable {
   }
 }
 
-function peersDir(): string {
+function peersDirs(): string[] {
   const xdg = process.env.XDG_DATA_HOME?.trim();
   const base = xdg || path.join(os.homedir(), ".local", "share");
-  return path.join(base, "opencode-plugin-peers", "peers.d");
+  // Old name first: on an id collision the later (live) registry wins.
+  return ["opencode-plugin-peers", "opencode-peers"].map((name) =>
+    path.join(base, name, "peers.d"),
+  );
 }
