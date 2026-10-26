@@ -3060,7 +3060,7 @@ a.tool-pill {
   right: 0;
   width: max-content;
   min-width: 260px;
-  max-width: 380px;
+  max-width: 440px;
   padding: 4px 8px 8px;
 }
 
@@ -3088,6 +3088,7 @@ a.tool-pill {
   display: flex;
   align-items: center;
   gap: 9px;
+  box-sizing: border-box;
   width: max-content;
   max-width: 100%;
   margin: 10px 0;
