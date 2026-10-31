@@ -390,6 +390,49 @@ describe("reasoning window reopen (530a2f2)", () => {
   });
 });
 
+describe("reasoning.started stamps the think's true start", () => {
+  it("spawns the part from the remembered stamp, not the first delta", async () => {
+    const sid = "rs0";
+    open(sid, [row("u1", "user", T0), row("a1", "assistant", T0)]);
+    await sseFlush("session.next.reasoning.started", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      reasoningID: "a1:r0",
+      timestamp: T0 + 10_000,
+    });
+    await sseFlush("session.next.reasoning.delta", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      reasoningID: "a1:r0",
+      delta: "late batch",
+    });
+    const p = findPart(sid, "a1:r0") as {
+      time?: { start?: number };
+    };
+    assert.equal(p.time?.start, T0 + 10_000);
+  });
+
+  it("keys the stamp by the message when the frame carried no part id", async () => {
+    const sid = "rs1b";
+    open(sid, [row("u1", "user", T0), row("a1", "assistant", T0)]);
+    await sseFlush("session.next.reasoning.started", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      timestamp: T0 + 5_000,
+    });
+    await sseFlush("session.next.reasoning.delta", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      reasoningID: "a1:r0",
+      delta: "hm",
+    });
+    const p = findPart(sid, "a1:r0") as {
+      time?: { start?: number };
+    };
+    assert.equal(p.time?.start, T0 + 5_000);
+  });
+});
+
 // The refresh merge's type adoption — the guarantee the orphan-delta pull
 // (above) relies on. A mis-typed live copy (created by an older build's
 // delta path, or a pull whose fetch raced the stream) must take the

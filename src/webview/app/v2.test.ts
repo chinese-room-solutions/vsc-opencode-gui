@@ -887,6 +887,99 @@ describe("v2 transcript normalization (fetchMessages)", () => {
     assert.equal(text?.time?.start, 14000);
   });
 
+  it("synthesizes a time span for durable tools that carry none", async () => {
+    // Newer durable rows stamp a tool with no time at all; without a
+    // span its exec seconds stay inside the settled rate's denominator.
+    // Start = the nearest preceding completion, end = where generation
+    // resumed (the next item's anchor), else the row's completion.
+    onApi((call) =>
+      call.path.startsWith("/api/session/ses_toolt/message")
+        ? {
+            data: [
+              {
+                id: "msg_tt",
+                type: "assistant",
+                time: { created: 1000, streamed: 9000, completed: 16000 },
+                content: [
+                  {
+                    type: "reasoning",
+                    text: "ponder",
+                    time: { created: 9500, completed: 14000 },
+                  },
+                  {
+                    type: "tool",
+                    id: "cal_1",
+                    name: "bash",
+                    state: { status: "completed", input: {} },
+                  },
+                  { type: "text", text: "answer" },
+                ],
+              },
+            ],
+          }
+        : undefined,
+    );
+    const page = await fetchMessages("ses_toolt");
+    const tool = (page?.messages ?? []).find((m) => m.info.id === "msg_tt")
+      ?.parts.find((p) => p.type === "tool") as
+      | { state?: { time?: { start?: number; end?: number } } }
+      | undefined;
+    assert.equal(tool?.state?.time?.start, 14000);
+    // The following text's anchor (its own synthesis) is the same
+    // reasoning completion.
+    assert.equal(tool?.state?.time?.end, 14000);
+  });
+
+  it("anchors a lone durable tool at the row stamps; a running row keeps the end open", async () => {
+    onApi((call) =>
+      call.path.startsWith("/api/session/ses_toolo/message")
+        ? {
+            data: [
+              {
+                id: "msg_to",
+                type: "assistant",
+                time: { created: 1000, streamed: 2000, completed: 9000 },
+                content: [
+                  {
+                    type: "tool",
+                    id: "cal_2",
+                    name: "bash",
+                    state: { status: "completed", input: {} },
+                  },
+                ],
+              },
+              {
+                id: "msg_tr",
+                type: "assistant",
+                // Running: no completed stamp.
+                time: { created: 1000, streamed: 2000 },
+                content: [
+                  {
+                    type: "tool",
+                    id: "cal_3",
+                    name: "bash",
+                    state: { status: "running", input: {} },
+                  },
+                ],
+              },
+            ],
+          }
+        : undefined,
+    );
+    const page = await fetchMessages("ses_toolo");
+    const done = (page?.messages ?? []).find((m) => m.info.id === "msg_to")
+      ?.parts.find((p) => p.type === "tool") as
+      | { state?: { time?: { start?: number; end?: number } } }
+      | undefined;
+    assert.deepEqual(done?.state?.time, { start: 2000, end: 9000 });
+    const running = (page?.messages ?? []).find((m) => m.info.id === "msg_tr")
+      ?.parts.find((p) => p.type === "tool") as
+      | { state?: { time?: { start?: number; end?: number } } }
+      | undefined;
+    assert.equal(running?.state?.time?.start, 2000);
+    assert.equal(running?.state?.time?.end, undefined);
+  });
+
   it("maps shell and synthetic rows; a failed compaction vanishes", async () => {
     onApi((call) =>
       call.path.startsWith("/api/session/ses_mix/message")
@@ -1771,11 +1864,27 @@ describe("v2 SSE → pipeline translation", () => {
       ["session.tool.failed", { sessionID: "s", assistantMessageID: "m", id: "c1", error: "x" }],
       ["session.text.ended", { sessionID: "s", assistantMessageID: "m", ordinal: 1 }],
       ["session.reasoning.ended", { sessionID: "s", assistantMessageID: "m", ordinal: 1 }],
+      // The think's true start — the store remembers the stamp until the
+      // part's first delta spawns it.
+      ["session.reasoning.started", { sessionID: "s", assistantMessageID: "m", ordinal: 1 }],
     ] as const) {
       const out = stamped(type, { ...data }, 4242);
       assert.equal(out.length, 1, type);
       assert.equal((out[0].data as { timestamp?: number }).timestamp, 4242, type);
     }
+    // No ordinal on the wire: the stamp still lands, keyed by the message.
+    assert.deepEqual(
+      translateV2Event(
+        ev("session.reasoning.started", { sessionID: "s", assistantMessageID: "m" }),
+      ),
+      [
+        {
+          id: "evt_x",
+          type: "session.next.reasoning.started",
+          data: { sessionID: "s", assistantMessageID: "m" },
+        },
+      ],
+    );
   });
 
   it("streams compaction: started opens trigger+row, delta passes through, ended refreshes", () => {

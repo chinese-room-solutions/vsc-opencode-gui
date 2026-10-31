@@ -36,6 +36,7 @@ import { ToolCard, displayAgent } from "./ToolCard";
 import { openLightbox } from "./Lightbox";
 import { silenceLabel } from "../stuck";
 import { route, navigate } from "../router";
+import { genMs, lastStampMs, liveSample, toolBusyMs, type RateWindow } from "../rate";
 
 // Compact units for the live counters: 95s → "1m35s", 12340 → "12.3k".
 // Sub-1000 values pass through unrounded, so rates keep their decimal.
@@ -1242,121 +1243,13 @@ function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
   );
 }
 
-// Union length of intervals (epoch ms) — parallel spans count once.
-function spanMs(ivs: [number, number][]): number {
-  if (ivs.length === 0) return 0;
-  ivs.sort((a, b) => a[0] - b[0]);
-  let total = 0;
-  let lo = ivs[0][0];
-  let hi = ivs[0][1];
-  for (let i = 1; i < ivs.length; i++) {
-    if (ivs[i][0] > hi) {
-      total += hi - lo;
-      lo = ivs[i][0];
-    }
-    if (ivs[i][1] > hi) hi = ivs[i][1];
-  }
-  return total + hi - lo;
-}
-
-// Tool-execution time within a turn, as one merged span — parallel tools
-// count once. Running tools (no end stamp) extend to `now`.
-function toolBusyMs(msgs: ChatMessage[], now: number): number {
-  const ivs: [number, number][] = [];
-  for (const m of msgs) {
-    if (m.info.role !== "assistant") continue;
-    for (const p of m.parts) {
-      const t = isTool(p) ? p.state?.time : undefined;
-      if (!t?.start) continue;
-      ivs.push([t.start, Math.max(t.start, t.end ?? now)]);
-    }
-  }
-  return spanMs(ivs);
-}
-
-// The moments a turn actually generated, as the sum of per-row spans. An
-// anchored row (streamed parts carry start stamps) measures the union of
-// its text parts' windows; a row whose parts carry no anchors (a reloaded
-// v2 row stamps only its first element, a reloaded v1 row none) falls to
-// its own window net of tool time. Either way the waits that streamed
-// nothing stay out of the rate's denominator: queue and prefill before
-// the first token, tool execution, the gap between a row and the next —
-// a subagent's minutes — and thinking that produced no chars. A row with
-// neither anchors nor a completed stamp (aborted mid-row) returns
-// undefined and the caller keeps the wall-minus-tools fallback.
-function genMs(msgs: ChatMessage[], now: number): number | undefined {
-  let total = 0;
-  for (const m of msgs) {
-    if (m.info.role !== "assistant") continue;
-    const texts = m.parts.filter(
-      (p): p is TextPart => isText(p) && !!p.text,
-    );
-    if (texts.length === 0) continue;
-    const toolIvs: [number, number][] = [];
-    for (const p of m.parts) {
-      const t = isTool(p) ? p.state?.time : undefined;
-      if (!t?.start) continue;
-      toolIvs.push([t.start, Math.max(t.start, t.end ?? now)]);
-    }
-    if (texts.every((p) => p.time?.start !== undefined)) {
-      // A part with no end of its own runs to the next anchor — that span
-      // can swallow a tool window in between (v2 durable tools often carry
-      // no time), so the tool intervals come out of the per-part spans too.
-      const gen = spanMs(
-        texts.map((p, i) => {
-          const start = p.time!.start!;
-          return [
-            start,
-            Math.max(
-              start,
-              p.time!.end ??
-                texts[i + 1]?.time?.start ??
-                m.info.time.completed ??
-                now,
-            ),
-          ];
-        }),
-      );
-      total += Math.max(0, gen - spanMs(toolIvs));
-      continue;
-    }
-    const start = texts[0].time?.start ?? m.info.time.streamed ?? m.info.time.created;
-    const end = m.info.time.completed;
-    if (start === undefined || end === undefined) return undefined;
-    total += Math.max(0, end - start - spanMs(toolIvs));
-  }
-  return total;
-}
-
-// An aborted turn never receives its completed stamp; the settled footer
-// divides from the last provable event instead of the wall clock, or its
-// duration would keep growing on every later refresh.
-function lastStampMs(msgs: ChatMessage[]): number | undefined {
-  let t: number | undefined;
-  for (const m of msgs) {
-    const stamps = [
-      m.info.time.completed,
-      ...m.parts.flatMap((p) => {
-        const pt = isTool(p) ? p.state?.time : isText(p) ? p.time : undefined;
-        return pt ? [pt.start, pt.end] : [];
-      }),
-    ];
-    for (const s of stamps)
-      if (s !== undefined && (t === undefined || s > t)) t = s;
-  }
-  return t;
-}
-
 export const MessageView = memo(
   MessageViewImpl,
   (a, b) => a.m === b.m && a.live === b.live,
 );
 
 // Live-rate sample windows, keyed by session (see TurnFooterImpl).
-const rateWindows = new Map<
-  string,
-  { anchor: string; hist: { c: number; b: number }[]; last: number }
->();
+const rateWindows = new Map<string, RateWindow>();
 
 // Quiet row under a turn — copy the turn's text, then agent · model · wall
 // time · generated tokens · tok/s. The counter runs while the turn
@@ -1422,17 +1315,10 @@ function TurnFooterImpl(props: { msgs: ChatMessage[]; live?: boolean; sid?: stri
     return n + Math.max(0, chars - (m.info.reportedChars ?? 0));
   }, 0);
   const gen = real + Math.round(tail / charsPerToken());
-  // The running turn samples once a second. The rate is the char ramp's
-  // mean over the last seven seconds, net of tool time, scaled by the
-  // learned ratio at read time: providers offload tokens in batches, so
-  // one second's delta can carry several seconds of generation, and a
-  // per-move median reads each batch as pace — the idle seconds the
-  // batch accumulated over never entered its window. The mean over
-  // idle seconds too amortizes batches to delivered throughput; netting
-  // out the tool-busy span keeps tool phases (which stream no text)
-  // from dragging it, the same subtraction the settled rate applies. A
-  // zero reading holds the last nonzero one rather than blanking
-  // mid-turn.
+  // The running turn samples once a second (liveSample in rate.ts holds
+  // the formula: a mean over producing seconds only — tool runs and
+  // other silences hold the last reading, and a delivered batch
+  // amortizes over its silence net of tool time).
   // The window belongs to the SESSION+turn, not to this footer: v2 can
   // re-group a live turn mid-flight (the prompt's durable user row lands
   // by refresh, not by event), remounting the live footer — a
@@ -1467,23 +1353,13 @@ function TurnFooterImpl(props: { msgs: ChatMessage[]; live?: boolean; sid?: stri
   const rateWin = win;
   useEffect(() => {
     if (!live) return;
-    let shown = rateWin.last;
     const sample = () => {
-      const h = rateWin.hist;
-      h.push({ c: state.current.chars, b: state.current.busy });
-      if (h.length > 8) h.shift();
-      const spanS = h.length - 1;
-      const rate =
-        spanS > 0
-          ? Math.max(0, h[h.length - 1].c - h[0].c) /
-            charsPerToken() /
-            Math.max(1, spanS - (state.current.busy - h[0].b) / 1000)
-          : 0;
-      if (rate > 0) {
-        shown = rate;
-        rateWin.last = rate;
-      }
-      setSnap({ gen: state.current.gen, rate: shown, now: Date.now() });
+      const rate = liveSample(rateWin, {
+        c: state.current.chars,
+        b: state.current.busy,
+        t: Date.now(),
+      });
+      setSnap({ gen: state.current.gen, rate, now: Date.now() });
     };
     sample();
     const iv = window.setInterval(sample, 1000);

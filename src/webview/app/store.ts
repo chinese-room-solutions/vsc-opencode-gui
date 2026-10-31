@@ -1638,6 +1638,13 @@ function upsertPart(sessionID: string, part: Part): void {
   );
 }
 
+// The think's true start (session.next.reasoning.started, translated
+// from v2's session.reasoning.started), remembered until the part's
+// first delta spawns it — the silent stretch before the first delivered
+// batch belongs to the thinking window. Bounded like toolArgsLastDelta;
+// entries are spent on spawn and cleared at reasoning.ended.
+const reasoningStartedAt = new Map<string, number>();
+
 // Append one streaming chunk to a text/reasoning part, creating it on the
 // first delta (text.started carries only the id). Once a part clamped, its
 // deltas are dropped — re-slicing a cap-sized text per token and re-ticking
@@ -1659,6 +1666,14 @@ function appendPartText(
     .get(sessionID)
     ?.find((m) => m.info.id === messageID);
   const orphan = !row || !row.parts.some((p) => p.id === partID);
+  const started =
+    type === "reasoning"
+      ? reasoningStartedAt.get(partID) ?? reasoningStartedAt.get(messageID)
+      : undefined;
+  if (started !== undefined) {
+    reasoningStartedAt.delete(partID);
+    reasoningStartedAt.delete(messageID);
+  }
   mutateMessages(sessionID, (list) =>
     list.map((m) => {
       if (m.info.id !== messageID) return m;
@@ -1682,14 +1697,15 @@ function appendPartText(
         : [
             ...m.parts,
             // The start stamp seeds the reasoning block's duration; the
-            // ended event supplies the end.
+            // ended event supplies the end. A remembered reasoning.started
+            // is the think's true beginning, not the first delivery.
             {
               id: partID,
               messageID,
               sessionID,
               type,
               text: clampPartText(partID, delta),
-              time: { start: Date.now() },
+              time: { start: started ?? Date.now() },
             },
           ];
       return { ...m, parts };
@@ -2652,6 +2668,22 @@ function applyEvent(event: ServerEvent): void {
         });
       }
       break;
+    case "session.next.reasoning.started":
+      // v2's session.reasoning.started (via v2events): remember the
+      // think's true start — the part spawns on its first delta.
+      if (
+        data.assistantMessageID &&
+        typeof data.timestamp === "number"
+      ) {
+        if (reasoningStartedAt.size > 32) reasoningStartedAt.clear();
+        reasoningStartedAt.set(
+          typeof data.reasoningID === "string"
+            ? data.reasoningID
+            : data.assistantMessageID,
+          data.timestamp,
+        );
+      }
+      break;
     case "session.next.reasoning.delta":
       if (data.assistantMessageID && data.reasoningID && data.delta) {
         appendPartText(
@@ -2665,6 +2697,8 @@ function applyEvent(event: ServerEvent): void {
       break;
     case "session.next.reasoning.ended":
       if (data.assistantMessageID && data.reasoningID) {
+        reasoningStartedAt.delete(data.reasoningID);
+        reasoningStartedAt.delete(data.assistantMessageID);
         const prev = messagesBySession.value
           .get(sid)
           ?.find((m) => m.info.id === data.assistantMessageID)

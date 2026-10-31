@@ -182,9 +182,26 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
         : [];
     // --- streamed text/reasoning → the 1.18 part-delta family ---
     case "session.text.started":
-    case "session.reasoning.started":
       // The part spawns on its first delta; nothing to project yet.
       return [];
+    case "session.reasoning.started": {
+      // Same for the part — but the think's START is this frame's stamp:
+      // reasoning often arrives in one batch after a long silent think,
+      // and that silence belongs to the thinking window. The store
+      // remembers the stamp until the part's first delta spawns it.
+      const pid =
+        d.assistantMessageID && partID(d.assistantMessageID, d.ordinal, "r");
+      return d.assistantMessageID
+        ? [
+            synth("session.next.reasoning.started", {
+              sessionID: sid,
+              assistantMessageID: d.assistantMessageID,
+              ...(pid ? { textID: pid, reasoningID: pid } : {}),
+              ...(at !== undefined ? { timestamp: at } : {}),
+            }),
+          ]
+        : [];
+    }
     case "session.text.delta":
     case "session.reasoning.delta": {
       const isText = event.type === "session.text.delta";

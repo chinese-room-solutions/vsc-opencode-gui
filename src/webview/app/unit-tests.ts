@@ -4,6 +4,7 @@ import "./mentions.test";
 import "./tile.test";
 import "./router.test";
 import "./markdown.test";
+import "./rate.test";
 import "./store.test";
 import "./components/ToolCard.test";
 import "./v2.test";

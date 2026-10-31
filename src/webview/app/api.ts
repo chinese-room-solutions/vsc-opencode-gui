@@ -1345,6 +1345,30 @@ export async function fetchMessages(
       }
       return undefined;
     };
+    // The start anchor the text synthesis below stamps on content item j
+    // (its own stamp when it carries one — reasoning's {created,
+    // completed} — else the same chain), for the first text/reasoning
+    // item after index i: where generation resumed.
+    const anchorOf = (j: number): number | undefined => {
+      const g = (r.content ?? [])[j] as
+        | { type?: string; time?: { created?: unknown; start?: unknown } }
+        | undefined;
+      if (!g || (g.type !== "text" && g.type !== "reasoning")) return undefined;
+      return (
+        toMs(g.time?.created) ??
+        toMs(g.time?.start) ??
+        prevEnd(j) ??
+        r.time.streamed ??
+        r.time.created
+      );
+    };
+    const nextAnchor = (i: number): number | undefined => {
+      for (let j = i + 1; j < (r.content ?? []).length; j++) {
+        const a = anchorOf(j);
+        if (a !== undefined) return a;
+      }
+      return undefined;
+    };
     if (r.type === "user") parent = r.id;
     // A completed compaction row is v2's summary — the same facts v1's
     // legacy store serves as TWO rows: the trigger user row (a lone
@@ -1596,6 +1620,29 @@ export async function fetchMessages(
                     start: (c as { time?: { created?: number } }).time?.created,
                     end: (c as { time?: { completed?: number } }).time
                       ?.completed,
+                  },
+                }
+              : {}),
+            // Newer durable rows stamp a tool with no time at all (neither
+            // state.time nor the part-level {created, completed} the lift
+            // below reads) — its exec seconds stayed inside the settled
+            // rate's denominator. Synthesize the span from the row's
+            // anchors: start where the preceding item completed, end where
+            // generation resumed (the next item's anchor, else the row's
+            // completion; a running row keeps it open — the span extends
+            // to now downstream).
+            ...((c as { type?: string }).type === "tool" &&
+            (c as { state?: { time?: unknown } }).state !== undefined &&
+            (c as { state?: { time?: unknown } }).state?.time === undefined &&
+            (c as { time?: unknown }).time === undefined
+              ? {
+                  state: {
+                    ...((c as { state?: Record<string, unknown> }).state ?? {}),
+                    time: {
+                      start:
+                        prevEnd(i) ?? r.time.streamed ?? r.time.created,
+                      end: nextAnchor(i) ?? r.time.completed,
+                    },
                   },
                 }
               : {}),
