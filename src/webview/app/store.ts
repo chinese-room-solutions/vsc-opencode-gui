@@ -1036,24 +1036,60 @@ function patchSession(
   sessions.value = sessions.value.map((s) => (s.id === id ? fn(s) : s));
 }
 
-// Append the next page of sessions. No-op while a page is in flight or no
-// cursor remains.
+// Rows Home lists under its current filter and query — the audience "Load
+// older sessions" pages for. Home renders these (sorted); loadMoreSessions
+// counts them, so the button's stop rule and the list can't diverge.
+export function homeVisibleSessions(): Session[] {
+  const filter = homeFilter.value;
+  const q = homeQuery.value.trim().toLowerCase();
+  const dead = new Set(tombstones.value);
+  return sessions.value.filter(
+    (s) =>
+      !isSubagentSession(s) &&
+      !isEmptySession(s) &&
+      !dead.has(normPath(s.location?.directory ?? "")) &&
+      (!filter || normPath(s.location?.directory ?? "") === filter) &&
+      (!q ||
+        (s.title || "").toLowerCase().includes(q) ||
+        projectDisplayName(s.location?.directory ?? "").toLowerCase().includes(
+          q,
+        )),
+  );
+}
+
+// Append older pages until the listed view actually grows. A raw page can
+// hold nothing listable — sub-agent and blank sessions never show, and a
+// project filter hides the rest — so one page per press can read as a dead
+// button. Stops at the first growth, a failed fetch (the button stays as
+// the manual retry), or an exhausted history. Under an active query a
+// press stays one page: searchAllSessions already answered the whole
+// history server-side, and paging on for client-side matches is all cost.
 let loadingMore = false;
+export const sessionsLoadingMore = signal(false);
 export async function loadMoreSessions(): Promise<void> {
-  const cursor = sessionsNext.value;
-  if (!cursor || loadingMore) return;
+  if (!sessionsNext.value || loadingMore) return;
   loadingMore = true;
+  sessionsLoadingMore.value = true;
+  const single = homeQuery.value.trim() !== "";
+  const before = homeVisibleSessions().length;
   try {
-    const page = await fetchSessions(cursor);
-    if (!page) return;
-    const seen = new Set(sessions.value.map((s) => s.id));
-    sessions.value = [
-      ...sessions.value,
-      ...page.sessions.filter((s) => !seen.has(s.id)),
-    ];
-    sessionsNext.value = page.next;
+    while (sessionsNext.value) {
+      const page = await fetchSessions(sessionsNext.value);
+      if (!page) return;
+      const seen = new Set(sessions.value.map((s) => s.id));
+      sessions.value = [
+        ...sessions.value,
+        ...page.sessions.filter((s) => !seen.has(s.id)),
+      ];
+      sessionsNext.value = page.next;
+      // Suspects from older pages deserve the same blank check the boot
+      // page gets — otherwise phantom "New session" rows never clear.
+      void resolveBlankSessions();
+      if (single || homeVisibleSessions().length > before) return;
+    }
   } finally {
     loadingMore = false;
+    sessionsLoadingMore.value = false;
   }
 }
 

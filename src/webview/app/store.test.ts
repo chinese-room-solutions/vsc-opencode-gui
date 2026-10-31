@@ -79,6 +79,9 @@ import {
   revertSession,
   runSlashCommand,
   failedMsgLoads,
+  homeQuery,
+  homeVisibleSessions,
+  loadMoreSessions,
   searchAllSessions,
   sendError,
   sendPrompt,
@@ -90,6 +93,8 @@ import {
   sessionTitle,
   sessionWorking,
   sessions,
+  sessionsNext,
+  sessionsLoadingMore,
   setProviderColor,
   providerColors,
   setProjectColor,
@@ -766,6 +771,120 @@ describe("server-side session search (whole history)", () => {
       apiLog.filter((c) => c.path.includes("search=once")).length,
       1,
     );
+  });
+});
+
+// A raw page can hold nothing listable (sub-agent rows never show; a
+// project filter hides the rest), so a press pages until the listed view
+// actually grows. Pages carry a cursor only at the full page size
+// (SESSION_PAGE = 50), so every page that must continue the walk is
+// exactly 50 rows.
+describe("Load older sessions pages by visible rows", () => {
+  const touched = (id: string, over: Partial<Session> = {}) =>
+    sessRow(id, { time: { created: T0 - 100, updated: T0 - 50 }, ...over });
+  // A full page of sub-agent rows — never visible, always cursor-bearing.
+  const subPage = (off: number) =>
+    Array.from(
+      { length: 50 },
+      (_, i) => touched(`sub${off + i}`, { parentID: "p" }),
+    );
+
+  function pageFor(
+    pages: Record<string, { data: Session[]; next?: string }>,
+  ): void {
+    onApi((call) => {
+      if (call.method !== "GET" || !call.path.includes("/api/session?"))
+        return undefined;
+      for (const [cursor, page] of Object.entries(pages))
+        if (call.path.includes(`cursor=${cursor}`))
+          return { data: page.data, cursor: page.next ? { next: page.next } : {} };
+      return undefined;
+    });
+  }
+
+  afterEach(() => {
+    sessions.value = [];
+    sessionsNext.value = undefined;
+    homeQuery.value = "";
+  });
+
+  it("walks past sub-agent pages and stops at the first growth", async () => {
+    sessions.value = [touched("top1")];
+    sessionsNext.value = "c1";
+    pageFor({
+      c1: { data: subPage(0), next: "c2" },
+      c2: { data: [...subPage(50), touched("real1")], next: "c3" },
+    });
+    await loadMoreSessions();
+    // 102 rows merged: both pages (51 on the second — real1 plus filler).
+    // Stopped by growth, not exhaustion — c3 stays for the next press.
+    assert.equal(sessions.value.length, 102);
+    assert.equal(sessionsNext.value, "c3");
+    assert.deepEqual(homeVisibleSessions().map((s) => s.id), ["top1", "real1"]);
+    assert.equal(sessionsLoadingMore.value, false);
+  });
+
+  it("under a project filter, other-project pages never stop the walk", async () => {
+    homeFilter.value = "C:/work/repo";
+    sessions.value = [touched("mine1")];
+    sessionsNext.value = "c1";
+    pageFor({
+      c1: {
+        data: Array.from(
+          { length: 50 },
+          (_, i) =>
+            touched(`other${i}`, { location: { directory: "C:\\elsewhere" } }),
+        ),
+        next: "c2",
+      },
+      // Short last page: the list ends here, mine2 is its only row.
+      c2: { data: [touched("mine2")] },
+    });
+    await loadMoreSessions();
+    assert.deepEqual(homeVisibleSessions().map((s) => s.id), [
+      "mine1",
+      "mine2",
+    ]);
+    assert.equal(sessionsNext.value, undefined);
+  });
+
+  it("walks to exhaustion when no page holds a listable row", async () => {
+    sessions.value = [touched("top1")];
+    sessionsNext.value = "c1";
+    pageFor({
+      c1: { data: subPage(100), next: "c2" },
+      c2: { data: subPage(200), next: "c3" },
+      c3: { data: [] },
+    });
+    await loadMoreSessions();
+    assert.equal(sessionsNext.value, undefined);
+    assert.equal(sessions.value.length, 101);
+    assert.deepEqual(homeVisibleSessions().map((s) => s.id), ["top1"]);
+    assert.equal(sessionsLoadingMore.value, false);
+  });
+
+  it("a failed page keeps the cursor as the manual retry", async () => {
+    sessions.value = [touched("top1")];
+    sessionsNext.value = "c1";
+    pageFor({ c1: { data: subPage(300), next: "c2" } });
+    onApi((call) =>
+      call.method === "GET" && call.path.includes("cursor=c2")
+        ? API_FAIL
+        : undefined,
+    );
+    await loadMoreSessions();
+    assert.equal(sessionsNext.value, "c2");
+    assert.equal(sessionsLoadingMore.value, false);
+  });
+
+  it("under an active query a press loads a single page", async () => {
+    homeQuery.value = "needle";
+    sessions.value = [touched("top1")];
+    sessionsNext.value = "c1";
+    pageFor({ c1: { data: subPage(400), next: "c2" } });
+    await loadMoreSessions();
+    assert.equal(sessionsNext.value, "c2");
+    assert.equal(apiLog.filter((c) => c.path.includes("cursor=c1")).length, 1);
   });
 });
 

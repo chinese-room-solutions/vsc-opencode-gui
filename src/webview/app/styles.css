@@ -746,7 +746,11 @@ body {
   cursor: pointer;
 }
 
-.load-older:hover {
+.load-older:disabled {
+  cursor: default;
+}
+
+.load-older:not(:disabled):hover {
   color: var(--oc-text);
   text-decoration: underline;
 }

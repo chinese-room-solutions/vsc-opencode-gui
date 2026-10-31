@@ -25,6 +25,7 @@ import {
   forkSession,
   homeFilter,
   homeQuery,
+  homeVisibleSessions,
   isEmptySession,
   isSubagentSession,
   loadMoreSessions,
@@ -43,6 +44,7 @@ import {
   sendError,
   sessions,
   sessionsNext,
+  sessionsLoadingMore,
   sessionStatus,
   setProjectColor,
   setSendError,
@@ -161,24 +163,13 @@ export function Home() {
     (nameCounts.get(baseName(d)) ?? 0) > 1 ? parentName(d) : undefined;
 
   // Right column: live-filtered by title or project name, grouped by day.
+  // The filter lives in the store (homeVisibleSessions): loadMoreSessions
+  // pages until that list grows, so render and stop rule share one
+  // definition.
   const q = query.trim().toLowerCase();
-  const rows = sessions.value
-    .filter(
-      (s) =>
-        !isSubagentSession(s) &&
-        !isEmptySession(s) &&
-        !dead.has(normPath(s.location?.directory ?? "")),
-    )
-    .sort((a, b) => b.time.updated - a.time.updated)
-    .filter((s) => !filter || normPath(s.location?.directory ?? "") === filter)
-    .filter(
-      (s) =>
-        !q ||
-        (s.title || "").toLowerCase().includes(q) ||
-        projectDisplayName(
-          s.location?.directory ?? "",
-        ).toLowerCase().includes(q),
-    );
+  const rows = homeVisibleSessions().sort(
+    (a, b) => b.time.updated - a.time.updated,
+  );
   const groups: { label: string; rows: Session[] }[] = [];
   for (const s of rows) {
     const label = dayLabel(s.time.updated);
@@ -267,9 +258,10 @@ export function Home() {
 
   // A page can hold nothing listable (sub-agent and blank sessions never
   // show; a project filter hides the rest), while the project's real
-  // sessions sit pages deep. Walk older pages while nothing is visible;
-  // the walk stops at the first visible row or an exhausted cursor, and a
-  // failed fetch leaves the button below as the manual retry. The gate
+  // sessions sit pages deep. Walk older pages while nothing is visible —
+  // one loadMoreSessions call now walks to the first visible row or an
+  // exhausted cursor, and a failed fetch leaves the button below as the
+  // manual retry. The gate
   // is computed in the render and passed as the dep — rows.length read
   // live inside the effect raced the boot, where the mount render's
   // stale closure (0 rows) met the first page's fresh cursor and pulled
@@ -393,8 +385,14 @@ export function Home() {
             ))
           )}
           {sessionsNext.value && (
-            <button class="load-older" onClick={() => void loadMoreSessions()}>
-              Load older sessions
+            <button
+              class="load-older"
+              disabled={sessionsLoadingMore.value}
+              onClick={() => void loadMoreSessions()}
+            >
+              {sessionsLoadingMore.value
+                ? "Loading older sessions…"
+                : "Load older sessions"}
             </button>
           )}
         </div>
