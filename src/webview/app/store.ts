@@ -4,7 +4,7 @@ import { buildInitPrompt } from "./initPrompt";
 import {
   attachmentParts,
   attachAllowed,
-  attachMime,
+  chipMime,
   createSession,
   compactSession,
   commitRevert,
@@ -3196,7 +3196,8 @@ export const composerInsert = signal<
 // parts with the next prompt. Keyed like text drafts (session id, "draft"
 // for the home composer) so attachments don't follow you into another tab;
 // kept outside the Composer so a draft's attachments survive the session
-// it becomes.
+// it becomes, and persisted to localStorage so they survive the webview
+// reloading too.
 interface ComposerFile {
   uri: string;
   name: string;
@@ -3204,6 +3205,9 @@ interface ComposerFile {
   // read file:// picks itself). Only consulted when the name doesn't
   // classify.
   text?: boolean;
+  // Small data-URI preview of an image chip, drawn at attach time; the
+  // chip row and lightbox render it instead of the full payload.
+  thumb?: string;
 }
 
 // Composer text drafts, keyed like attachments (session id, "draft" for
@@ -3237,10 +3241,74 @@ export const dropDraft = (k: string) => {
   persistDrafts();
 };
 
-export const composerFiles = signal<Record<string, ComposerFile[]>>({});
+// Composer attachments persist like drafts, under their own key so a
+// quota failure here can never break draft persistence.
+const ATTACHMENTS_KEY = "opencode.attachments";
+// The load half of that: whatever localStorage holds, reduced to the
+// chip shape — anything malformed drops, not just the bad row.
+export function loadPersistedFiles(): Record<string, ComposerFile[]> {
+  try {
+    const raw = JSON.parse(
+      localStorage.getItem(ATTACHMENTS_KEY) ?? "{}",
+    ) as unknown;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    const out: Record<string, ComposerFile[]> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (!Array.isArray(v)) continue;
+      const rows = v.filter(
+        (f): f is ComposerFile =>
+          !!f &&
+          typeof f === "object" &&
+          typeof f.uri === "string" &&
+          typeof f.name === "string" &&
+          (f.text === undefined || typeof f.text === "boolean") &&
+          (f.thumb === undefined || typeof f.thumb === "string"),
+      );
+      if (rows.length) out[k] = rows;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+// Best-effort persist: whole while the serialized blob stays under ~2 MB;
+// past that, or on a quota bounce, retry once without data: chips over
+// 128 KB — a snapshotted chip keeps its disk path and thumb, so only the
+// restore after a reload falls back. In-memory state is never touched;
+// final failure stays silent (drafts' contract — the chips still send).
+function persistFiles(files: Record<string, ComposerFile[]>): void {
+  let wrote = false;
+  try {
+    const blob = JSON.stringify(files);
+    if (blob.length <= 2_000_000) {
+      localStorage.setItem(ATTACHMENTS_KEY, blob);
+      wrote = true;
+    }
+  } catch {}
+  if (wrote) return;
+  try {
+    const slim: Record<string, ComposerFile[]> = {};
+    for (const [k, v] of Object.entries(files)) {
+      const rows = v.filter(
+        (f) => !(f.uri.startsWith("data:") && f.uri.length > 128 * 1024),
+      );
+      if (rows.length) slim[k] = rows;
+    }
+    localStorage.setItem(ATTACHMENTS_KEY, JSON.stringify(slim));
+  } catch {}
+}
+
+export const composerFiles = signal<Record<string, ComposerFile[]>>(
+  loadPersistedFiles(),
+);
 export const composerFilesFor = (key: string): ComposerFile[] =>
   composerFiles.value[key] ?? [];
-// Attach-time snapshot bridge: the composer asks for a pasted non-image
+// One watcher covers every mutation path: attach, the send/take-back
+// clears, chip removal, a session's local state drop.
+effect(() => {
+  persistFiles(composerFiles.value);
+});
+// Attach-time snapshot bridge: the composer asks for a pasted
 // attachment's disk path, the host's "attachment-saved" reply resolves.
 // Times out to undefined so a lost reply can't wedge an attach (the chip
 // then keeps its data URI — inert but sendable).
@@ -3364,15 +3432,14 @@ export function hostMessage(msg: unknown) {
   // none, so anything but a session is the draft).
   if (m.type === "files-picked" && Array.isArray(m.files)) {
     const rows = (m.files as ComposerFile[]).filter(
-      (f) => !!f && typeof f.uri === "string",
+      (f) => !!f && typeof f.uri === "string" && typeof f.name === "string",
     );
     const target = route.value.view === "session" ? route.value.id : undefined;
     const input = attachInputs(target);
     let unsupported = 0;
     let notForModel = 0;
     const ok = rows.filter((f) => {
-      const mime =
-        attachMime(f.name ?? "", "") ?? (f.text ? "text/plain" : undefined);
+      const mime = chipMime(f);
       if (mime === undefined) unsupported++;
       else if (!attachAllowed(mime, input)) notForModel++;
       else return true;

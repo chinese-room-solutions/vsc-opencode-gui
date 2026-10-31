@@ -2,7 +2,9 @@
 // the active session model's catalog input modalities (attachInputs +
 // attachAllowed in src/webview/app). The fake catalog's "fake-model" takes
 // image+pdf; "fake-audio" (switched in via the model picker) denies pdf.
-// No prompt is ever sent from these tests.
+// Pasted images snapshot to disk at attach (the rig's host stub answers
+// save-attachment), keep a thumbnail, survive reloads, and send as file://
+// parts — the one send here hits only the fake API.
 import { test, expect, openSession, watchPage } from "./support/fixture.mjs";
 
 // A window-level drop of one pdf File, the same path a real drop takes
@@ -172,7 +174,7 @@ test("a pasted text file becomes a click-to-open chip via its disk snapshot", as
   expect(watched.errors).toEqual([]);
 });
 
-test("a pasted image keeps its data URI and opens the lightbox instead", async ({ page, rig }) => {
+test("a pasted image snapshots to disk and previews through its thumb", async ({ page, rig }) => {
   const watched = watchPage(page);
   await openSession(page, rig.url);
   await page.evaluate(() => {
@@ -184,7 +186,93 @@ test("a pasted image keeps its data URI and opens the lightbox instead", async (
   });
   const chip = page.locator(".composer-files .file-chip.chip-img");
   await expect(chip).toHaveCount(1);
+  // The preview is the attach-time thumb (a small JPEG), not the payload;
+  // the payload itself moved to disk (file:// swap below, asserted by the
+  // send test).
+  await expect(chip.locator("img")).toHaveAttribute("src", /^data:image\/jpeg/);
   await chip.click();
   await expect(page.locator(".img-preview")).toBeVisible();
+  expect(watched.errors).toEqual([]);
+});
+
+// Paste into the composer itself (ClipboardEvent on the textarea).
+const pasteImage = (page) =>
+  page.evaluate(() => {
+    const ta = document.querySelector(".composer textarea");
+    const dt = new DataTransfer();
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    dt.items.add(new File([Uint8Array.from(atob(png), (c) => c.charCodeAt(0))], "dot.png", { type: "image/png" }));
+    ta.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+
+test("a pasted image chip survives a reload with its thumbnail and removes cleanly", async ({ page, rig }) => {
+  const watched = watchPage(page);
+  await openSession(page, rig.url);
+  await page.click(".composer textarea");
+  await pasteImage(page);
+  const chip = page.locator(".composer-files .file-chip.chip-img");
+  await expect(chip).toHaveCount(1);
+  await expect(chip.locator("img")).toHaveAttribute("src", /^data:image\/jpeg/);
+  // Reload: the chips come back from localStorage like text drafts.
+  await page.reload();
+  await openSession(page, rig.url);
+  await expect(chip).toHaveCount(1);
+  await expect(chip.locator("img")).toHaveAttribute("src", /^data:image\/jpeg/);
+  // Removal sticks across another reload.
+  await chip.locator(".chip-x").click();
+  await expect(page.locator(".composer-files .file-chip")).toHaveCount(0);
+  await page.reload();
+  await openSession(page, rig.url);
+  await expect(page.locator(".composer-files .file-chip")).toHaveCount(0);
+  expect(watched.errors).toEqual([]);
+});
+
+test("sending carries the snapshotted image as a file:// part", async ({ page, rig }) => {
+  const watched = watchPage(page);
+  await openSession(page, rig.url);
+  await page.click(".composer textarea");
+  await pasteImage(page);
+  const chip = page.locator(".composer-files .file-chip.chip-img");
+  await expect(chip).toHaveCount(1);
+  await page.fill(".composer textarea", "see this");
+  await page.click(".comp-send");
+  const prompts = async () =>
+    (await (await fetch(`${rig.api}/__control/prompts`)).json()).calls;
+  await expect
+    .poll(async () =>
+      (await prompts()).flatMap((c) => c.parts ?? []).filter((p) => p.type === "file"),
+    )
+    .toHaveLength(1);
+  const part = (await prompts()).flatMap((c) => c.parts ?? []).find((p) => p.type === "file");
+  // The rig's save-attachment reply swapped the data URI for a disk path.
+  expect(part.url.startsWith("file:///repo/.opencode/attachments/")).toBe(true);
+  expect(part.filename).toBe("dot.png");
+  expect(part.mime).toBe("image/png");
+  expect(watched.errors).toEqual([]);
+});
+
+test("a model switch after attach is caught at send, not silently sent", async ({ page, rig }) => {
+  const watched = watchPage(page);
+  await openSession(page, rig.url);
+  await page.click(".composer textarea");
+  await pasteImage(page);
+  const chip = page.locator(".composer-files .file-chip.chip-img");
+  await expect(chip).toHaveCount(1);
+  // The model loses image input only after the chip already landed —
+  // the attach-time gate never saw this combination.
+  await page.click('.comp-chip[title="Model"]');
+  await page.click('.pop-model .menu-item:has-text("Fake Audio")');
+  await expect(page.locator('.comp-chip[title="Model"] .comp-chip-label')).toHaveText("Fake Audio");
+  await page.fill(".composer textarea", "still here");
+  await page.click(".comp-send");
+  // Refusal: the banner explains, and text + chip stay put for fixing.
+  await expect(page.locator(".send-error")).toHaveText(
+    "1 attachment not sent - not supported by this model. Remove it or switch models.",
+  );
+  await expect(chip).toHaveCount(1);
+  await expect(page.locator(".composer textarea")).toHaveValue("still here");
+  // Nothing left the composer — no POST at all.
+  const calls = await (await fetch(`${rig.api}/__control/prompts`)).json();
+  expect(calls.calls).toHaveLength(0);
   expect(watched.errors).toEqual([]);
 });

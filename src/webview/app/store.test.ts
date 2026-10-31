@@ -112,6 +112,9 @@ import {
   hiddenModels,
   hiddenProviders,
   peerNames,
+  loadPersistedFiles,
+  addComposerFiles,
+  requestAttachmentSnapshot,
 } from "./store";
 import { setDialect } from "./api";
 import type { ChatMessage, Status } from "./store";
@@ -1332,6 +1335,159 @@ describe("queued turns apply in publish order (0382677)", () => {
     assert.equal(callsFor(`/session/${sid}/command`).length, 1);
     assert.equal(queuedTurns.value.length, 1);
     await run;
+  });
+});
+
+describe("composer attachment persistence", () => {
+  const KEY = "opencode.attachments";
+  const reset = async () => {
+    composerFiles.value = {};
+    localStorageStub.removeItem(KEY);
+    await settle();
+  };
+
+  it("loads persisted chips and drops malformed shapes", async () => {
+    await reset();
+    localStorageStub.setItem(
+      KEY,
+      JSON.stringify({
+        s1: [
+          {
+            uri: "file:///w/.opencode/attachments/s1/1-a.png",
+            name: "a.png",
+            thumb: "data:image/jpeg;base64,x",
+          },
+        ],
+        s2: [
+          { uri: "u", name: "b.txt", text: true },
+          { uri: 3, name: "bad" },
+          "nope",
+          { name: "no-uri" },
+          { uri: "u2", name: "bad-thumb", thumb: 7 },
+        ],
+        s3: "not-an-array",
+        s4: [],
+      }),
+    );
+    assert.deepEqual(loadPersistedFiles(), {
+      s1: [
+        {
+          uri: "file:///w/.opencode/attachments/s1/1-a.png",
+          name: "a.png",
+          thumb: "data:image/jpeg;base64,x",
+        },
+      ],
+      s2: [{ uri: "u", name: "b.txt", text: true }],
+    });
+  });
+  it("loads {} from garbage json", async () => {
+    await reset();
+    localStorageStub.setItem(KEY, "{nope");
+    assert.deepEqual(loadPersistedFiles(), {});
+  });
+
+  it("the persist effect writes on add, removal and clear", async () => {
+    await reset();
+    addComposerFiles("p1", [{ uri: "data:text/plain;base64,eA==", name: "a.txt", text: true }]);
+    await settle();
+    assert.deepEqual(JSON.parse(localStorageStub.getItem(KEY) ?? "null"), {
+      p1: [{ uri: "data:text/plain;base64,eA==", name: "a.txt", text: true }],
+    });
+    // The Composer's removeFile path: a direct signal write.
+    composerFiles.value = { p1: [] };
+    await settle();
+    assert.deepEqual(JSON.parse(localStorageStub.getItem(KEY) ?? "null"), {
+      p1: [],
+    });
+    addComposerFiles("p2", [{ uri: "file:///w/b.pdf", name: "b.pdf" }]);
+    await settle();
+    assert.deepEqual(JSON.parse(localStorageStub.getItem(KEY) ?? "null"), {
+      p1: [],
+      p2: [{ uri: "file:///w/b.pdf", name: "b.pdf" }],
+    });
+    await reset();
+  });
+
+  it("an oversize blob omits >128 KB data: chips but keeps them in memory", async () => {
+    await reset();
+    const big = "data:image/png;base64," + "A".repeat(2100 * 1024);
+    addComposerFiles("o1", [
+      { uri: big, name: "big.png" },
+      { uri: "data:text/plain;base64,aGk=", name: "s.txt" },
+    ]);
+    await settle();
+    // The whole blob crossed ~2 MB, so only the heavy data: chip dropped.
+    assert.deepEqual(JSON.parse(localStorageStub.getItem(KEY) ?? "null"), {
+      o1: [{ uri: "data:text/plain;base64,aGk=", name: "s.txt" }],
+    });
+    assert.equal(composerFiles.value.o1?.length, 2);
+    await reset();
+  });
+  it("a quota bounce retries slimmed once and stays silent when it fails again", async () => {
+    await reset();
+    const big = "data:image/png;base64," + "B".repeat(150 * 1024);
+    addComposerFiles("q1", [{ uri: big, name: "big.png" }]);
+    await settle();
+    const orig = localStorageStub.setItem.bind(localStorageStub);
+    let bounces = 1; // first write for the key throws, rest go through
+    localStorageStub.setItem = (k: string, v: string) => {
+      if (k === KEY && bounces > 0) {
+        bounces--;
+        throw new Error("quota exceeded");
+      }
+      return orig(k, v);
+    };
+    try {
+      // A second chip makes the watcher write again: first write bounces,
+      // the slim retry (without the 150 KB data: chip) lands.
+      addComposerFiles("q1", [{ uri: "file:///w/s.pdf", name: "s.pdf" }]);
+      await settle();
+      assert.deepEqual(JSON.parse(localStorageStub.getItem(KEY) ?? "null"), {
+        q1: [{ uri: "file:///w/s.pdf", name: "s.pdf" }],
+      });
+      assert.equal(composerFiles.value.q1?.length, 2);
+      // Both writes failing stays silent and leaves memory untouched.
+      bounces = Infinity;
+      addComposerFiles("q2", [{ uri: "file:///w/t.txt", name: "t.txt" }]);
+      await settle();
+      assert.equal(composerFiles.value.q2?.length, 1);
+    } finally {
+      localStorageStub.setItem = orig;
+      await reset();
+    }
+  });
+});
+
+describe("attachment snapshot bridge", () => {
+  it("resolves the disk path when the host replies before the timeout", async () => {
+    const uri = "data:image/png;base64,AA";
+    const p = requestAttachmentSnapshot("ses_x", uri, "dot.png", "image/png");
+    await settle();
+    assert.deepEqual(hostPosted[hostPosted.length - 1], {
+      type: "save-attachment",
+      sessionId: "ses_x",
+      uri,
+      name: "dot.png",
+      mime: "image/png",
+    });
+    hostMessage({
+      type: "attachment-saved",
+      sessionId: "ses_x",
+      from: uri,
+      path: "file:///w/.opencode/attachments/ses_x/1-dot.png",
+    });
+    // The composer swaps the chip's uri for this path (attachFiles).
+    assert.equal(await p, "file:///w/.opencode/attachments/ses_x/1-dot.png");
+  });
+  it("times out to undefined so the chip keeps its data URI", async () => {
+    const uri = "data:application/pdf;base64,BB";
+    const p = requestAttachmentSnapshot("ses_x", uri, "doc.pdf", "application/pdf");
+    await settle();
+    assert.equal(fireExact(2000), 1);
+    assert.equal(await p, undefined);
+    // A late reply finds no waiter — nothing throws, nothing resolves twice.
+    hostMessage({ type: "attachment-saved", from: uri, path: "file:///late" });
+    assert.equal(await p, undefined);
   });
 });
 

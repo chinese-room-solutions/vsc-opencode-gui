@@ -1994,6 +1994,19 @@ function fileMime(uri: string): string {
   return MIME_OF_EXT[ext] ?? "text/plain";
 }
 
+// The mime of a chip as it sits in the composer: a data URI self-describes,
+// a snapshotted path classifies by name with the text stamp as the
+// tiebreaker. `undefined` = not classifiable — the send-time re-gate
+// refuses the send then. One shape for both gates (files-picked, send).
+export function chipMime(f: {
+  uri: string;
+  name: string;
+  text?: boolean;
+}): string | undefined {
+  if (f.uri.startsWith("data:")) return fileMime(f.uri);
+  return attachMime(f.name, "") ?? (f.text ? "text/plain" : undefined);
+}
+
 // v1 message parts we send. Text carries the prompt (mentions stay inline);
 // a file part is an attachment (data-URI) or a mention (file:// url plus a
 // source range pointing back at the "@path" text); an agent part switches

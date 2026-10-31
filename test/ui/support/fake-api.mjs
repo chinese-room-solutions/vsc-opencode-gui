@@ -1180,12 +1180,21 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if ((m = path.match(/^\/session\/([^/]+)\/prompt_async$/))) {
-      await readBody(req);
+      const body = await readBody(req);
       if (failNextPrompt) {
         failNextPrompt = false;
         json(res, 500, { message: "Internal error" });
         return;
       }
+      // Record the parts (the attach spec asserts the file:// swap);
+      // promptCalls otherwise serves the v2 route below.
+      promptCalls.push({
+        sessionID: m[1],
+        text: "",
+        parts: Array.isArray(body.parts) ? body.parts : [],
+        at: Date.now(),
+        seq: ++recSeq,
+      });
       runPrompt(m[1]);
       // 200+JSON, not 204: Chrome logs ERR_ABORTED on preflighted CORS
       // POSTs answered 204 (fetch resolves fine, the network log cries).

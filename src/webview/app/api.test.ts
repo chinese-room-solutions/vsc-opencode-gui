@@ -11,6 +11,7 @@ import {
   attachAllowed,
   attachMime,
   attachmentParts,
+  chipMime,
   clampPartText,
   clampToolOutput,
   createSession,
@@ -238,6 +239,43 @@ describe("api", () => {
       assert.equal(attachAllowed("audio/mpeg"), false);
       assert.equal(attachAllowed("video/mp4"), false);
       assert.equal(attachAllowed("application/octet-stream"), false);
+    });
+  });
+
+  describe("chipMime", () => {
+    it("takes the mime from a data: uri", () => {
+      assert.equal(
+        chipMime({ uri: "data:image/png;base64,AA", name: "p.png" }),
+        "image/png",
+      );
+      assert.equal(
+        chipMime({ uri: "data:application/pdf;base64,AA", name: "doc.pdf" }),
+        "application/pdf",
+      );
+      assert.equal(
+        chipMime({ uri: "data:text/plain;base64,aGk=", name: "n.weird" }),
+        "text/plain",
+      );
+    });
+    it("classifies a disk path by name extension", () => {
+      assert.equal(
+        chipMime({ uri: "file:///w/.opencode/attachments/s/1-a.png", name: "a.png" }),
+        "image/png",
+      );
+      assert.equal(
+        chipMime({ uri: "file:///w/notes.txt", name: "notes.txt" }),
+        "text/plain",
+      );
+    });
+    it("falls back to the text stamp when the name doesn't classify", () => {
+      assert.equal(
+        chipMime({ uri: "file:///w/1-notes.weird", name: "notes.weird", text: true }),
+        "text/plain",
+      );
+    });
+    it("stays undefined when nothing classifies", () => {
+      assert.equal(chipMime({ uri: "file:///w/blob.bin", name: "blob.bin" }), undefined);
+      assert.equal(chipMime({ uri: "file:///w/notes.weird", name: "notes.weird" }), undefined);
     });
   });
 

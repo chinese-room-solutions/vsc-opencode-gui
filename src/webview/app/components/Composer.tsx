@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "preact/hooks";
 import type { JSX } from "preact";
-import { attachAllowed, attachMime, extOf, findFiles, isText, sniffsText, type SessionStatus } from "../api";
+import { attachAllowed, attachMime, chipMime, extOf, findFiles, isText, sniffsText, type SessionStatus } from "../api";
 import { postToHost, openFile, openExternal } from "../host";
 import { atTrigger, mentionTokens, resolve, type MentionToken } from "../mentions";
 import {
@@ -71,6 +71,26 @@ const readDataUrl = (f: File) =>
     r.readAsDataURL(f);
   });
 
+// A small JPEG preview of an image File, drawn from the File itself (the
+// big data URI never rides the canvas path). Max edge 512 px; best effort —
+// any failure leaves the thumb unset and the chip renders from its uri.
+async function imageThumb(f: File): Promise<string | undefined> {
+  try {
+    const bmp = await createImageBitmap(f);
+    const scale = Math.min(1, 512 / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bmp.width * scale));
+    canvas.height = Math.max(1, Math.round(bmp.height * scale));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return undefined;
+    ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    bmp.close();
+    return canvas.toDataURL("image/jpeg", 0.85);
+  } catch {
+    return undefined;
+  }
+}
+
 let pasteSeq = 0;
 
 // Turn pasted/dropped Files into composer chips (data-URI attachments).
@@ -85,7 +105,12 @@ async function attachFiles(
 ): Promise<void> {
   const key = sessionId ?? "draft";
   const input = attachInputs(sessionId);
-  const added: { uri: string; name: string }[] = [];
+  const added: {
+    uri: string;
+    name: string;
+    text?: boolean;
+    thumb?: string;
+  }[] = [];
   const reasons: [label: string, n: number][] = [];
   const refuse = (label: string) => {
     const row = reasons.find(([l]) => l === label);
@@ -127,15 +152,22 @@ async function attachFiles(
       refuse("unreadable");
       continue;
     }
-    // Non-image attachments snapshot to disk before the chip exists: the
-    // chip is click-to-open from birth and the prompt carries a file://
-    // url the server reads directly (no base64 through the relay). Images
-    // keep their data URI — the chip row and lightbox render it directly.
-    // A timeout or error keeps the data URI (inert but sendable).
-    if (!mime.startsWith("image/")) {
-      uri = (await requestAttachmentSnapshot(key, uri, name, mime)) ?? uri;
-    }
-    added.push({ uri, name });
+    // Images pre-render a small thumb here — the chip row and lightbox
+    // draw it, not the full payload. A static JPEG thumb for a GIF is
+    // fine; any failure just leaves it unset.
+    const thumb = mime.startsWith("image/") ? await imageThumb(f) : undefined;
+    // Every attachment snapshots to disk before the chip exists: the chip
+    // is click-to-open from birth and the prompt carries a file:// url
+    // the server reads directly (no base64 through the relay). A timeout
+    // or error keeps the data URI (inert but sendable).
+    uri = (await requestAttachmentSnapshot(key, uri, name, mime)) ?? uri;
+    // The text stamp keeps a content-sniffed file classifiable once its
+    // data URI is gone (chipMime at send reads name, then this).
+    const chip: { uri: string; name: string; text?: boolean; thumb?: string } =
+      { uri, name };
+    if (mime === "text/plain") chip.text = true;
+    if (thumb) chip.thumb = thumb;
+    added.push(chip);
   }
   if (added.length) addComposerFiles(key, added);
   if (reasons.length) {
@@ -702,6 +734,26 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
     // the server (delivered as the next one); commands have no server
     // queue, so they're held client-side and fire when the turn ends.
     if (!el || !text.trim()) return;
+    // Restored chips (and a model switched after attach) bypassed the
+    // attach-time gate — re-check before the text leaves the field, so a
+    // refusal leaves text and chips in place to fix. Commands carry no
+    // attachments.
+    if (!text.startsWith("/")) {
+      const input = attachInputs(props.sessionId);
+      const refused = files.filter((f) => {
+        const mime = chipMime(f);
+        return mime === undefined || !attachAllowed(mime, input);
+      });
+      if (refused.length) {
+        const n = refused.length;
+        setSendError(
+          `${n} attachment${n > 1 ? "s" : ""} not sent - not supported by this model. Remove ${
+            n > 1 ? "them" : "it"
+          } or switch models.`,
+        );
+        return;
+      }
+    }
     el.value = "";
     resize(el);
     syncText(el);
@@ -1003,14 +1055,16 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
         {files.length > 0 && (
           <div class="composer-files">
             {files.map((f, i) =>
-              f.uri.startsWith("data:image/") ? (
+              (f.thumb ?? f.uri).startsWith("data:image/") ? (
                 <span
                   class="file-chip chip-img"
                   key={`${f.name}:${i}`}
                   title={f.name}
-                  onClick={() => openLightbox({ uri: f.uri, name: f.name })}
+                  onClick={() =>
+                    openLightbox({ uri: f.thumb ?? f.uri, name: f.name })
+                  }
                 >
-                  <img src={f.uri} alt={f.name} />
+                  <img src={f.thumb ?? f.uri} alt={f.name} />
                   <button
                     type="button"
                     class="chip-x"
