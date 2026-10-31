@@ -19,10 +19,12 @@ import {
   fetchSessions,
   forgetTruncatedParts,
   isTruncatedPart,
+  lastTerminalFrame,
   normalizePermission,
   normalizeSession,
   promptSession,
   setDialect,
+  shellNoticeMeta,
   sniffsText,
   streamingArg,
   stringifyError,
@@ -523,5 +525,125 @@ describe("api", () => {
   it("api-result frames that match no request are ignored", async () => {
     dispatchWindowMessage({ type: "api-result", id: 99999, ok: true });
     await flushEvents();
+  });
+});
+
+describe("shell lifecycle synthetics", () => {
+  it("shellNoticeMeta prefers the description, else the wrapper attribute (quotes included)", () => {
+    const meta = {
+      source: "shell",
+      shellID: "sh_1",
+      state: "completed",
+      exit: 0,
+      truncated: false,
+    };
+    const withDesc = shellNoticeMeta(
+      meta,
+      "gh run watch 1 --exit-status",
+      '<shell id="job_1" state="completed" command="gh run watch 1 --exit-status">\nframe\n</shell>',
+    );
+    assert.deepEqual(withDesc, {
+      shellID: "sh_1",
+      state: "completed",
+      command: "gh run watch 1 --exit-status",
+      exit: 0,
+    });
+    // The user-shell emitter passes no description; the command lives in
+    // the raw-interpolated attribute — a command containing quotes must
+    // survive (the run ends at the open line's last `">`).
+    const fromTag = shellNoticeMeta(
+      meta,
+      undefined,
+      'The following shell command was executed by the user:\n<shell id="sh_1" state="cancelled" command="git commit -m "fix: a" b">\nframe\n</shell>',
+    );
+    assert.equal(fromTag?.command, 'git commit -m "fix: a" b');
+    // State comes from the metadata, not the wrapper's attribute.
+    assert.equal(fromTag?.state, "completed");
+  });
+
+  it("start-failure shape: no shellID, no wrapper, command from the description", () => {
+    const n = shellNoticeMeta(
+      { source: "shell", state: "error" },
+      "npm publish",
+      "User shell command failed to start:\nnpm publish\n\nENOENT",
+    );
+    assert.deepEqual(n, { state: "error", command: "npm publish" });
+  });
+
+  it("non-shell sources are not shell notices", () => {
+    assert.equal(shellNoticeMeta({ source: "subagent" }, "d", "t"), undefined);
+    assert.equal(shellNoticeMeta(undefined, "d", "t"), undefined);
+  });
+
+  it("lastTerminalFrame keeps the last repaint frame", () => {
+    const frames = [
+      "Refreshing run status every 3 seconds. Press Ctrl+C to quit.",
+      "run A\n  step 1 pending",
+      "Refreshing run status every 3 seconds. Press Ctrl+C to quit.",
+      "run A\n  step 1 done",
+    ].join("\n");
+    assert.equal(
+      lastTerminalFrame(frames),
+      "Refreshing run status every 3 seconds. Press Ctrl+C to quit.\nrun A\n  step 1 done",
+    );
+    // A single frame passes through untouched.
+    assert.equal(lastTerminalFrame("only one frame\nhere"), "only one frame\nhere");
+    // No usable header line — untouched.
+    assert.equal(lastTerminalFrame("short\nsecond"), "short\nsecond");
+  });
+
+  it("fetch serves a shell-note row as a tagged user row", async () => {
+    onApi((call) => {
+      if (call.path.includes("/api/session/sy/message"))
+        return {
+          data: [
+            {
+              id: "m1",
+              type: "synthetic",
+              text: '<shell id="sh_1" state="completed" command="gh run watch">\nframe\n</shell>',
+              description: "gh run watch",
+              metadata: { source: "shell", shellID: "sh_1", state: "completed" },
+              time: { created: 1 },
+            },
+          ],
+        };
+    });
+    const page = await fetchMessages("sy");
+    assert.equal(page!.messages.length, 1);
+    assert.equal(page!.messages[0].info.role, "user");
+    const part = page!.messages[0].parts[0] as {
+      synthetic?: boolean;
+      metadata?: { shellNotice?: unknown };
+    };
+    assert.equal(part.synthetic, true);
+    assert.deepEqual(part.metadata?.shellNotice, {
+      shellID: "sh_1",
+      state: "completed",
+      command: "gh run watch",
+    });
+  });
+
+  it("fetch serves the restart note as a tagged user row", async () => {
+    onApi((call) => {
+      if (call.path.includes("/api/session/sz/message"))
+        return {
+          data: [
+            {
+              id: "m2",
+              type: "synthetic",
+              text: "The server restarted while you were working.",
+              metadata: { notice: "restart" },
+              time: { created: 2 },
+            },
+          ],
+        };
+    });
+    const page = await fetchMessages("sz");
+    const part = page!.messages[0].parts[0] as {
+      synthetic?: boolean;
+      metadata?: { restartNotice?: unknown };
+    };
+    assert.equal(part.synthetic, true);
+    assert.deepEqual(part.metadata?.restartNotice, true);
   });
 });

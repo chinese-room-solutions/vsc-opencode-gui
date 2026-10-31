@@ -1974,6 +1974,60 @@ describe("v2 SSE → pipeline translation", () => {
       ),
       [],
     );
+    // A shell lifecycle note rides the same envelope; the part carries the
+    // metadata.shellNotice tag (text kept raw — the card strips the wrapper).
+    const sh = translateV2Event(
+      ev("session.inbox.enqueued", {
+        sessionID: "s",
+        inboxID: "msg_shell1",
+        item: {
+          type: "synthetic",
+          payload: {
+            text: '<shell id="sh_1" state="completed" command="gh run watch 1 --exit-status">\nframe\n</shell>',
+            description: "gh run watch 1 --exit-status",
+            metadata: {
+              source: "shell",
+              shellID: "sh_1",
+              state: "completed",
+              exit: 0,
+            },
+          },
+        },
+      }),
+    );
+    assert.equal(sh.length, 2);
+    assert.deepEqual(
+      (sh[1].data as { part?: { metadata?: Record<string, unknown> } }).part
+        ?.metadata,
+      {
+        shellNotice: {
+          shellID: "sh_1",
+          state: "completed",
+          command: "gh run watch 1 --exit-status",
+          exit: 0,
+        },
+      },
+    );
+    // The server's restart note tags quieter: metadata.notice "restart".
+    const rn = translateV2Event(
+      ev("session.inbox.enqueued", {
+        sessionID: "s",
+        inboxID: "msg_re1",
+        item: {
+          type: "synthetic",
+          payload: {
+            text: "The server restarted while you were working. Continue from where you left off without repeating completed work.",
+            metadata: { notice: "restart" },
+          },
+        },
+      }),
+    );
+    assert.equal(rn.length, 2);
+    assert.deepEqual(
+      (rn[1].data as { part?: { metadata?: Record<string, unknown> } }).part
+        ?.metadata,
+      { restartNotice: true },
+    );
     assert.deepEqual(
       translateV2Event(
         ev("session.moved", {

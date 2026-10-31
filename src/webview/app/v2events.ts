@@ -9,6 +9,7 @@
 import type { ServerEvent } from "./events";
 import {
   formToQuestion,
+  shellNoticeMeta,
   subagentNoticeMeta,
   toMs,
   v2CompactionTrigger,
@@ -481,12 +482,13 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
     // A server-injected note (compaction bookkeeping, notices). The
     // official client renders it like a user bubble; ours lands it as a
     // plain assistant row — role "user" would entangle it with the echo
-    // retirement and the ghost-turn abort, which watch user rows. A peer
-    // injection keeps its provenance on the part (synthetic +
-    // metadata.peerMessage) so the peer card renders live; a finished
-    // background sub-agent (metadata.source "subagent") tags
-    // metadata.subagentNotice the same way. The durable fetch later serves
-    // both as the v1-shaped user row (same id).
+    // retirement and the ghost-turn abort, which watch user rows. Tagged
+    // notes keep their provenance on the part so their cards render live:
+    // a peer injection (metadata.peerMessage), a finished background
+    // sub-agent (metadata.subagentNotice), a shell lifecycle note
+    // (metadata.shellNotice), the server's restart note
+    // (metadata.restartNotice). The durable fetch later serves all of them
+    // as the v1-shaped user row (same id).
     //
     // Two wire shapes say the same thing: a bare session.synthetic, and —
     // what the 2.1 server actually publishes for an injection — the
@@ -503,14 +505,12 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
           ? d.inboxID
           : undefined) ?? v2RowID(undefined, event.id);
       const peer = src.metadata?.peerMessage;
-      const sub =
-        typeof src.text === "string"
-          ? subagentNoticeMeta(
-              src.metadata,
-              typeof src.description === "string" ? src.description : undefined,
-              src.text,
-            )
-          : undefined;
+      const desc =
+        typeof src.description === "string" ? src.description : undefined;
+      const text = typeof src.text === "string" ? src.text : undefined;
+      const sub = text ? subagentNoticeMeta(src.metadata, desc, text) : undefined;
+      const shell = text ? shellNoticeMeta(src.metadata, desc, text) : undefined;
+      const restart = src.metadata?.notice === "restart";
       return sid && rowID && typeof src.text === "string"
         ? [
             synth("message.updated", {
@@ -532,6 +532,12 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
                 ...(peer ? { synthetic: true, metadata: { peerMessage: peer } } : {}),
                 ...(sub
                   ? { synthetic: true, metadata: { subagentNotice: sub } }
+                  : {}),
+                ...(shell
+                  ? { synthetic: true, metadata: { shellNotice: shell } }
+                  : {}),
+                ...(restart
+                  ? { synthetic: true, metadata: { restartNotice: true } }
                   : {}),
               },
             }),

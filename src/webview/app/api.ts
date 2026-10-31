@@ -917,6 +917,64 @@ export function subagentNoticeMeta(
   };
 }
 
+export interface ShellNotice {
+  shellID?: string;
+  state: string;
+  command?: string;
+  exit?: number;
+  signal?: string;
+  timeout?: boolean;
+}
+
+// A shell lifecycle note (v2): the server reports a shell run's terminal
+// state as a synthetic tagged metadata.source "shell" — the agent's
+// background runs, the user's own native shells, and restart recovery of
+// orphaned ones (which carry no shellID). The command rides the description
+// when the emitter passes one; the user-shell emitter puts it only in the
+// <shell …> wrapper's attribute, raw-interpolated (a command may itself
+// contain quotes), so the attribute run ends at the open line's last `">`.
+export function shellNoticeMeta(
+  metadata: Record<string, unknown> | undefined,
+  description: string | undefined,
+  text: string,
+): ShellNotice | undefined {
+  const m = metadata as
+    | {
+        source?: unknown;
+        shellID?: unknown;
+        state?: unknown;
+        exit?: unknown;
+        signal?: unknown;
+        timeout?: unknown;
+      }
+    | undefined;
+  if (m?.source !== "shell") return undefined;
+  const command =
+    typeof description === "string" && description
+      ? description
+      : text.match(/^<shell\s[^\n]*?command="(.*)">\n/m)?.[1];
+  return {
+    ...(typeof m.shellID === "string" && m.shellID ? { shellID: m.shellID } : {}),
+    state: typeof m.state === "string" && m.state ? m.state : "completed",
+    ...(command ? { command } : {}),
+    ...(typeof m.exit === "number" ? { exit: m.exit } : {}),
+    ...(typeof m.signal === "string" && m.signal ? { signal: m.signal } : {}),
+    ...(m.timeout === true ? { timeout: true } : {}),
+  };
+}
+
+// Captured terminal bytes of a repaint tool (gh run watch, watch(1)) stack
+// one full-screen frame per refresh — N copies of the same table. Every
+// frame reprints its header line, so everything before the LAST occurrence
+// of the first line is an earlier frame; the last frame is current truth.
+export function lastTerminalFrame(text: string): string {
+  const nl = text.indexOf("\n");
+  const head = nl < 0 ? text.trim() : text.slice(0, nl).trim();
+  if (head.length < 8) return text;
+  const last = text.lastIndexOf(head);
+  return last > 0 ? text.slice(last) : text;
+}
+
 const TOOL_NAMES: Record<string, string> = {
   bash: "Shell",
   shell: "Shell",
@@ -1367,8 +1425,11 @@ export async function fetchMessages(
       // synthetic part tagged metadata.peerMessage) so the peer card
       // renders and the row heads its own turn. A finished background
       // sub-agent (metadata.source "subagent") maps the same way, tagged
-      // metadata.subagentNotice for the notice card. Other synthetic notes
-      // stay plain assistant rows.
+      // metadata.subagentNotice for the notice card; a shell lifecycle note
+      // (metadata.source "shell") tags metadata.shellNotice, and the
+      // server's restart note (metadata.notice "restart") tags
+      // metadata.restartNotice. Other synthetic notes stay plain assistant
+      // rows.
       const peer = (r.metadata as { peerMessage?: unknown } | undefined)
         ?.peerMessage;
       if (peer) {
@@ -1403,6 +1464,45 @@ export async function fetchMessages(
                 text: clampPartText(`${r.id}:text`, r.text ?? ""),
                 synthetic: true,
                 metadata: { subagentNotice: sub },
+              },
+            ],
+          },
+        ];
+      }
+      const shell = shellNoticeMeta(r.metadata, r.description, r.text ?? "");
+      if (shell) {
+        return [
+          {
+            info: { id: r.id, role: "user", time: r.time },
+            parts: [
+              {
+                id: `${r.id}:text`,
+                messageID: r.id,
+                sessionID: id,
+                type: "text",
+                text: clampPartText(`${r.id}:text`, r.text ?? ""),
+                synthetic: true,
+                metadata: { shellNotice: shell },
+              },
+            ],
+          },
+        ];
+      }
+      const restart =
+        (r.metadata as { notice?: unknown } | undefined)?.notice === "restart";
+      if (restart) {
+        return [
+          {
+            info: { id: r.id, role: "user", time: r.time },
+            parts: [
+              {
+                id: `${r.id}:text`,
+                messageID: r.id,
+                sessionID: id,
+                type: "text",
+                text: clampPartText(`${r.id}:text`, r.text ?? ""),
+                synthetic: true,
+                metadata: { restartNotice: true },
               },
             ],
           },

@@ -20,7 +20,7 @@ import {
   sessions,
   queuedTurns,
 } from "../store";
-import { extOf, isText, isTool, tokensTotal, attachMime, type FilePart, type Part, type TextPart, type ToolPart } from "../api";
+import { extOf, isText, isTool, lastTerminalFrame, tokensTotal, attachMime, type FilePart, type Part, type TextPart, type ToolPart } from "../api";
 import { pillifyOwnText, resourcedParts } from "../mentions";
 import { enhanceBlockquotes, enhanceCodeBlocks, enhanceInlineCode, renderMarkdown, tagFileRefs } from "../markdown";
 import { openFile, openExternal } from "../host";
@@ -524,6 +524,86 @@ function subagentNotice(parts: Part[]): {
   return undefined;
 }
 
+// A shell lifecycle note (v2): metadata.shellNotice on a synthetic part —
+// the server's terminal report for a shell run (the agent's background
+// runs, the user's own native shells, restart recovery of orphaned ones).
+// The <shell …> wrapper rode the text for the model; the card shows the
+// captured output. A truncated capture can lose the closing tag — the
+// body falls back to the raw text.
+function shellNotice(parts: Part[]): {
+  n: {
+    shellID?: string;
+    state: string;
+    command?: string;
+    exit?: number;
+    signal?: string;
+    timeout?: boolean;
+  };
+  text: string;
+} | undefined {
+  for (const p of parts) {
+    if (!isText(p)) continue;
+    const n = p.metadata?.shellNotice as
+      | {
+          shellID?: unknown;
+          state?: unknown;
+          command?: unknown;
+          exit?: unknown;
+          signal?: unknown;
+          timeout?: unknown;
+        }
+      | undefined;
+    if (!p.synthetic || !n || typeof n.state !== "string") continue;
+    const raw = p.text ?? "";
+    const open = raw.match(/<shell\s[^\n]*>\n/);
+    const at = open?.index;
+    const close = open && at !== undefined ? raw.lastIndexOf("</shell>") : -1;
+    const body =
+      open && at !== undefined && close > at
+        ? raw.slice(at + open[0].length, close)
+        : raw;
+    return {
+      n: {
+        ...(typeof n.shellID === "string" && n.shellID
+          ? { shellID: n.shellID }
+          : {}),
+        state: n.state,
+        ...(typeof n.command === "string" && n.command
+          ? { command: n.command }
+          : {}),
+        ...(typeof n.exit === "number" ? { exit: n.exit } : {}),
+        ...(typeof n.signal === "string" && n.signal
+          ? { signal: n.signal }
+          : {}),
+        ...(n.timeout === true ? { timeout: true } : {}),
+      },
+      text: body,
+    };
+  }
+  return undefined;
+}
+
+// Captured terminal bytes, verbatim — no markdown pass (a repaint tool's
+// frames read as bullet soup through it). Repaint frames stack one screen
+// per refresh; lastTerminalFrame keeps the current one. A long capture
+// clips to a scroll box.
+function ShellOutput(props: { text: string }) {
+  const last = lastTerminalFrame(props.text);
+  const text =
+    last.length > 20000
+      ? `… earlier output elided …\n${last.slice(-20000)}`
+      : last;
+  return <pre class="shell-out">{text}</pre>;
+}
+
+// The server's restart note (metadata.notice "restart"): an instruction to
+// the model, not transcript content — the card is one quiet line.
+function restartNotice(parts: Part[]): boolean {
+  return parts.some(
+    (p) => isText(p) && p.synthetic && p.metadata?.restartNotice === true,
+  );
+}
+
 // Attachment chips above a user pill's text (Claude Code's): images a slim
 // thumbnail crop — name and pixel size move to the hover title — other files
 // their name; an image click opens the lightbox, a chip with an on-disk path
@@ -913,6 +993,54 @@ function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
       </div>
     );
   }
+  // The shell notice card renders from the part tag too (peer pattern):
+  // live it lands as an assistant row, the durable fetch serves a user row.
+  const shell = shellNotice(parts);
+  if (shell) {
+    const word =
+      shell.n.state === "error"
+        ? "failed"
+        : shell.n.state === "cancelled"
+          ? "stopped"
+          : "finished";
+    const detail = shell.n.timeout
+      ? "timed out"
+      : shell.n.signal
+        ? `killed by ${shell.n.signal}`
+        : shell.n.state !== "error" &&
+            shell.n.exit !== undefined &&
+            shell.n.exit !== 0
+          ? `exit ${shell.n.exit}`
+          : undefined;
+    // Unknown wire states get the neutral dot, not a missing one.
+    const dot = ["completed", "error", "cancelled"].includes(shell.n.state)
+      ? shell.n.state
+      : "cancelled";
+    return (
+      <div class="msg user shell-notice">
+        <div class="notice-head">
+          <span class={`notice-dot ${dot}`} aria-hidden="true" />
+          <span class="notice-title">
+            {`Shell ${word}${detail ? ` · ${detail}` : ""}${
+              shell.n.command ? ` · ${shell.n.command}` : ""
+            }`}
+          </span>
+        </div>
+        {shell.text !== "" && <ShellOutput text={shell.text} />}
+      </div>
+    );
+  }
+  if (restartNotice(parts))
+    return (
+      <div class="msg assistant restart-note">
+        <div class="notice-head">
+          <span class="notice-dot cancelled" aria-hidden="true" />
+          <span class="notice-title">
+            Server restarted — the turn continued from where it stopped
+          </span>
+        </div>
+      </div>
+    );
   if (info.role === "user") {
     // The optimistic echo carries a "pending:" id — only a QUEUED turn can
     // act on it (the dequeue is local); an already-POSTed steer has no

@@ -2815,6 +2815,31 @@ body {
   background: var(--oc-text-2);
 }
 
+/* Shell lifecycle notice (server-injected): pill like the peer/subagent
+   cards, no drill-down. The captured output is verbatim terminal bytes in
+   a clipped scroll box — collapsed by the height cap, not by a toggle. */
+.shell-notice {
+  cursor: default;
+}
+
+.shell-out {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  /* The user-pill clamp's 5-line budget, in this box's own 1.45 metrics. */
+  max-height: calc(5 * 1.45em);
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre;
+  background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.1));
+  border-radius: 4px;
+}
+
+/* The server's restart note: one quiet line, no pill. */
+.restart-note .notice-head {
+  padding: 0 2px;
+}
+
 /* Folded pills preview at a 5-line budget. Short messages stay whole and
    bare; replies never fold — the reader comes for them in full. */
 .user-text.clamped {

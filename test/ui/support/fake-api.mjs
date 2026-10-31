@@ -869,6 +869,46 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, { ok: true });
       return;
     }
+    // A shell lifecycle note / restart note on the same envelope — the
+    // server's terminal report for a shell run (metadata.source "shell",
+    // <shell…> wrapper around the captured bytes) and its restart notice
+    // (metadata.notice "restart"). The shell payload stacks two repaint
+    // frames, like a captured gh run watch.
+    if (method === "POST" && path === "/__control/shell-note") {
+      const body = await readBody(req);
+      const frame = (step) =>
+        [
+          "Refreshing run status every 3 seconds. Press Ctrl+C to quit.",
+          "v0.1.1 release · 41234939455",
+          "JOBS",
+          `release (ID 124636603351)`,
+          `  ${step} Run npm ci`,
+        ].join("\n");
+      const payload =
+        body.kind === "restart"
+          ? {
+              text: "The server restarted while you were working. Continue from where you left off without repeating completed work.",
+              metadata: { notice: "restart" },
+            }
+          : {
+              text: `<shell id="sh_rig1" state="completed" command="gh run watch 41234939455 --exit-status">\n${frame("*")}\n\n${frame("✓")}\n</shell>`,
+              description: "gh run watch 41234939455 --exit-status",
+              metadata: {
+                source: "shell",
+                shellID: "sh_rig1",
+                state: "completed",
+                exit: 0,
+                truncated: false,
+              },
+            };
+      emitV2("session.inbox.enqueued", {
+        sessionID: SESSION_ID,
+        inboxID: body.inboxID ?? (body.kind === "restart" ? "msg_restart1" : "msg_shellnote1"),
+        item: { type: "synthetic", payload },
+      });
+      json(res, 200, { ok: true });
+      return;
+    }
     if (method === "GET" && path === "/__control/shell") {
       json(res, 200, { deletes: shellDeletes });
       return;
