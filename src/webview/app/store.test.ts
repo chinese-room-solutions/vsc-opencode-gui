@@ -39,6 +39,7 @@ import {
   forkSession,
   fmtDur,
   formatDateTime,
+  getDraft,
   hasOlder,
   hasQueued,
   hostMessage,
@@ -64,6 +65,7 @@ import {
   providers,
   purgeProject,
   purgeState,
+  putDraft,
   queueCommand,
   queuedTurns,
   redoSession,
@@ -3091,8 +3093,9 @@ describe("sendPrompt", () => {
     assert.deepEqual(route.value, { view: "session", id: "d1" });
     assert.equal((callsFor("/session")[0].body as { agent?: string }).agent, "plan");
     assert.deepEqual(composerFiles.value.draft, []);
-    // a successful send clears the session's attachments (they were sent)
-    assert.deepEqual(composerFiles.value["d1"], []);
+    // a successful send never seeds the session key — the draft's chips
+    // cleared at submit (the POST carries the `files` argument)
+    assert.equal(composerFiles.value["d1"], undefined);
     const body = callsFor("/session/d1/prompt_async")[0].body as {
       parts: { type: string; name?: string; mime?: string }[];
     };
@@ -3105,21 +3108,83 @@ describe("sendPrompt", () => {
     );
     assert.ok(listOf("d1").some((m) => m.info.id.startsWith("pending:")));
   });
-  it("failure keeps the echo and reports", async () => {
+  it("failure is a take-back: echo drops, composer gets text and files", async () => {
     const sid = "sp2";
+    const file = { uri: "data:text/plain;base64,aGk=", name: "notes.txt" };
     open(sid, []);
     onApi((call) =>
       call.path.startsWith(`/session/${sid}/prompt_async`)
         ? API_FAIL
         : undefined,
     );
-    await sendPrompt(sid, "hi");
-    // The composer already cleared — the bubble is the only copy of the
-    // text, so a failed send must not delete it.
+    await sendPrompt(sid, "hi", [file]);
+    // The bubble read as sent transcript content — a failed send must not
+    // stay on screen; the composer holds everything for the retry.
     assert.equal(
       listOf(sid).some((m) => m.info.id.startsWith("pending:")),
-      true,
+      false,
     );
+    assert.equal(getDraft(sid), "hi");
+    assert.deepEqual(composerFiles.value[sid], [file]);
+    assert.equal(sendError.value?.text, "The message could not be sent.");
+  });
+  it("failure while the user typed meanwhile appends, not clobbers", async () => {
+    const sid = "sp2b";
+    open(sid, []);
+    onApi((call) => {
+      if (call.path.startsWith(`/session/${sid}/prompt_async`)) {
+        putDraft(sid, "typed during the flight");
+        return API_FAIL;
+      }
+      return undefined;
+    });
+    await sendPrompt(sid, "the failed one");
+    assert.equal(getDraft(sid), "typed during the flight\n\nthe failed one");
+  });
+  it("a failure on another session's view waits in that session's draft", async () => {
+    const sid = "sp2c";
+    open(sid, []);
+    const seqBefore = composerInsert.value?.seq;
+    navigate({ view: "session", id: "elsewhere" });
+    onApi((call) =>
+      call.path.startsWith(`/session/${sid}/prompt_async`)
+        ? API_FAIL
+        : undefined,
+    );
+    await sendPrompt(sid, "background fail");
+    // No live insert (the mounted composer belongs to another session) and
+    // no navigation — the text waits in the failed session's draft.
+    assert.equal(composerInsert.value?.seq, seqBefore);
+    assert.deepEqual(route.value, { view: "session", id: "elsewhere" });
+    assert.equal(getDraft(sid), "background fail");
+    // The ambient route for the tests that follow is home.
+    navigate({ view: "home" });
+  });
+  it("a queued flush failure restores the whole entry", async () => {
+    const sid = "sp2d";
+    const file = { uri: "data:text/plain;base64,aGk=", name: "notes.txt" };
+    open(sid, []);
+    commands.value = [{ name: "foo" }];
+    composerFiles.value = { [sid]: [file] };
+    setBusy(sid);
+    queueCommand(sid, "/foo");
+    await sendPrompt(sid, "queued fail", composerFiles.value[sid]);
+    assert.equal(queuedTurns.value.length, 2);
+    assert.deepEqual(composerFiles.value[sid], []);
+    onApi((call) =>
+      call.path.startsWith(`/session/${sid}/prompt_async`)
+        ? API_FAIL
+        : undefined,
+    );
+    // The drain: idle flushes the entries head-first; the prompt POST fails.
+    await sseFlush("session.idle", { sessionID: sid });
+    await sseFlush("session.idle", { sessionID: sid });
+    assert.equal(
+      listOf(sid).some((m) => m.info.id.startsWith("pending:")),
+      false,
+    );
+    assert.equal(getDraft(sid), "queued fail");
+    assert.deepEqual(composerFiles.value[sid], [file]);
     assert.equal(sendError.value?.text, "The message could not be sent.");
   });
   it("failure carries the relay's reason", async () => {

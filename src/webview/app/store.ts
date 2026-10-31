@@ -3269,15 +3269,6 @@ export function addComposerFiles(key: string, files: ComposerFile[]): void {
     [key]: [...(composerFiles.value[key] ?? []), ...files],
   };
 }
-function moveComposerFiles(from: string, to: string): void {
-  const src = composerFiles.value[from];
-  if (!src?.length) return;
-  composerFiles.value = {
-    ...composerFiles.value,
-    [to]: [...(composerFiles.value[to] ?? []), ...src],
-    [from]: [],
-  };
-}
 function clearComposerFiles(key: string): void {
   if (!composerFiles.value[key]?.length) return;
   composerFiles.value = { ...composerFiles.value, [key]: [] };
@@ -4089,10 +4080,28 @@ export async function sendPrompt(
   // status adoption landing in the gap would wipe it until the POST reply.
   appendPending(id, body, files);
   if (target === "draft") {
-    moveComposerFiles("draft", id);
+    clearComposerFiles("draft");
     navigate({ view: "session", id });
+  } else {
+    clearComposerFiles(id);
   }
+  // The send owns the attachments from here — the composer's chips go now
+  // (a failed POST hands them back).
   await postPrompt(id, body, files);
+}
+
+// A failed POST gives the text back to the composer. The store-level
+// restore is unconditional — the assertable state, and the recovery for a
+// composer that isn't mounted (the restore effect re-reads the draft on
+// session switch). When the failed session's own composer IS mounted, a
+// live insert (append mode) repaints it in the same tick; its effect
+// putDrafts the converged string, so both steps land on one shape: the
+// failed body last, after whatever the user typed meanwhile.
+function restoreFailedDraft(id: string, body: string): void {
+  const existing = getDraft(id).replace(/\s+$/, "");
+  putDraft(id, existing ? `${existing}\n\n${body}` : body);
+  if (route.value.view === "session" && route.value.id === id)
+    insertComposerText(body);
 }
 
 // POST a prompt and adopt its turn: optimistic busy, the model/agent
@@ -4156,16 +4165,18 @@ async function postPrompt(
   const sent = await promptSession(id, parts, agent, model);
   if (!sent.ok) {
     unpost();
-    // Keep the echo: dropping it deleted the user's text from the
-    // transcript (the composer already cleared) — a failed send leaves the
-    // bubble in place, the banner explains, and the 4s wait hold retires
-    // the spinner. A turn already running owns the status — a failed steer
-    // over live tools must not idle it.
+    // A failed send is a take-back, not a send: the echo reads as sent
+    // transcript content, and the composer cleared at submit — drop the
+    // bubble and hand the whole draft back (text + attachments) so the
+    // user can retry. A turn already running owns the status — a failed
+    // steer over live tools must not idle it.
+    retirePending(id, body);
+    addComposerFiles(id, files);
+    restoreFailedDraft(id, body);
     if (!hasLiveTools(id))
       sessionStatus.value = { ...sessionStatus.value, [id]: { type: "idle" } };
     setSendError(withReason("The message could not be sent", sent.error));
   } else {
-    clearComposerFiles(id);
     // A v1 pick rode this prompt's body; the row converges on its turn.
     if (dialect() === "v1") v1Picks.delete(id);
     // The send commits a pending revert: the server truncates at the

@@ -512,6 +512,9 @@ let streamCount = 0;
 let recSeq = 0;
 const backgroundCalls = [];
 const promptCalls = [];
+// One-shot failure for the next prompt POST (either dialect's send route):
+// the failed-send take-back spec arms it via /__control/fail-next-prompt.
+let failNextPrompt = false;
 const timers = new Set();
 function later(fn, ms) {
   const t = setTimeout(() => {
@@ -940,6 +943,15 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, { calls: promptCalls });
       return;
     }
+    // The failed-send take-back's lever: the NEXT prompt POST answers 500
+    // ({message} — the shape the relay reads a reason from), then normal
+    // behavior resumes — the retry goes through with its scripted turn.
+    if (method === "POST" && path === "/__control/fail-next-prompt") {
+      await readBody(req);
+      failNextPrompt = true;
+      json(res, 200, { ok: true });
+      return;
+    }
     json(res, 404, { error: "no such control" });
     return;
   }
@@ -1169,6 +1181,11 @@ const server = http.createServer(async (req, res) => {
     }
     if ((m = path.match(/^\/session\/([^/]+)\/prompt_async$/))) {
       await readBody(req);
+      if (failNextPrompt) {
+        failNextPrompt = false;
+        json(res, 500, { message: "Internal error" });
+        return;
+      }
       runPrompt(m[1]);
       // 200+JSON, not 204: Chrome logs ERR_ABORTED on preflighted CORS
       // POSTs answered 204 (fetch resolves fine, the network log cries).
@@ -1182,6 +1199,11 @@ const server = http.createServer(async (req, res) => {
     }
     if ((m = path.match(/^\/api\/session\/([^/]+)\/prompt$/))) {
       const body = await readBody(req);
+      if (failNextPrompt) {
+        failNextPrompt = false;
+        json(res, 500, { message: "Internal error" });
+        return;
+      }
       // Record only — the v2 feed has no scripted turn here (no model).
       // 200+JSON, not 204: Chrome logs ERR_ABORTED on preflighted CORS
       // POSTs answered 204 (fetch resolves fine, the network log cries).
