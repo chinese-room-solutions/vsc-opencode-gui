@@ -1728,8 +1728,12 @@ body {
   cursor: pointer;
 }
 
+/* Hover feedback is fill + ink (the theme's own hover token), never a
+   border swap: some themes' focusBorder (SynthWave's #1f212b) is invisible
+   on its own background, which read as the outline vanishing on hover. */
 .file-chip.chip-open:hover {
-  border-color: var(--vscode-focusBorder);
+  color: var(--oc-text);
+  background: var(--vscode-list-hoverBackground);
 }
 
 .chip-name {

@@ -41,6 +41,28 @@ test("a pdf attaches on a model whose input covers pdf", async ({ page, rig }) =
   expect(watched.errors).toEqual([]);
 });
 
+test("a hovered chip highlights by fill, outline untouched", async ({ page, rig }) => {
+  const watched = watchPage(page);
+  await openSession(page, rig.url);
+  await dropPdf(page);
+  const chip = page.locator(".composer-files .file-chip:not(.chip-img)");
+  await expect(chip).toHaveCount(1);
+  const styles = () =>
+    chip.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { bg: s.backgroundColor, border: s.borderTopColor };
+    });
+  const rest = await styles();
+  await chip.hover();
+  const hovered = await styles();
+  // The theme's own hover token fills the chip; the border never swaps —
+  // some themes' focusBorder is invisible on its own background, which
+  // read as the outline vanishing.
+  expect(hovered.bg).not.toBe(rest.bg);
+  expect(hovered.border).toBe(rest.border);
+  expect(watched.errors).toEqual([]);
+});
+
 test("a pdf is refused with an error on a model without pdf input", async ({ page, rig }) => {
   const watched = watchPage(page);
   await openSession(page, rig.url);

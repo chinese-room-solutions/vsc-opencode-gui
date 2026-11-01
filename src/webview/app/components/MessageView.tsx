@@ -629,7 +629,7 @@ function AttachChip(props: { p: FilePart }) {
     return (
       <span
         class={open ? "file-chip chip-open" : "file-chip"}
-        title={open ? `${name} (click to open)` : name}
+        title={name}
         onClick={open}
       >
         <span class="chip-ext">{extOf(name).toUpperCase()}</span>

@@ -1085,7 +1085,7 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
                     f.uri.startsWith("file:") ? "file-chip chip-open" : "file-chip"
                   }
                   key={`${f.name}:${i}`}
-                  title={f.uri.startsWith("file:") ? `${f.name} (click to open)` : f.name}
+                  title={f.name}
                   onClick={() => {
                     // The + picker's picks keep their on-disk path — open
                     // it, text in the editor, else the system tool.
