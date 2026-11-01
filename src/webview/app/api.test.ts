@@ -26,6 +26,7 @@ import {
   promptSession,
   setDialect,
   shellNoticeMeta,
+  shellWrapper,
   sniffsText,
   streamingArg,
   stringifyError,
@@ -597,6 +598,36 @@ describe("shell lifecycle synthetics", () => {
     assert.equal(fromTag?.command, 'git commit -m "fix: a" b');
     // State comes from the metadata, not the wrapper's attribute.
     assert.equal(fromTag?.state, "completed");
+  });
+
+  it("a multiline command parses out of the wrapper without a description", () => {
+    // Real durable row (a stopped rig boot): the raw-interpolated command
+    // spans lines, which the single-line attribute regex could not cross.
+    const text =
+      'The following shell command was executed by the user:\n' +
+      '<shell id="sh_12f41cb49001KY4ks0TnLDInXx" state="cancelled" command="$env:OPENCODE_SERVER_PASSWORD = \'pw\'\n' +
+      "$env:OPENCODE_READY_SOUND = '0'\n" +
+      'node scripts\\ui-rig.js C:\\rig\\project 47000 *> C:\\rig\\log">\n' +
+      "Command cancelled because the server restarted\n" +
+      "</shell>";
+    const n = shellNoticeMeta({ source: "shell", state: "cancelled" }, undefined, text);
+    assert.equal(
+      n?.command,
+      "$env:OPENCODE_SERVER_PASSWORD = 'pw'\n$env:OPENCODE_READY_SOUND = '0'\nnode scripts\\ui-rig.js C:\\rig\\project 47000 *> C:\\rig\\log",
+    );
+    const w = shellWrapper(text);
+    assert.ok(w);
+    assert.equal(w.body, "Command cancelled because the server restarted");
+  });
+
+  it("shellWrapper slices the body and tolerates body bytes with quotes", () => {
+    const w = shellWrapper(
+      '<shell id="s" state="completed" command="gh run watch 1">\nout "quoted" bytes\n</shell>',
+    );
+    assert.ok(w);
+    assert.equal(w.command, "gh run watch 1");
+    assert.equal(w.body, 'out "quoted" bytes');
+    assert.equal(shellWrapper("no wrapper here"), undefined);
   });
 
   it("start-failure shape: no shellID, no wrapper, command from the description", () => {

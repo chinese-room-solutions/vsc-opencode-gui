@@ -24,7 +24,7 @@ import {
   sessions,
   queuedTurns,
 } from "../store";
-import { extOf, isText, isTool, lastTerminalFrame, tokensTotal, attachMime, type FilePart, type Part, type TextPart, type ToolPart } from "../api";
+import { extOf, isText, isTool, lastTerminalFrame, shellWrapper, tokensTotal, attachMime, type FilePart, type Part, type TextPart, type ToolPart } from "../api";
 import { pillifyOwnText, resourcedParts } from "../mentions";
 import { enhanceBlockquotes, enhanceCodeBlocks, enhanceInlineCode, renderMarkdown, tagFileRefs } from "../markdown";
 import { openFile, openExternal } from "../host";
@@ -566,13 +566,11 @@ function shellNotice(parts: Part[]): {
       | undefined;
     if (!p.synthetic || !n || typeof n.state !== "string") continue;
     const raw = p.text ?? "";
-    const open = raw.match(/<shell\s[^\n]*>\n/);
-    const at = open?.index;
-    const close = open && at !== undefined ? raw.lastIndexOf("</shell>") : -1;
-    const body =
-      open && at !== undefined && close > at
-        ? raw.slice(at + open[0].length, close)
-        : raw;
+    // The wrapper's command attribute may span lines (a raw-interpolated
+    // multiline command) — the structural parse slices body and command
+    // where the single-line regexes failed on the first newline.
+    const wrapper = shellWrapper(raw);
+    const body = wrapper ? wrapper.body : raw;
     return {
       n: {
         ...(typeof n.shellID === "string" && n.shellID

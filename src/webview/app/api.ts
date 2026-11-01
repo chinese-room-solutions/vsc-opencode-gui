@@ -990,7 +990,7 @@ export function shellNoticeMeta(
   const command =
     typeof description === "string" && description
       ? description
-      : text.match(/^<shell\s[^\n]*?command="(.*)">\n/m)?.[1];
+      : shellWrapper(text)?.command;
   return {
     ...(typeof m.shellID === "string" && m.shellID ? { shellID: m.shellID } : {}),
     state: typeof m.state === "string" && m.state ? m.state : "completed",
