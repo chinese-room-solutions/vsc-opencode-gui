@@ -1522,10 +1522,12 @@ export function formatDateTime(ts: number): string {
   );
 }
 
-// Hover text for a session row or tab: both moments, one per line.
+// Hover text for a session row or tab: both moments and the id, one per
+// line.
 export function formatSessionTimes(s: Session): string {
   return `Created ${formatDateTime(s.time.created)}
-Last activity ${formatDateTime(s.time.updated)}`;
+Last activity ${formatDateTime(s.time.updated)}
+ID ${s.id}`;
 }
 
 // A session's letter tile. The letter follows the title; the color binds to

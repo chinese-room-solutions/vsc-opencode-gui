@@ -109,7 +109,7 @@ export function TabsBar() {
                   aria-selected={active}
                   tabindex={0}
                   // The label already says the title; the hover adds both
-                  // moments.
+                  // moments and the id.
                   title={row ? formatSessionTimes(row) : undefined}
                   // Drag disabled while renaming: the input needs its mouse.
                   draggable={renaming !== id}
