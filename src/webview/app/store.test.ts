@@ -129,6 +129,7 @@ import type {
   Part,
   Providers,
   Session,
+  ToolPart,
 } from "./api";
 import { activeTab, navigate, route, unreadTabs } from "./router";
 
@@ -3435,6 +3436,175 @@ describe("v2 compact waits for compaction.done", () => {
       localStorageStub.getItem(`opencode-cmd-${sid}`) ?? "[]",
     ) as { cid: string }[];
     assert.equal(stored.length, 1);
+  });
+});
+
+// User report: interrupted commands render red with their command pill,
+// but a tab switch back (a remount + refreshMessages) leaves bare rows -
+// dot and "Shell", no command. This drives the exact live abort sequence
+// against the exact durable fetch shape the real v2.1.4 serve returns
+// (wire-verified: session_message content items keep state.input on
+// error-status tools, with part-level time and `name`, not `tool`).
+describe("interrupted turn across a refresh", () => {
+  beforeEach(() => setDialect("v2"));
+  afterEach(() => setDialect("v1"));
+  it("keeps an aborted bash row's command through refreshMessages", async () => {
+    const sid = "ir1";
+    sessions.value = [sessRow(sid)];
+    open(sid, [row("u1", "user", T0)]);
+    await sseFlush("session.step.started", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      started: T0 + 1,
+    });
+    await sseFlush("session.tool.input.started", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      id: "call_1",
+      name: "bash",
+    });
+    await sseFlush("session.tool.input.delta", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      id: "call_1",
+      delta: '{"command":"npm',
+    });
+    await sseFlush("session.tool.input.delta", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      id: "call_1",
+      delta: ' test"}',
+    });
+    await sseFlush("session.tool.input.ended", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      id: "call_1",
+      text: '{"command":"npm test"}',
+    });
+    await sseFlush("session.tool.called", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      id: "call_1",
+      input: { command: "npm test" },
+    });
+    await sseFlush("session.tool.failed", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      id: "call_1",
+      error: { type: "unknown", message: "Tool execution aborted" },
+    });
+    await settle(2);
+    const liveTool = listOf(sid)
+      .find((m) => m.info.id === "a1")
+      ?.parts.find((p) => p.id === "call_1") as
+      | { state?: { status?: string; input?: { command?: string } } }
+      | undefined;
+    assert.ok(liveTool, "live bash part exists");
+    assert.equal(liveTool.state?.status, "error");
+    assert.equal(liveTool.state?.input?.command, "npm test");
+
+    onApi(
+      messageMock(sid, {
+        data: [
+          { id: "u1", type: "user", time: { created: T0 }, text: "hi" },
+          {
+            id: "a1",
+            type: "assistant",
+            time: { created: T0 + 1, completed: T0 + 9 },
+            content: [
+              {
+                type: "tool",
+                id: "prt_1",
+                name: "bash",
+                executed: true,
+                state: {
+                  status: "error",
+                  input: { command: "npm test" },
+                  error: {
+                    type: "tool.execution",
+                    message: "Tool execution aborted",
+                  },
+                },
+                time: { created: T0 + 2, completed: T0 + 9 },
+              },
+            ],
+          },
+        ],
+        cursor: {},
+      }),
+    );
+    await refreshMessages(sid);
+    const parts = listOf(sid).find((m) => m.info.id === "a1")?.parts ?? [];
+    for (const p of parts) {
+      const t = p as ToolPart;
+      if (t.type !== "tool" || t.tool !== "bash") continue;
+      const pill =
+        t.state?.input?.command ??
+        t.state?.input?.code ??
+        t.state?.title ??
+        undefined;
+      assert.ok(pill, `bash part ${p.id} lost its command pill`);
+    }
+  });
+});
+
+// v2.1.4 persists session shell runs as their own row type, and both the
+// fetch and the live ended event report the run's bytes as the
+// Shell.Output struct ({output, cursor, size, truncated}) — the display
+// state must hold the bytes string, or the row's abort check
+// (output.includes) crashes the whole session view (rig-reproduced).
+describe("native shell output folding", () => {
+  beforeEach(() => setDialect("v2"));
+  afterEach(() => setDialect("v1"));
+  it("folds the fetch's Shell.Output struct into the bytes string", async () => {
+    const sid = "ns1";
+    sessions.value = [sessRow(sid)];
+    open(sid, []);
+    onApi(
+      messageMock(sid, {
+        data: [
+          {
+            id: "msg_s1",
+            type: "shell",
+            time: { created: T0, completed: T0 + 5 },
+            shellID: "sh_1",
+            command: "ping -n 5 127.0.0.1",
+            status: "exited",
+            output: { output: "5 replies", cursor: 9, size: 9, truncated: false },
+          },
+        ],
+        cursor: {},
+      }),
+    );
+    await refreshMessages(sid);
+    const part = listOf(sid).find((m) => m.info.id === "msg_s1")?.parts[0] as
+      | { state?: { output?: unknown; input?: { command?: string } } }
+      | undefined;
+    assert.ok(part, "shell row mapped");
+    assert.equal(part.state?.output, "5 replies");
+    assert.equal(part.state?.input?.command, "ping -n 5 127.0.0.1");
+  });
+  it("folds the live ended event's Shell.Output struct", async () => {
+    const sid = "ns2";
+    sessions.value = [sessRow(sid)];
+    open(sid, []);
+    await sseFlush("session.shell.started", {
+      sessionID: sid,
+      shell: { id: "sh_2", command: "ping -n 5 127.0.0.1", status: "running" },
+    });
+    await sseFlush("session.shell.ended", {
+      sessionID: sid,
+      shell: { id: "sh_2", status: "exited", exit: 0 },
+      output: { output: "done bytes", cursor: 10, size: 10, truncated: false },
+    });
+    const part = listOf(sid)
+      .find((m) => m.parts.some((p) => p.id === "sh_2"))
+      ?.parts.find((p) => p.id === "sh_2") as
+      | { state?: { output?: unknown; status?: string } }
+      | undefined;
+    assert.ok(part, "live shell row exists");
+    assert.equal(part.state?.output, "done bytes");
+    assert.equal(part.state?.status, "completed");
   });
 });
 

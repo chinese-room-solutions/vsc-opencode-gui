@@ -926,6 +926,44 @@ export interface ShellNotice {
   timeout?: boolean;
 }
 
+// The shell APIs report a run's captured bytes as the Shell.Output struct
+// ({output, cursor, size, truncated}) on the wire; the display state and
+// every consumer below want the bytes string. Anything else is absent.
+export function shellOutputText(value: unknown): string | undefined {
+  if (typeof value === "string" && value !== "") return value;
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    typeof (value as { output?: unknown }).output === "string"
+  )
+    return (value as { output: string }).output;
+  return undefined;
+}
+
+// The shell note wrapper: <shell … command="RAW">\nBODY\n</shell>. The
+// command attribute is raw-interpolated — it may contain quotes AND
+// newlines (a multiline PowerShell run) — so the open tag ends at the
+// first `">` that closes a line after command=", and the body at the
+// final newline before </shell>. No wrapper in the text: undefined.
+export function shellWrapper(text: string):
+  | { command?: string; body: string }
+  | undefined {
+  const at = text.indexOf("<shell ");
+  if (at < 0 || (at !== 0 && text[at - 1] !== "\n")) return undefined;
+  const close = text.lastIndexOf("\n</shell>");
+  if (close <= at) return undefined;
+  const cmdAt = text.indexOf('command="', at);
+  if (cmdAt < 0 || cmdAt > close) return undefined;
+  const start = cmdAt + 'command="'.length;
+  const openEnd = text.indexOf('">\n', start);
+  if (openEnd < 0 || openEnd > close) return undefined;
+  const command = text.slice(start, openEnd);
+  return {
+    ...(command ? { command } : {}),
+    body: text.slice(openEnd + '">\n'.length, close),
+  };
+}
+
 // A shell lifecycle note (v2): the server reports a shell run's terminal
 // state as a synthetic tagged metadata.source "shell" — the agent's
 // background runs, the user's own native shells, and restart recovery of
@@ -1084,6 +1122,9 @@ export function clampToolState(
       .filter(Boolean);
     if (texts.length > 0) next.output = texts.join("\n");
   }
+  // Live shell events carry output as the Shell.Output struct — fold it to
+  // the bytes string before anything renders an .includes on it.
+  next.output = shellOutputText(next.output) as ToolState["output"];
   if (typeof next.output === "string")
     next.output = clampToolOutput(partID, next.output);
   if (typeof next.inputText === "string")
@@ -1414,6 +1455,9 @@ export async function fetchMessages(
     if (r.type === "shell") {
       const failed = r.status === "failed";
       const running = r.status === "running";
+      // The wire's output is the Shell.Output struct, not a string — fold
+      // it, or the row's abort check crashes the whole view.
+      const out = shellOutputText(r.output);
       return [
         {
           info: { id: r.id, role: "assistant", time: r.time },
@@ -1428,10 +1472,10 @@ export async function fetchMessages(
                 status: running ? "running" : failed ? "error" : "completed",
                 metadata: { nativeShell: true },
                 ...(r.command !== undefined ? { input: { command: r.command } } : {}),
-                ...(r.output !== undefined
+                ...(out !== undefined
                   ? failed
-                    ? { error: r.output, output: r.output }
-                    : { output: r.output }
+                    ? { error: out, output: out }
+                    : { output: out }
                   : {}),
                 time: { start: r.time.created, end: running ? undefined : r.time.completed },
               },

@@ -66,6 +66,7 @@ import {
   isTool,
   isTaskTool,
   fetchShellOutput,
+  shellOutputText,
   stopShellRun,
   clampPartText,
   clampToolState,
@@ -2699,7 +2700,9 @@ function applyEvent(event: ServerEvent): void {
     }
     case "session.shell.ended": {
       const shell = data.shell;
-      const output = data.output;
+      // The wire's output is the Shell.Output struct — fold it to the
+      // bytes string the row renders (and runs .includes on).
+      const out = shellOutputText(data.output);
       if (!shell?.id) break;
       shellCursors.delete(shell.id);
       const row = (messagesBySession.value.get(sid) ?? []).find((m) =>
@@ -2709,9 +2712,9 @@ function applyEvent(event: ServerEvent): void {
       patchToolState(sid, row.info.id, shell.id, (s) => ({
         ...s,
         status: shell.status === "failed" ? "error" : "completed",
-        ...(output !== undefined ? { output } : {}),
+        ...(out !== undefined ? { output: out } : {}),
         ...(shell.status === "failed"
-          ? { error: output ?? "The shell command failed." }
+          ? { error: out ?? "The shell command failed." }
           : {}),
         time: { ...s.time, end: data.timestamp ?? Date.now() },
       }));
