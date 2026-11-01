@@ -157,6 +157,51 @@ test("composer @-tokens render as inline chips, clickable once finder-verified",
   expect(watched.errors).toEqual([]);
 });
 
+test("hovered mention chips highlight by fill, their edging untouched", async ({
+  page,
+  rig,
+}) => {
+  await openSession(page, rig.url);
+  // The sent pill: the theme's hover token fills it; the border never
+  // swaps - some themes' focusBorder is invisible on its own background,
+  // which read as the outline vanishing on hover.
+  const pill = page
+    .locator(".msg.user")
+    .filter({ hasText: "Tune" })
+    .locator(".mention-pill");
+  await expect(pill).toHaveCount(1);
+  const pillStyles = () =>
+    pill.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { bg: s.backgroundColor, border: s.borderTopColor };
+    });
+  const pillRest = await pillStyles();
+  await pill.hover();
+  const pillHover = await pillStyles();
+  expect(pillHover.bg).not.toBe(pillRest.bg);
+  expect(pillHover.border).toBe(pillRest.border);
+
+  // The composer chip paints its frame as box-shadow rings: the fill
+  // layers (body + inside spread) take the hover token, the outer ring
+  // keeps its color.
+  await page.click(".composer textarea");
+  await page.keyboard.type("see @picks/config.json now");
+  const chip = page.locator(".composer-mirror .mention-chip").first();
+  await expect(chip).toHaveClass(/chip-open/);
+  const chipStyles = () =>
+    chip.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { bg: s.backgroundColor, layers: s.boxShadow.split(/, (?=rgb)/) };
+    });
+  const chipRest = await chipStyles();
+  expect(chipRest.layers).toHaveLength(2);
+  await chip.hover();
+  const chipHover = await chipStyles();
+  expect(chipHover.bg).not.toBe(chipRest.bg);
+  expect(chipHover.layers[0]).not.toBe(chipRest.layers[0]);
+  expect(chipHover.layers[1]).toBe(chipRest.layers[1]);
+});
+
 test("an image mention the server inlined keeps its inline pill", async ({
   page,
   rig,

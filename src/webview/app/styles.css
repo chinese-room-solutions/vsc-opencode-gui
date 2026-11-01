@@ -1643,9 +1643,11 @@ body {
   cursor: pointer;
 }
 
+/* Fill carries the hover; the border never swaps (focusBorder is
+   invisible in some themes - see the file-chip hover note). */
 .mention-pill:hover {
   color: var(--oc-text);
-  border-color: var(--vscode-focusBorder);
+  background: var(--vscode-list-hoverBackground);
 }
 
 /* Cursor-anchored preview for hovering an inlined-image pill. */
@@ -1689,10 +1691,14 @@ body {
   color: var(--oc-text);
 }
 
+/* Same hover contract as the file chip: fill, ring stays. Both painted
+   fill layers (body + inside spread) take the hover token; the ring
+   keeps --oc-border. */
 .mention-chip.chip-open:hover {
+  background: var(--vscode-list-hoverBackground);
   box-shadow:
-    0 0 0 3px var(--vscode-input-background),
-    0 0 0 4px var(--vscode-focusBorder);
+    0 0 0 3px var(--vscode-list-hoverBackground),
+    0 0 0 4px var(--oc-border);
 }
 
 /* The selection band is painted by the textarea below the mirror — a
