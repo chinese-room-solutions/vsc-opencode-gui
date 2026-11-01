@@ -157,9 +157,21 @@ export class AppHost implements vscode.Disposable {
     this._lastPingAt = undefined;
     this._attachedAt = Date.now();
 
+    // asWebviewUri resources (the attachments preview relay) need the
+    // attachments dir next to the extension root as a local resource.
+    const attachmentRoot =
+      vscode.workspace.workspaceFolders?.[0] &&
+      vscode.Uri.joinPath(
+        vscode.workspace.workspaceFolders[0].uri,
+        ".opencode",
+        "attachments",
+      );
     webview.options = {
       enableScripts: true,
-      localResourceRoots: [this._extensionUri],
+      localResourceRoots: [
+        this._extensionUri,
+        ...(attachmentRoot ? [attachmentRoot] : []),
+      ],
     };
 
     this._attachments.push(
@@ -346,6 +358,41 @@ export class AppHost implements vscode.Disposable {
                 });
             } catch (err) {
               log.error("attach snapshot failed:", err);
+            }
+          })();
+        }
+        // Sent-chip thumbnails: the transcript's file:// attachment urls
+        // can't be fetched in the page, so it asks for a webview-servable
+        // one. The webview-requested path must stay inside the attachments
+        // root — anything else gets no reply (the chip keeps its ext
+        // form). Best effort, same contract as save-attachment.
+        if (
+          message.type === "read-attachment" &&
+          typeof message.path === "string"
+        ) {
+          void (async () => {
+            try {
+              const ws = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
+              if (!ws) return;
+              let uri: vscode.Uri;
+              try {
+                uri = vscode.Uri.parse(message.path, true);
+              } catch {
+                return;
+              }
+              if (uri.scheme !== "file") return;
+              const root = path.join(ws, ".opencode", "attachments");
+              const rel = path.relative(root, uri.fsPath);
+              if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return;
+              const st = await fs.promises.stat(uri.fsPath);
+              if (!st.isFile()) return;
+              this._post({
+                type: "attachment-preview",
+                path: message.path,
+                url: webview.asWebviewUri(uri).toString(),
+              });
+            } catch (err) {
+              log.error("attach preview failed:", err);
             }
           })();
         }

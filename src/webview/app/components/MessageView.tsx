@@ -4,6 +4,8 @@ import type { ComponentChildren } from "preact";
 import type { ChatMessage } from "../store";
 import {
   agents,
+  attachmentPreview,
+  attachmentPreviewForget,
   charsPerToken,
   currentDir,
   fmtDur,
@@ -609,14 +611,31 @@ function restartNotice(parts: Part[]): boolean {
 // thumbnail crop — name and pixel size move to the hover title — other files
 // their name; an image click opens the lightbox, a chip with an on-disk path
 // (the + picker's file:// parts) opens it — text in the editor, anything
-// else with the system tool for its type. Pasted data-URI chips have no
-// path and stay inert; @-mentions pillify inline via pillifyOwnText instead.
+// else with the system tool for its type. Sent image attachments load a
+// previewable url from the host (read-attachment relay, attachments dir
+// only) and upgrade from the ext chip when it arrives; data-URI chips render
+// directly. @-mentions pillify inline via pillifyOwnText instead.
 function AttachChip(props: { p: FilePart }) {
   const [dims, setDims] = useState<{ w: number; h: number } | undefined>();
+  const [preview, setPreview] = useState<string | undefined>();
   const f = props.p;
   // "+"-dialog parts carry the picked path; the chip shows the bare name.
   const name = f.filename?.split(/[\\/]/).pop() || "file";
-  if (!f.url?.startsWith("data:image/")) {
+  // A snapshotted image (file:// under the attachments dir) can't render
+  // in the page — ask the host for a previewable url and upgrade the chip
+  // when it lands; until then the ext form below carries it.
+  useEffect(() => {
+    if (
+      f.url?.startsWith("file:") &&
+      f.url.includes("/.opencode/attachments/") &&
+      attachMime(name, "")?.startsWith("image/")
+    ) {
+      void attachmentPreview(f.url).then((u) => {
+        if (u) setPreview(u);
+      });
+    }
+  }, [f.url]);
+  if (!f.url?.startsWith("data:image/") && !preview) {
     const open =
       f.url && f.url.startsWith("file:")
         ? (e: MouseEvent) => {
@@ -637,17 +656,18 @@ function AttachChip(props: { p: FilePart }) {
       </span>
     );
   }
+  const src = preview ?? f.url!;
   return (
     <span
       class="file-chip chip-img"
       title={dims ? `${name} · ${dims.w}×${dims.h}` : name}
       onClick={(e) => {
         e.stopPropagation(); // the pill's click-to-jump
-        openLightbox({ uri: f.url!, name });
+        openLightbox({ uri: src, name });
       }}
     >
       <img
-        src={f.url}
+        src={src}
         alt={name}
         onLoad={(e) =>
           setDims({
@@ -655,6 +675,14 @@ function AttachChip(props: { p: FilePart }) {
             h: e.currentTarget.naturalHeight,
           })
         }
+        onError={() => {
+          // The preview's file was purged on disk: fall back to the ext
+          // chip and forget the dead url so a remount re-asks the host.
+          if (preview) {
+            attachmentPreviewForget(f.url!);
+            setPreview(undefined);
+          }
+        }}
       />
     </span>
   );

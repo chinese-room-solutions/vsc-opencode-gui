@@ -115,6 +115,8 @@ import {
   loadPersistedFiles,
   addComposerFiles,
   requestAttachmentSnapshot,
+  attachmentPreview,
+  attachmentPreviewForget,
 } from "./store";
 import { setDialect } from "./api";
 import type { ChatMessage, Status } from "./store";
@@ -1531,6 +1533,77 @@ describe("attachment snapshot bridge", () => {
     // A late reply finds no waiter — nothing throws, nothing resolves twice.
     hostMessage({ type: "attachment-saved", from: uri, path: "file:///late" });
     assert.equal(await p, undefined);
+  });
+});
+
+describe("attachment preview bridge", () => {
+  const reads = () =>
+    hostPosted.filter((x) => (x as { type?: string }).type === "read-attachment")
+      .length;
+  it("resolves the webview url when the host replies before the timeout", async () => {
+    const path = "file:///w/.opencode/attachments/ses_x/1-dot.png";
+    const p = attachmentPreview(path);
+    await settle();
+    assert.deepEqual(hostPosted[hostPosted.length - 1], {
+      type: "read-attachment",
+      path,
+    });
+    hostMessage({
+      type: "attachment-preview",
+      path,
+      url: "vscode-webview-resource:/1-dot.png",
+    });
+    assert.equal(await p, "vscode-webview-resource:/1-dot.png");
+  });
+  it("serves a repeat ask from the cache with no second post", async () => {
+    const path = "file:///w/.opencode/attachments/ses_x/2-dot.png";
+    const first = attachmentPreview(path);
+    await settle();
+    hostMessage({ type: "attachment-preview", path, url: "vscode-webview-resource:/2" });
+    assert.equal(await first, "vscode-webview-resource:/2");
+    const posts = reads();
+    assert.equal(await attachmentPreview(path), "vscode-webview-resource:/2");
+    assert.equal(reads(), posts);
+  });
+  it("times out to undefined and never re-asks that path", async () => {
+    const path = "file:///w/.opencode/attachments/ses_x/3-dot.png";
+    const p = attachmentPreview(path);
+    await settle();
+    assert.equal(fireExact(2000), 1);
+    assert.equal(await p, undefined);
+    const posts = reads();
+    // Cached "no preview": the retry resolves locally, without a post.
+    assert.equal(await attachmentPreview(path), undefined);
+    assert.equal(reads(), posts);
+  });
+  it("forgets a resolved preview so the next ask re-posts", async () => {
+    const path = "file:///w/.opencode/attachments/ses_x/4-dot.png";
+    const p = attachmentPreview(path);
+    await settle();
+    hostMessage({ type: "attachment-preview", path, url: "vscode-webview-resource:/dead" });
+    assert.equal(await p, "vscode-webview-resource:/dead");
+    attachmentPreviewForget(path);
+    const posts = reads();
+    const again = attachmentPreview(path);
+    await settle();
+    assert.equal(reads(), posts + 1);
+    fireExact(2000);
+    assert.equal(await again, undefined);
+  });
+  it("joins concurrent asks for one path into a single post", async () => {
+    const path = "file:///w/.opencode/attachments/ses_x/5-dot.png";
+    const posts = reads();
+    const a = attachmentPreview(path);
+    const b = attachmentPreview(path);
+    await settle();
+    // One host ask for both callers — the second joins the first's flight.
+    assert.equal(reads(), posts + 1);
+    hostMessage({ type: "attachment-preview", path, url: "vscode-webview-resource:/5" });
+    assert.equal(await a, "vscode-webview-resource:/5");
+    assert.equal(await b, "vscode-webview-resource:/5");
+    // The url survives: no orphaned duplicate timeout can poison the cache.
+    assert.equal(await attachmentPreview(path), "vscode-webview-resource:/5");
+    assert.equal(reads(), posts + 1);
   });
 });
 

@@ -273,6 +273,43 @@ test("sending carries the snapshotted image as a file:// part", async ({ page, r
   expect(watched.errors).toEqual([]);
 });
 
+test("the sent image chip upgrades to a thumbnail via the host preview relay", async ({ page, rig }) => {
+  const watched = watchPage(page);
+  await openSession(page, rig.url);
+  await page.click(".composer textarea");
+  await pasteImage(page);
+  // The composer's own chip keeps its attach-time thumb throughout.
+  const composerChip = page.locator(".composer-files .file-chip.chip-img");
+  await expect(composerChip).toHaveCount(1);
+  await expect(composerChip.locator("img")).toHaveAttribute("src", /^data:image\/jpeg/);
+  await page.fill(".composer textarea", "see this");
+  await page.click(".comp-send");
+  // The sent row's chip is born an ext chip (its file:// payload can't
+  // render), then upgrades once the rig's read-attachment answer lands.
+  const sentImg = page.locator('.msg.user .msg-files .file-chip.chip-img img[alt="dot.png"]');
+  await expect(sentImg).toHaveAttribute("src", /^data:image\/png/, {
+    timeout: 5000,
+  });
+  expect(watched.errors).toEqual([]);
+});
+
+test("the composer chip's lightbox opens the original, not the thumb", async ({ page, rig }) => {
+  const watched = watchPage(page);
+  await openSession(page, rig.url);
+  await page.click(".composer textarea");
+  await pasteImage(page);
+  const composerChip = page.locator(".composer-files .file-chip.chip-img");
+  await expect(composerChip).toHaveCount(1);
+  // The chip row keeps its small attach-time JPEG thumb.
+  await expect(composerChip.locator("img")).toHaveAttribute("src", /^data:image\/jpeg/);
+  await composerChip.click();
+  // The opened preview is the original-quality source: the chip is born
+  // swapped to file:// (the snapshot precedes the chip), so the click
+  // resolves through the host relay (PNG here) — never the JPEG thumb.
+  await expect(page.locator(".img-preview img")).toHaveAttribute("src", /^data:image\/png/);
+  expect(watched.errors).toEqual([]);
+});
+
 test("a model switch after attach is caught at send, not silently sent", async ({ page, rig }) => {
   const watched = watchPage(page);
   await openSession(page, rig.url);

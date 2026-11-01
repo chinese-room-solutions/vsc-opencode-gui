@@ -119,6 +119,11 @@ const stubFor = (nonce, serverUrl) =>
   // The rig has no disk: answer the snapshot with a fake path so the chip
   // swap (data: -> file://) runs in the rig like it does against the host.
   `window.postMessage({ type: "attachment-saved", sessionId: m.sessionId, from: m.uri, path: "file:///repo/.opencode/attachments/" + m.sessionId + "/1-" + m.name }, "*");` +
+  `} else if (m && m.type === "read-attachment" && typeof m.path === "string" && m.path.includes("/.opencode/attachments/")) {` +
+  // Mirror the host's path guard: only attachments-root paths get a
+  // preview (a tiny decodable PNG); anything else falls through to the
+  // log branch below with no reply, like the host staying silent.
+  `window.postMessage({ type: "attachment-preview", path: m.path, url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" }, "*");` +
   `} else {` +
   `console.log("[host-msg]", JSON.stringify(m));` +
   `}` +

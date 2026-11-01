@@ -198,6 +198,79 @@ suite("opencode GUI lifecycle", function () {
     host.dispose();
   });
 
+  test("read-attachment answers only inside the attachments root", async function () {
+    // The sent-chip thumbnail relay, driven like the ping above: a real
+    // AppHost behind a stub webview that records its posts. The workspace
+    // is the runner's throwaway folder, so the probe file is hermetic.
+    const { AppHost } = await import("../webview/AppHost");
+    const extUri = vscode.extensions.getExtension(
+      "chinese-room-solutions.vsc-opencode-gui",
+    )!.extensionUri;
+    const noopStore = { get: () => undefined, set: () => {} };
+    const host = new AppHost(
+      extUri,
+      noopStore as never,
+      { get: () => [] } as never,
+      {
+        list: () => [],
+        tombstoned: () => false,
+        tombstone: () => {},
+      } as never,
+      () => Promise.resolve(),
+      { get: () => [] },
+      { get: () => [] },
+    );
+    const posted: { type?: string; path?: string; url?: string }[] = [];
+    let onMessage: ((m: unknown) => void) | undefined;
+    const webview = {
+      options: undefined,
+      onDidReceiveMessage: (cb: (m: unknown) => void) => {
+        onMessage = cb;
+        return { dispose: () => {} };
+      },
+      postMessage: (m: unknown) => {
+        posted.push(m as never);
+        return Promise.resolve(true);
+      },
+      asWebviewUri: (u: vscode.Uri) =>
+        vscode.Uri.parse(`https://webview.test/preview/${path.basename(u.fsPath)}`),
+      cspSource: "https://test",
+    };
+    host.attach(webview as never);
+    const ws = vscode.workspace.workspaceFolders?.[0];
+    assert.ok(ws, "lifecycle window opened a workspace folder");
+    const dir = vscode.Uri.joinPath(ws.uri, ".opencode", "attachments");
+    const probe = vscode.Uri.joinPath(dir, "lifecycle-probe.png");
+    await vscode.workspace.fs.createDirectory(dir);
+    await vscode.workspace.fs.writeFile(probe, new Uint8Array([1]));
+    try {
+      onMessage?.({ type: "read-attachment", path: probe.toString(true) });
+      await new Promise((r) => setTimeout(r, 500));
+      assert.deepStrictEqual(
+        posted.filter((m) => m.type === "attachment-preview"),
+        [
+          {
+            type: "attachment-preview",
+            path: probe.toString(true),
+            url: "https://webview.test/preview/lifecycle-probe.png",
+          },
+        ],
+      );
+      // An existing file outside the attachments root (.git/config from
+      // the runner's git init) gets no reply at all.
+      posted.length = 0;
+      const foreign = vscode.Uri.joinPath(ws.uri, ".git", "config");
+      onMessage?.({ type: "read-attachment", path: foreign.toString(true) });
+      await new Promise((r) => setTimeout(r, 500));
+      assert.deepStrictEqual(posted, []);
+    } finally {
+      try {
+        await vscode.workspace.fs.delete(probe);
+      } catch {}
+      host.dispose();
+    }
+  });
+
   suiteTeardown(function () {
     assert.deepStrictEqual(
       uncaught,

@@ -6,6 +6,7 @@ import { atTrigger, mentionTokens, resolve, type MentionToken } from "../mention
 import {
   addComposerFiles,
   agents,
+  attachmentPreview,
   attachInputs,
   commands,
   composerFiles,
@@ -152,9 +153,10 @@ async function attachFiles(
       refuse("unreadable");
       continue;
     }
-    // Images pre-render a small thumb here — the chip row and lightbox
-    // draw it, not the full payload. A static JPEG thumb for a GIF is
-    // fine; any failure just leaves it unset.
+    // Images pre-render a small thumb here — the chip row draws it, not
+    // the full payload (the lightbox opens the original, see the chip
+    // click). A static JPEG thumb for a GIF is fine; any failure just
+    // leaves it unset.
     const thumb = mime.startsWith("image/") ? await imageThumb(f) : undefined;
     // Every attachment snapshots to disk before the chip exists: the chip
     // is click-to-open from birth and the prompt carries a file:// url
@@ -1060,9 +1062,22 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
                   class="file-chip chip-img"
                   key={`${f.name}:${i}`}
                   title={f.name}
-                  onClick={() =>
-                    openLightbox({ uri: f.thumb ?? f.uri, name: f.name })
-                  }
+                  onClick={() => {
+                    // The lightbox shows the original: the data-URI
+                    // payload while it's still in memory, else the
+                    // host-served snapshot after the disk swap. The
+                    // thumb is a chip-row preview, not the picture.
+                    if (f.uri.startsWith("data:")) {
+                      openLightbox({ uri: f.uri, name: f.name });
+                      return;
+                    }
+                    void attachmentPreview(f.uri).then((url) =>
+                      openLightbox({
+                        uri: url ?? f.thumb ?? f.uri,
+                        name: f.name,
+                      }),
+                    );
+                  }}
                 >
                   <img src={f.thumb ?? f.uri} alt={f.name} />
                   <button

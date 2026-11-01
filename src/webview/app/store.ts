@@ -3365,6 +3365,44 @@ export function requestAttachmentSnapshot(
   });
 }
 
+// Sent-chip thumbnail bridge: a file:// attachment url can't be fetched in
+// the page, so the host is asked for a webview-servable one (read-attachment
+// relay; attachments dir only). Cached per path — including "no preview"
+// (undefined), so a missing file is asked about exactly once. Concurrent
+// callers for one path join a single in-flight request — a second waiter
+// would overwrite the first, and its timeout then cached "no preview" over
+// the good url. Times out to undefined like the snapshot bridge above.
+const previewWaiters = new Map<string, (url: string) => void>();
+const previewCache = new Map<string, string | undefined>();
+const previewInflight = new Map<string, Promise<string | undefined>>();
+export function attachmentPreview(
+  path: string,
+): Promise<string | undefined> {
+  if (previewCache.has(path)) return Promise.resolve(previewCache.get(path));
+  const pending = previewInflight.get(path);
+  if (pending) return pending;
+  postToHost({ type: "read-attachment", path });
+  const p = new Promise<string | undefined>((resolve) => {
+    const done = (url: string | undefined) => {
+      clearTimeout(t);
+      previewWaiters.delete(path);
+      previewInflight.delete(path);
+      previewCache.set(path, url);
+      resolve(url);
+    };
+    const t = window.setTimeout(() => done(undefined), 2000);
+    previewWaiters.set(path, (url) => done(url));
+  });
+  previewInflight.set(path, p);
+  return p;
+}
+// A resolved preview that fails to load (its file was purged on disk) is
+// forgotten so a later mount asks the host again instead of reusing the
+// dead url.
+export function attachmentPreviewForget(path: string): void {
+  previewCache.delete(path);
+}
+
 export function addComposerFiles(key: string, files: ComposerFile[]): void {
   composerFiles.value = {
     ...composerFiles.value,
@@ -3397,6 +3435,7 @@ export function hostMessage(msg: unknown) {
     from?: string;
     sessionId?: string;
     dialect?: string;
+    url?: string;
   };
   // The webview became visible again: events streamed while VS Code had
   // it suspended were lost — pull truth.
@@ -3505,6 +3544,14 @@ export function hostMessage(msg: unknown) {
     typeof m.path === "string"
   ) {
     snapshotWaiters.get(m.from)?.(m.path);
+  }
+  // The host relayed a previewable url for a sent chip (attachmentPreview).
+  if (
+    m.type === "attachment-preview" &&
+    typeof m.path === "string" &&
+    typeof m.url === "string"
+  ) {
+    previewWaiters.get(m.path)?.(m.url);
   }
   if (m.type === "new-session") {
     void newSession();
