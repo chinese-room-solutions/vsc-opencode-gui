@@ -1193,6 +1193,18 @@ body {
   }
 }
 
+/* The hover chip is a ::after on the dot itself, and the blink's opacity
+   fade takes every box of the element — chip included — along. The chip
+   only shows on hover, so holding the dot solid on hover keeps its window
+   readable; the pulse resumes the moment the pointer leaves. */
+.dot-running .dot:hover,
+.status-line.dot-running .phase-dot:hover,
+.thinking-block.dot-running .phase-dot:hover,
+.tool.live .tool-dot.running:hover,
+.tool.live .tool-dot.pending:hover {
+  animation: none;
+}
+
 /* Streaming placeholder where reasoning would be. Static text — the dot
    beside it carries the pulse. */
 .thinking-line {

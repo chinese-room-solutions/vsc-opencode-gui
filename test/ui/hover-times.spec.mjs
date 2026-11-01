@@ -162,3 +162,39 @@ test("message dot and tool dot place the chip by the same up-right offset", asyn
     rig.stop();
   }
 });
+
+// The chip is a ::after on the dot itself, and the blink fades the whole
+// element — chip included. Hovering must steady it: the dot holds solid
+// while its chip is up (animation: none), and the pulse resumes on leave.
+test("a blinking dot holds still while its chip is up", async ({ page }) => {
+  const rig = await startRig({
+    env: { ...ENV, FAKE_API_STALLED: "1" },
+  });
+  try {
+    await page.goto(rig.url);
+    // The stalled shape's live turn ends with a running Edit card — its
+    // dot blinks (tool.live .tool-dot.running) and carries a window chip.
+    const dot = page.locator(".tool.live .tool-dot.running").last();
+    await dot.waitFor({ timeout: 15_000 });
+    await dot.scrollIntoViewIfNeeded();
+
+    const anim = () =>
+      dot.evaluate((node) => getComputedStyle(node).animationName);
+    expect(await anim()).toBe("dot-blink");
+
+    const b = await dot.boundingBox();
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+    // Hover lands on the invisible ::before (inset -6px) even when the
+    // pointer is a few pixels off the 7px disc itself.
+    expect(await anim()).toBe("none");
+    const g = await chip(page, dot);
+    // Running tip = start time (+ silence label): chip content only needs
+    // to be there; the assertion under test is the held-solid dot.
+    expect(g.content).toMatch(new RegExp(`^"${CLOCK}`));
+
+    await page.mouse.move(b.x - 40, b.y - 40);
+    expect(await anim()).toBe("dot-blink");
+  } finally {
+    rig.stop();
+  }
+});
