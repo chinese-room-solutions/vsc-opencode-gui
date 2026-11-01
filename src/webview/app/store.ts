@@ -1522,6 +1522,55 @@ export function formatDateTime(ts: number): string {
   );
 }
 
+// Time of day alone ("14:35:29") — transcript hovers, where the date is
+// session-level context every row already sits inside. A day other than
+// today leads with its date (·-split): a session can outlive the midnight
+// it started in, and a bare clock is ambiguous there.
+export function formatTime(ts: number): string {
+  const today = new Date();
+  const d = new Date(ts);
+  const sameDay =
+    d.getFullYear() === today.getFullYear() &&
+    d.getMonth() === today.getMonth() &&
+    d.getDate() === today.getDate();
+  return sameDay ? clockOf(ts) : `${dateOf(ts)} · ${clockOf(ts)}`;
+}
+
+// A run window: the day stated once, in front, when the run didn't happen
+// today ("date · start → end"). A window that crosses a midnight dates
+// the clocks that aren't today — each needs its own day to read, though
+// an end landing today reads fine on the arrow's say-so. A window that
+// begins and ends on the same second is a moment — "start → start"
+// would only repeat it.
+export function formatWindow(start: number, end: number): string {
+  if (dayKey(start) === dayKey(end) && clockOf(start) === clockOf(end))
+    return formatTime(start);
+  const now = Date.now();
+  const startToday = dayKey(start) === dayKey(now);
+  const endToday = dayKey(end) === dayKey(now);
+  if (startToday && endToday) return `${clockOf(start)} → ${clockOf(end)}`;
+  if (dayKey(start) === dayKey(end))
+    return `${dateOf(start)} · ${clockOf(start)} → ${clockOf(end)}`;
+  return `${formatTime(start)} → ${formatTime(end)}`;
+}
+
+function dayKey(ts: number): string {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+function clockOf(ts: number): string {
+  const d = new Date(ts);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function dateOf(ts: number): string {
+  const d = new Date(ts);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 // Hover text for a session row or tab: both moments and the id, one per
 // line.
 export function formatSessionTimes(s: Session): string {

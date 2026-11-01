@@ -11,6 +11,8 @@ import {
 import { openFile, openUrl } from "../host";
 import { route, navigate } from "../router";
 import {
+  formatTime,
+  formatWindow,
   pendingPermissions,
   pendingQuestions,
   sessionWorking,
@@ -378,12 +380,27 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
   }, [running]);
   const start = state?.time?.start;
   const end = state?.time?.end;
+  // The row tip pairs the wall-clock window with the elapsed span — the
+  // window says when the call ran, the label how long. A failed call
+  // carries no tip: its story is the card's error, and the idle-heal path
+  // stamps the settle moment as a dead row's end — a window built on that
+  // would claim a run that never happened.
+  const noTip = !!state?.error && state.error !== "";
   const elapsed =
-    running && start
+    !noTip && running && start
       ? silenceLabel(Date.now() - start)
-      : !running && start && end
+      : !noTip && !running && start && end
         ? silenceLabel(end - start)
         : undefined;
+  const span =
+    !noTip && start !== undefined
+      ? end !== undefined
+        ? formatWindow(start, end)
+        : running
+          ? formatTime(start)
+          : undefined
+      : undefined;
+  const tip = [span, elapsed].filter(Boolean).join(" · ") || undefined;
   // A sub-agent relayed new facts (steer) or re-attached after an interrupt
   // runs again long after its bash call closed — the child session's own
   // status keeps the chip honest then. Retry counts as working (see
@@ -476,11 +493,14 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
     >
       <div
         class={expandable ? "tool-row expander" : "tool-row"}
-        data-tip={elapsed}
         onClick={expandable ? () => setOpen(!open) : undefined}
       >
         {/* "failed", not "error": the app's boot-error banner owns .error. */}
-        <span class={`tool-dot ${failed ? "failed" : status}`} aria-hidden="true" />
+        <span
+          class={`tool-dot ${failed ? "failed" : status}`}
+          aria-hidden="true"
+          data-tip={tip}
+        />
         <span class="tool-name">{toolName(part.tool)}</span>
         {linkPath || url ? (
           <a

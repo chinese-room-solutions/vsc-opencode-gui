@@ -9,6 +9,8 @@ import {
   charsPerToken,
   currentDir,
   fmtDur,
+  formatTime,
+  formatWindow,
   insertComposerText,
   messagesBySession,
   modelLabel,
@@ -264,6 +266,7 @@ function UserActions(props: {
   sid: string;
   id: string;
   text: string;
+  time: number;
   revert?: boolean;
   queued?: boolean;
 }) {
@@ -296,6 +299,11 @@ function UserActions(props: {
   };
   return (
     <div class="msg-actions">
+      {/* The send moment rides the hover chip with the buttons — user
+          rows have no status dot to carry it. */}
+      <span class="act-time" aria-hidden="true">
+        {formatTime(props.time)}
+      </span>
       <button
         type="button"
         class={copied ? "msg-action done" : "msg-action"}
@@ -744,7 +752,17 @@ function ThinkingBlock(props: {
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
-        <span class="phase-dot" aria-hidden="true" />
+        <span
+          class="phase-dot"
+          aria-hidden="true"
+          data-tip={
+            t?.start !== undefined
+              ? end !== undefined
+                ? formatWindow(t.start, end)
+                : formatTime(t.start)
+              : undefined
+          }
+        />
         <span class="thinking-chevron">
           <ChevronIcon />
         </span>
@@ -826,7 +844,11 @@ function CompactedTurnImpl(props: {
         >
           {/* The thinking row's anatomy: message-grid dot (pulsing while
               the summary streams), chevron, label — Thinking...→Thought. */}
-          <span class="dot" aria-hidden="true" />
+          <span
+            class="dot"
+            aria-hidden="true"
+            data-tip={trigger ? msgTip(trigger.info) : undefined}
+          />
           <span class="compacted-chevron">
             <ChevronIcon />
           </span>
@@ -884,16 +906,24 @@ function ExploreGroup(props: { parts: ToolPart[] }) {
     starts.length > 0 && ends.length === props.parts.length
       ? silenceLabel(Math.max(...ends) - Math.min(...starts))
       : undefined;
+  // The fold's window rides beside the span (a tool row's pairing): first
+  // start to last end — only a fully settled run states one, and folds
+  // never hold running tools.
+  const span =
+    starts.length > 0 && ends.length === props.parts.length
+      ? formatWindow(Math.min(...starts), Math.max(...ends))
+      : undefined;
+  const tip = [span, elapsed].filter(Boolean).join(" · ") || undefined;
   return (
     <div class="explore">
       <div
         class="tool-row expander explore-head"
-        data-tip={elapsed}
         onClick={() => setOpen(!open)}
       >
         <span
           class={`tool-dot ${failed ? "failed" : "completed"}`}
           aria-hidden="true"
+          data-tip={tip}
         />
         <span class="tool-name">Explored</span>
         <span class="explore-count">{label}</span>
@@ -946,6 +976,19 @@ export const CompactedTurn = memo(
   (a, b) =>
     sameMsgs(a.msgs, b.msgs) && a.live === b.live && a.freedK === b.freedK,
 );
+
+// The dot chip: when its message ran, and for how long. A settled
+// assistant turn states its window (start → end · duration); an open or
+// instant turn and every user-side notice state only their moment — a
+// duration there is bookkeeping noise.
+function msgTip(info: ChatMessage["info"]): string {
+  const e = info.time.completed;
+  return info.role === "assistant" && e !== undefined && e > info.time.created
+    ? `${formatWindow(info.time.created, e)} · ${fmtDur(
+        Math.round((e - info.time.created) / 1000),
+      )}`
+    : formatTime(info.time.created);
+}
 
 function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
   const { info, parts } = props.m;
@@ -1048,7 +1091,11 @@ function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
     return (
       <div class="msg user shell-notice">
         <div class="notice-head">
-          <span class={`notice-dot ${dot}`} aria-hidden="true" />
+          <span
+            class={`notice-dot ${dot}`}
+            aria-hidden="true"
+            data-tip={msgTip(info)}
+          />
           <span class="notice-title">
             {`Shell ${word}${detail ? ` · ${detail}` : ""}${
               shell.n.command ? ` · ${shell.n.command}` : ""
@@ -1063,7 +1110,11 @@ function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
     return (
       <div class="msg assistant restart-note">
         <div class="notice-head">
-          <span class="notice-dot cancelled" aria-hidden="true" />
+          <span
+            class="notice-dot cancelled"
+            aria-hidden="true"
+            data-tip={msgTip(info)}
+          />
           <span class="notice-title">
             Server restarted — the turn continued from where it stopped
           </span>
@@ -1136,6 +1187,7 @@ function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
                 sid={sid}
                 id={info.id}
                 text={ownText(parts)}
+                time={info.time.created}
                 revert={!command || pending || queuedCmd}
                 queued={pending || queuedCmd}
               />
@@ -1229,7 +1281,7 @@ function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
   return (
     <div class={`msg assistant dot-${dotState(props.m, live)}`}>
       {showsDot && !showPhase && !hasReasoning && (
-        <span class="dot" aria-hidden="true" />
+        <span class="dot" aria-hidden="true" data-tip={msgTip(info)} />
       )}
       {content.map((c) => {
         const run = Array.isArray(c.el) ? (c.el as ToolPart[]) : undefined;
@@ -1247,7 +1299,7 @@ function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
       })}
       {showPhase && (
         <div class="status-line dot-running">
-          <span class="phase-dot" aria-hidden="true" />
+          <span class="phase-dot" aria-hidden="true" data-tip={msgTip(info)} />
           <div class="thinking-line">
             Waiting for the model...
             {/* The clock is the wait's honest measure. On a between-step

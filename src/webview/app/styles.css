@@ -2699,6 +2699,19 @@ body {
   opacity: 1;
 }
 
+/* The send moment beside the hover actions (left of the copy button,
+   under the pill): text, not a chip — it rides the actions' reveal and
+   whichever host line they sit in. */
+.act-time {
+  align-self: center;
+  margin-right: 5px;
+  padding-left: 5px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--oc-text-2);
+  user-select: none;
+}
+
 .msg-action {
   display: flex;
   align-items: center;
@@ -2993,8 +3006,9 @@ body {
 
 /* In-place tooltip for ticking tips ([data-tip]): a native title re-runs
    its show delay on every attribute change, so a per-second elapsed label
-   blinks the bubble; pseudo-element content swaps stay put. Placed above —
-   the live transcript's scrollport clips below. */
+   blinks the bubble; pseudo-element content swaps stay put. Every carrier
+   is a status circle, and the bubble sits a bit up and right of it — one
+   offset for every circle kind. */
 [data-tip] {
   position: relative;
 }
@@ -3002,9 +3016,8 @@ body {
 [data-tip]:hover::after {
   content: attr(data-tip);
   position: absolute;
-  bottom: calc(100% + 4px);
-  left: var(--tip-x, 0);
-  transform: translateX(-50%);
+  bottom: calc(100% + 6px);
+  left: calc(100% + 4px);
   z-index: 30;
   padding: 3px 8px;
   font-size: 11px;
@@ -3014,6 +3027,23 @@ body {
   border: 1px solid var(--oc-border, #454545);
   border-radius: 3px;
   pointer-events: none;
+}
+
+/* The circles are 7-8px — too small to aim at. An invisible ::before
+   inflates the hit area; the bubble keeps ::after. The base [data-tip]
+   rule positions its carrier relative; the gutter dot keeps its own
+   absolute anchor. */
+.dot[data-tip] {
+  position: absolute;
+}
+
+.dot[data-tip]::before,
+.phase-dot[data-tip]::before,
+.notice-dot[data-tip]::before,
+.tool-dot[data-tip]::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
 }
 
 /* Only the live turn's row blinks — a durable row frozen in pending/running

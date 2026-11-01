@@ -39,6 +39,8 @@ import {
   forkSession,
   fmtDur,
   formatDateTime,
+  formatTime,
+  formatWindow,
   getDraft,
   hasOlder,
   hasQueued,
@@ -3863,6 +3865,45 @@ describe("display helpers", () => {
     assert.equal(
       formatDateTime(new Date(2026, 8, 13, 14, 35, 29).getTime()),
       "2026-09-13 14:35:29",
+    );
+  });
+  it("formatTime adds the date only outside today", () => {
+    const now = Date.now();
+    assert.match(formatTime(now), /^\d{2}:\d{2}:\d{2}$/);
+    const old = new Date(now - 3 * 86_400_000);
+    const p = (n: number) => String(n).padStart(2, "0");
+    assert.equal(
+      formatTime(old.getTime()),
+      `${old.getFullYear()}-${p(old.getMonth() + 1)}-${p(old.getDate())}` +
+        ` · ${p(old.getHours())}:${p(old.getMinutes())}:${p(old.getSeconds())}`,
+    );
+  });
+  it("formatWindow states the day once, in front, and only off today", () => {
+    const now = Date.now();
+    assert.equal(
+      formatWindow(now, now + 90_000),
+      formatTime(now) + " → " + formatTime(now + 90_000),
+    );
+    // Three days back, pinned to noon so nothing crosses a midnight.
+    const noon = new Date(now - 3 * 86_400_000);
+    noon.setHours(12, 0, 0, 0);
+    const p = (n: number) => String(n).padStart(2, "0");
+    const date = `${noon.getFullYear()}-${p(noon.getMonth() + 1)}-${p(noon.getDate())}`;
+    const clock = (ts: number) => new Date(ts).toTimeString().slice(0, 8);
+    assert.equal(
+      formatWindow(noon.getTime(), noon.getTime() + 90_000),
+      `${date} · ${clock(noon.getTime())} → ${clock(noon.getTime() + 90_000)}`,
+    );
+    // A window crossing a midnight dates both clocks.
+    assert.equal(
+      formatWindow(noon.getTime(), noon.getTime() + 86_400_000),
+      formatTime(noon.getTime()) + " → " + formatTime(noon.getTime() + 86_400_000),
+    );
+    // The same second on both sides collapses to the single time.
+    assert.equal(formatWindow(now, now), formatTime(now));
+    assert.equal(
+      formatWindow(noon.getTime() + 100, noon.getTime() + 900),
+      formatTime(noon.getTime()),
     );
   });
   it("sessionTile colors from the project palette, else the folder hash", () => {

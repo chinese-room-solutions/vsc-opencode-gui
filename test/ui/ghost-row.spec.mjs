@@ -40,7 +40,7 @@ test("a dead turn's running row reads settled and never re-animates", async ({ p
     await expect(card).toHaveCount(1, { timeout: 15_000 });
     await expect(card.locator(".tool-dot")).not.toHaveClass(/running/);
     // No hover elapsed: the row is not running, so the tip stays absent.
-    await expect(card.locator(".tool-row")).not.toHaveAttribute("data-tip");
+    await expect(card.locator(".tool-dot")).not.toHaveAttribute("data-tip");
     // Idle truth: the composer offers Send, not Stop.
     await expect(page.locator(".comp-send")).toHaveAttribute("title", "Send");
     await expectNoStaleClock(page);
@@ -52,7 +52,7 @@ test("a dead turn's running row reads settled and never re-animates", async ({ p
     await page.press(".composer textarea", "Enter");
     await page.waitForTimeout(3_000);
     await expect(card.locator(".tool-dot")).not.toHaveClass(/running/);
-    await expect(card.locator(".tool-row")).not.toHaveAttribute("data-tip");
+    await expect(card.locator(".tool-dot")).not.toHaveAttribute("data-tip");
     await expectNoStaleClock(page);
     await page.screenshot({ path: "test-results/ghost-after-send.png" });
   } finally {
