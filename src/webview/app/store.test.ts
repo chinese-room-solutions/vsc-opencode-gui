@@ -3306,6 +3306,34 @@ describe("v2 compact waits for compaction.done", () => {
     assert.equal(sessionStatus.value[sid]?.type, "idle");
     assert.ok(callsFor("/api/session/active").length >= 1);
   });
+  it("a failed command run retires its echo", async () => {
+    const sid = "cf1";
+    commands.value = [{ name: "start" }];
+    sessions.value = [sessRow(sid)];
+    open(sid, [
+      row("u1", "user", T0),
+      row("a1", "assistant", T0 + 1, { providerID: "pp", modelID: "mm" }),
+    ]);
+    setBusy(sid);
+    queueCommand(sid, "/start");
+    const echo = queuedTurns.value[0].echoCid;
+    assert.ok(echo && listOf(sid).some((m) => m.info.id === echo));
+    // The command POST fails and the status pull reads idle truth: nothing
+    // was written server-side, so the echo must not read as a sent command
+    // (the /start ghost pileup).
+    onApi((call) =>
+      call.method === "POST" && call.path === `/api/session/${sid}/command`
+        ? API_FAIL
+        : undefined,
+    );
+    await sseFlush("session.execution.succeeded", { sessionID: sid });
+    await settle(6);
+    assert.equal(listOf(sid).some((m) => m.info.id === echo), false);
+    const stored = JSON.parse(
+      localStorageStub.getItem(`opencode-cmd-${sid}`) ?? "[]",
+    ) as { cid: string }[];
+    assert.equal(stored.some((c) => c.cid === echo), false);
+  });
 });
 
 describe("/init builtin", () => {

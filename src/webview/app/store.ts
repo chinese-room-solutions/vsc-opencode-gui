@@ -4097,8 +4097,10 @@ function storedCommandRows(id: string): ChatMessage[] {
   }));
 }
 
-function appendCommandEcho(id: string, text: string): void {
-  appendCommandEchoId(id, `cmd:${Date.now()}:${++pendingSeq}`, text);
+function appendCommandEcho(id: string, text: string): string {
+  const cid = `cmd:${Date.now()}:${++pendingSeq}`;
+  appendCommandEchoId(id, cid, text);
+  return cid;
 }
 
 function appendCommandEchoId(id: string, cid: string, text: string): void {
@@ -4590,11 +4592,12 @@ export async function runSlashCommand(
     draftModel.value = undefined;
     navigate({ view: "session", id });
   }
+  let cid = echoCid;
   setSendError(undefined);
   // Every command shows as a sent message (Claude Code) — /compact's echo
   // is appended inside runCompact, the rest here (durable: the server
   // writes no user row for a command run).
-  if (name !== "compact" && !echoed) appendCommandEcho(id, text.trim());
+  if (name !== "compact" && !echoed) cid = appendCommandEcho(id, text.trim());
   // A directly-fired command owns the session from this tick: the dispatch
   // is async (the POST resolves at the turn's end), and until the first
   // stream event the composer reads this map — without the flip a second
@@ -4635,9 +4638,12 @@ export async function runSlashCommand(
     const map = await fetchSessionStatus();
     if (map?.[id]?.type === "busy") return;
     // The failure read idle truth — retire the optimistic busy the flush
-    // (or the draft create's) path left behind.
+    // (or the draft create's) path left behind, and the echo: nothing was
+    // written server-side, so a kept echo would read as a sent command
+    // that never happened (the /start ghost pileup).
     sessionStatus.value = { ...sessionStatus.value, [id]: { type: "idle" } };
     dropPending(id);
+    if (cid) removeCommandEcho(id, cid);
     setSendError(`The command /${name} could not be run.`);
   } else {
     // The command turn's rows land in the legacy store; pull the durable
