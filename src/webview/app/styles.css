@@ -2852,8 +2852,9 @@ body {
 }
 
 /* Shell lifecycle notice (server-injected): pill like the peer/subagent
-   cards, no drill-down. The captured output is verbatim terminal bytes in
-   a clipped scroll box — collapsed by the height cap, not by a toggle. */
+   cards, no drill-down. The captured output is verbatim terminal bytes
+   folding at the pill clamp's 5-line budget — "Show more" under the box,
+   the same fold a long user pill gets. */
 .shell-notice {
   cursor: default;
 }
@@ -2863,12 +2864,36 @@ body {
   padding: 6px 8px;
   /* The user-pill clamp's 5-line budget, in this box's own 1.45 metrics. */
   max-height: calc(5 * 1.45em);
-  overflow: auto;
+  overflow: hidden;
   font-size: 11px;
   line-height: 1.45;
   white-space: pre;
   background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.1));
   border-radius: 4px;
+}
+
+/* The fold's dissolve, the pill clamp's mask: the last line fades out
+   instead of ending in a hard clip, painted only when the clamp actually
+   cuts. */
+.shell-out.clamped.cut {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    #000 calc(100% - 0.8em),
+    transparent calc(100% - 0.05em)
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    #000 calc(100% - 0.8em),
+    transparent calc(100% - 0.05em)
+  );
+}
+
+/* Expanded lays the whole capture out in the transcript's flow — no
+   height cap, so no vertical scroll; the box keeps only its horizontal
+   one (terminal lines don't wrap). */
+.shell-out.expanded {
+  max-height: none;
+  overflow: auto;
 }
 
 /* The server's restart note: one quiet line, no pill. */

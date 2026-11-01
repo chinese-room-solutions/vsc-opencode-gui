@@ -887,6 +887,15 @@ const server = http.createServer(async (req, res) => {
           `release (ID 124636603351)`,
           `  ${step} Run npm ci`,
         ].join("\n");
+      // A longer capture for the fold spec: N filler lines appended to
+      // the current frame, past the shell-out box's 5-line clamp budget.
+      const extra =
+        typeof body.lines === "number" && body.lines > 0
+          ? `\n${Array.from(
+              { length: body.lines },
+              (_, i) => `long-capture line ${i + 1}`,
+            ).join("\n")}`
+          : "";
       const payload =
         body.kind === "restart"
           ? {
@@ -894,7 +903,7 @@ const server = http.createServer(async (req, res) => {
               metadata: { notice: "restart" },
             }
           : {
-              text: `<shell id="sh_rig1" state="completed" command="gh run watch 41234939455 --exit-status">\n${frame("*")}\n\n${frame("✓")}\n</shell>`,
+              text: `<shell id="sh_rig1" state="completed" command="gh run watch 41234939455 --exit-status">\n${frame("*")}\n\n${frame("✓")}${extra}\n</shell>`,
               description: "gh run watch 41234939455 --exit-status",
               metadata: {
                 source: "shell",

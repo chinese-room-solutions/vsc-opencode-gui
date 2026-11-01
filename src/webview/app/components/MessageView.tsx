@@ -597,14 +597,84 @@ function shellNotice(parts: Part[]): {
 // Captured terminal bytes, verbatim — no markdown pass (a repaint tool's
 // frames read as bullet soup through it). Repaint frames stack one screen
 // per refresh; lastTerminalFrame keeps the current one. A long capture
-// clips to a scroll box.
+// folds at the pill clamp's 5-line budget with the same "Show more" line
+// a long user pill gets.
 function ShellOutput(props: { text: string }) {
   const last = lastTerminalFrame(props.text);
   const text =
     last.length > 20000
       ? `… earlier output elided …\n${last.slice(-20000)}`
       : last;
-  return <pre class="shell-out">{text}</pre>;
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const preRef = useRef<HTMLPreElement | null>(null);
+  // Terminal bytes arrive settled — no async DOM swap to watch (unlike
+  // the pill clamp's tokenize), so a measure per text is enough. Skipped
+  // while expanded: an unclamped box never overflows.
+  useLayoutEffect(() => {
+    const el = preRef.current;
+    if (el && !expanded) setOverflows(el.scrollHeight > el.clientHeight + 1);
+  }, [text, expanded]);
+  // The pill clamp's fold compensation, same idiom: collapsing shrinks
+  // the box by hundreds of px and the browser re-clamps scrollTop before
+  // any effect could measure, so the pre-toggle values are captured here
+  // and the corrected scrollTop is assigned after the re-render.
+  // Expanding instead jumps the card's start to the top of the view —
+  // the reader asked for the whole dump, so show it from the beginning.
+  const fold = useRef<{ top: number; box: number; pinStart?: boolean }>();
+  useLayoutEffect(() => {
+    const el = preRef.current;
+    const f = fold.current;
+    fold.current = undefined;
+    if (f && el) {
+      const scroller = el.closest(".msgs");
+      if (scroller) {
+        if (f.pinStart) {
+          const row = el.closest(".msg") ?? el;
+          scroller.scrollTop +=
+            row.getBoundingClientRect().top -
+            scroller.getBoundingClientRect().top;
+        } else {
+          scroller.scrollTop =
+            f.top + (el.getBoundingClientRect().height - f.box);
+        }
+      }
+    }
+  }, [text, expanded]);
+  return (
+    <div>
+      <pre
+        ref={preRef}
+        class={`shell-out${
+          expanded ? " expanded" : ` clamped${overflows ? " cut" : ""}`
+        }`}
+      >
+        {text}
+      </pre>
+      {(overflows || expanded) && (
+        <div class="msg-foot">
+          <button
+            type="button"
+            class="clamp-toggle"
+            onClick={() => {
+              const el = preRef.current;
+              const scroller = el?.closest(".msgs");
+              if (el && scroller) {
+                fold.current = {
+                  top: scroller.scrollTop,
+                  box: el.getBoundingClientRect().height,
+                  pinStart: !expanded,
+                };
+              }
+              setExpanded(!expanded);
+            }}
+          >
+            {expanded ? "Show less" : "Show more"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // The server's restart note (metadata.notice "restart"): an instruction to
