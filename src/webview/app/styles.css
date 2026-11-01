@@ -1074,8 +1074,9 @@ body {
 }
 
 /* opencode's pixel spinner (tabs and sub-agent chips while busy): the grid
-   cells pulse on per-cell delays through the two keyframes its ui package
-   pairs with the Spinner — full pulse inside, a dim one on the outer ring. */
+   cells pulse through the two keyframes its ui package pairs with the
+   Spinner — full pulse inside, a dim one on the outer ring — on delays that
+   sweep clockwise (icons.tsx), so the pattern travels like a spin. */
 .pixel-spin {
   flex: none;
   width: 14px;
@@ -1129,7 +1130,7 @@ body {
     opacity: 0.15;
   }
   50% {
-    opacity: 0.35;
+    opacity: 0.5;
   }
 }
 

@@ -424,20 +424,28 @@ export function WordmarkIcon() {
 }
 
 // opencode's pixel spinner, lifted from its ui package's Spinner (the busy
-// mark on session tabs and sub-agent chips): a 4x4 grid of cells, each
-// pulsing opacity on its own clock — outer ring dimmer, corners dark. The
-// randomization is shared by every instance, like upstream's module-level
-// array (one pattern per page load).
+// mark on session tabs and sub-agent chips): a 4x4 grid of cells pulsing
+// opacity — outer ring dimmer, corners dark. The pulse chases clockwise
+// (delay sweeps by cell angle, one shared duration) so the grid reads as
+// spinning, not as random flicker.
 const SPIN_OUTER = new Set([1, 2, 4, 7, 8, 11, 13, 14]);
 const SPIN_CORNER = new Set([0, 3, 12, 15]);
-const SPIN_CELLS = Array.from({ length: 16 }, (_, i) => ({
-  x: (i % 4) * 4,
-  y: Math.floor(i / 4) * 4,
-  delay: Math.random() * 1.5,
-  duration: 1 + Math.random(),
-  outer: SPIN_OUTER.has(i),
-  corner: SPIN_CORNER.has(i),
-}));
+const SPIN_CELLS = Array.from({ length: 16 }, (_, i) => {
+  // Angle around the grid center (7.5, 7.5); y-down atan2 already runs
+  // clockwise on screen. Negative delays start every cell mid-wave.
+  const angle = Math.atan2(
+    Math.floor(i / 4) * 4 + 1.5 - 7.5,
+    (i % 4) * 4 + 1.5 - 7.5,
+  );
+  return {
+    x: (i % 4) * 4,
+    y: Math.floor(i / 4) * 4,
+    delay: ((angle + Math.PI * 2.5) / (Math.PI * 2)) * 0.9 - 0.9,
+    duration: 1.2,
+    outer: SPIN_OUTER.has(i),
+    corner: SPIN_CORNER.has(i),
+  };
+});
 
 export function PixelSpinner(props: { tone?: "attention" | "ready" }) {
   return (
