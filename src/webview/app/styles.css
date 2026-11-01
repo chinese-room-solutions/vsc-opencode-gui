@@ -2642,9 +2642,6 @@ body {
    distance stays as it is. */
 
 .msg.user {
-  position: sticky;
-  top: 0;
-  z-index: 2;
   margin: 0;
   padding: 6px 0 2px;
   background: var(--oc-panel);
@@ -2652,7 +2649,17 @@ body {
   cursor: pointer;
 }
 
-.msg.user::after {
+/* The pin is the reader's own words alone. Notice cards ride the user role
+   from the durable fetch (peer, sub-agent, shell) but must stay in flow —
+   a finished shell card squatting at the panel's top hides the transcript
+   under its output for the whole scroll. */
+.msg.user:not(.peer):not(.subagent-notice):not(.shell-notice) {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.msg.user:not(.peer):not(.subagent-notice):not(.shell-notice)::after {
   content: "";
   position: absolute;
   top: 100%;

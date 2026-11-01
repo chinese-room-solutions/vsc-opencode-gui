@@ -55,6 +55,39 @@ test("a shell lifecycle note renders as a card with the last frame only", async 
   }
 });
 
+test("the shell card stays in flow — only the reader's own pill pins", async ({ page }) => {
+  const rig = await startRig({
+    env: {
+      OPENCODE_ROUTE: JSON.stringify({ view: "session", id: "ses_seed_1" }),
+      OPENCODE_TABS: JSON.stringify(["ses_seed_1"]),
+      OPENCODE_DIALECT: "v2",
+      OPENCODE_READY_SOUND: "0",
+      OPENCODE_PERMISSION_SOUND: "0",
+      OPENCODE_QUESTION_SOUND: "0",
+    },
+  });
+  try {
+    await page.goto(rig.url);
+    await page.waitForSelector(".msgs .turn .msg.user", { timeout: 15_000 });
+    await fetch(`${rig.api}/__control/shell-note`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const card = page.locator(".shell-notice");
+    await expect(card).toHaveCount(1);
+    // The card rides a user-role row (the durable fetch serves notices as
+    // user rows) — the prompt's pin rule must not come along, or the
+    // finished card squats at the panel's top over the whole scroll.
+    const pos = (loc) => loc.evaluate((n) => getComputedStyle(n).position);
+    expect(await pos(card)).toBe("static");
+    // The seed pill is the reader's own words — it keeps the pin.
+    expect(await pos(page.locator(".turn .msg.user").first())).toBe("sticky");
+  } finally {
+    rig.stop();
+  }
+});
+
 test("the server's restart note renders as one quiet line", async ({ page }) => {
   const rig = await startRig({
     env: {
