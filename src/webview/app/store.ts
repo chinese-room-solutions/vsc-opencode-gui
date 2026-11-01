@@ -2462,6 +2462,14 @@ function applyEvent(event: ServerEvent): void {
           // server's queued steer firing as a ghost turn — abort it (after
           // the row lands below, so the stop marker finds it).
           queueMicrotask(() => void stopSession(sid));
+        } else if (unseen && !postedRows.has(sid) && commandRuns.has(sid)) {
+          // v1's row for a fired command run — same yield as the v2
+          // admitted row: the run's echo retires into the durable record.
+          const run = commandRuns.get(sid);
+          if (run && Date.now() - run.since <= COMMAND_CLAIM_TTL) {
+            commandRuns.delete(sid);
+            removeCommandEcho(sid, run.cid);
+          }
         }
       }
       // Only known fields ride along: absent tokens/cost must not clobber
@@ -2613,6 +2621,22 @@ function applyEvent(event: ServerEvent): void {
             type: "text",
             text: data.prompt.text,
           });
+        }
+        // Not ours and a command run is in flight: this row is the
+        // command's durable record (its template, prompted server-side) —
+        // the run's echo yields to it the moment it lands. `before` bars a
+        // replayed admission for a row that predates the run (a reconnect
+        // replay) — the command's own row can never be in that set.
+        if (!postedRows.has(sid)) {
+          const run = commandRuns.get(sid);
+          if (
+            run &&
+            !run.before.has(data.messageID) &&
+            Date.now() - run.since <= COMMAND_CLAIM_TTL
+          ) {
+            commandRuns.delete(sid);
+            removeCommandEcho(sid, run.cid);
+          }
         }
       }
       break;
@@ -4094,11 +4118,15 @@ function healQueuedEchoes(id: string): void {
   }
 }
 
-// A command line's durable echo. The server persists no user row for a
-// command run, so this local row IS the transcript's record: never swept
-// by the pending-retire paths, spliced back in by refreshMessages, and
-// kept in localStorage so it survives a reload. Webview-local by nature:
-// another window or machine shows no line.
+// A command line's durable echo. The server persists no user row for the
+// command invocation itself — the row a run writes is the command's
+// rendered template, an ordinary prompt, and claims this echo (see
+// commandRuns). Until that row lands (or forever, for commands whose
+// template never prompts this session: subagent-mode runs a child
+// session, v2 skills append a skill message) this local row IS the
+// transcript's record: spliced back in by refreshMessages and kept in
+// localStorage so it survives a reload. Webview-local by nature: another
+// window or machine shows no line.
 const cmdStoreKey = (id: string): string => `opencode-cmd-${id}`;
 
 interface StoredCommand {
@@ -4169,6 +4197,28 @@ function appendCommandEchoId(id: string, cid: string, text: string): void {
     { info: { id: cid, role: "user", time: { created } }, parts: [part] },
   ]);
 }
+
+// A fired command run, per session: the run's echo and the user-row ids
+// that existed before the POST. Server-side a config/plugin command's
+// template runs as an ordinary prompt in this session (opencode's
+// config/plugin/command.ts evaluateTemplate → session.prompt), so the
+// row it writes is the send's durable record and the local echo must
+// yield to it — one bubble, the server's own (what every other client,
+// including the TUI, shows for that turn). The row surfaces through the
+// v2 admission event, v1's message.updated, or the completion fetch;
+// whichever lands first claims the echo. Commands whose template never
+// prompts this session (subagent-mode commands run a child session; v2
+// skills append a skill message) write no row and keep the echo.
+const commandRuns = new Map<
+  string,
+  { cid: string; since: number; before: Set<string> }
+>();
+
+// A claim window, not a lifetime: an entry outlives a completion that saw
+// no row (the fetch may have failed or raced the write — the row can land
+// live a beat later), but a row landing long after the run is somebody
+// else's send and must not eat a no-row command's echo.
+const COMMAND_CLAIM_TTL = 300_000;
 
 // Remove one durable command echo by row id, from the transcript and
 // localStorage — the queued /compact's echo, retired by the run that
@@ -4646,8 +4696,9 @@ export async function runSlashCommand(
   let cid = echoCid;
   setSendError(undefined);
   // Every command shows as a sent message (Claude Code) — /compact's echo
-  // is appended inside runCompact, the rest here (durable: the server
-  // writes no user row for a command run).
+  // is appended inside runCompact, the rest here. The echo is a stand-in:
+  // the run's durable row claims it (commandRuns, below) when the command's
+  // template prompts this session.
   if (name !== "compact" && !echoed) cid = appendCommandEcho(id, text.trim());
   // A directly-fired command owns the session from this tick: the dispatch
   // is async (the POST resolves at the turn's end), and until the first
@@ -4681,6 +4732,16 @@ export async function runSlashCommand(
       commitRevertCut(id, stagedRevert.messageID);
     }
   }
+  if (cid)
+    commandRuns.set(id, {
+      cid,
+      since: Date.now(),
+      before: new Set(
+        (messagesBySession.value.get(id) ?? [])
+          .filter((m) => m.info.role === "user")
+          .map((m) => m.info.id),
+      ),
+    });
   if (!(await runCommand(id, name, m?.[2] ?? "", sel, isSkill))) {
     // The call can fail while the command's turn still runs server-side
     // (relay abort, server churn): status decides. Busy keeps the echo —
@@ -4692,16 +4753,36 @@ export async function runSlashCommand(
     // (or the draft create's) path left behind, and the echo: nothing was
     // written server-side, so a kept echo would read as a sent command
     // that never happened (the /start ghost pileup).
+    commandRuns.delete(id);
     sessionStatus.value = { ...sessionStatus.value, [id]: { type: "idle" } };
     dropPending(id);
     if (cid) removeCommandEcho(id, cid);
     setSendError(`The command /${name} could not be run.`);
   } else {
     // The command turn's rows land in the legacy store; pull the durable
-    // truth (the stream already projected the live parts), then retire the
-    // echo if the command wrote no user row of its own.
+    // truth (the stream already projected the live parts), then retire
+    // the echo if the command wrote a user row of its own.
     await refreshMessages(id);
     dropPending(id);
+    // The net for a row the stream never delivered live (a reconnect
+    // gap): a durable user row the run added — one that predates nothing
+    // this client had before the POST — claims the echo here. A negative
+    // net keeps the entry: the row can still land live a beat later
+    // (within the claim TTL).
+    const run = commandRuns.get(id);
+    if (run && Date.now() - run.since <= COMMAND_CLAIM_TTL) {
+      const added = (messagesBySession.value.get(id) ?? []).some(
+        (m) =>
+          m.info.role === "user" &&
+          !m.info.id.startsWith("pending:") &&
+          !m.info.id.startsWith("cmd:") &&
+          !run.before.has(m.info.id),
+      );
+      if (added) {
+        commandRuns.delete(id);
+        removeCommandEcho(id, run.cid);
+      }
+    }
   }
 }
 

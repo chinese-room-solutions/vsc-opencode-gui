@@ -3336,6 +3336,106 @@ describe("v2 compact waits for compaction.done", () => {
     ) as { cid: string }[];
     assert.equal(stored.some((c) => c.cid === echo), false);
   });
+  it("a command run's echo retires when the server writes the command's row", async () => {
+    const sid = "cs1";
+    commands.value = [{ name: "start" }];
+    sessions.value = [sessRow(sid)];
+    open(sid, [
+      row("u1", "user", T0),
+      row("a1", "assistant", T0 + 1, { providerID: "pp", modelID: "mm" }),
+    ]);
+    const run = runSlashCommand(sid, "/start");
+    await settle(2);
+    // The template the server prompts lands live as the admitted row,
+    // mid-run (opencode runs a config command's markdown as the prompt).
+    await sseFlush("session.next.prompt.admitted", {
+      sessionID: sid,
+      messageID: "msg_t1",
+      prompt: { text: "Read `AGENTS.md` and follow it." },
+      timestamp: T0 + 10,
+    });
+    await run;
+    // One row for the send — the durable template row, no echo beside it.
+    assert.ok(findRow(sid, "msg_t1"));
+    assert.equal(listOf(sid).some((m) => m.info.id.startsWith("cmd:")), false);
+    const stored = JSON.parse(
+      localStorageStub.getItem(`opencode-cmd-${sid}`) ?? "[]",
+    ) as { cid: string }[];
+    assert.equal(stored.length, 0);
+  });
+  it("a command row only the completion fetch serves still retires the echo", async () => {
+    const sid = "cs2";
+    commands.value = [{ name: "start" }];
+    sessions.value = [sessRow(sid)];
+    open(sid, [
+      row("u1", "user", T0),
+      row("a1", "assistant", T0 + 1, { providerID: "pp", modelID: "mm" }),
+    ]);
+    // No live event (a reconnect gap): the row appears in the durable
+    // fetch the completion path pulls.
+    onApi(
+      messageMock(sid, {
+        data: [
+          {
+            id: "msg_t2",
+            type: "user",
+            time: { created: T0 + 5 },
+            text: "Read `AGENTS.md` and follow it.",
+          },
+        ],
+        cursor: {},
+      }),
+    );
+    await runSlashCommand(sid, "/start");
+    assert.ok(findRow(sid, "msg_t2"));
+    assert.equal(listOf(sid).some((m) => m.info.id.startsWith("cmd:")), false);
+  });
+  it("a command whose template never prompts this session keeps its echo", async () => {
+    const sid = "cs3";
+    commands.value = [{ name: "start" }];
+    sessions.value = [sessRow(sid)];
+    open(sid, [
+      row("u1", "user", T0),
+      row("a1", "assistant", T0 + 1, { providerID: "pp", modelID: "mm" }),
+    ]);
+    // Subagent-mode commands prompt a child session; nothing lands here.
+    // The echo is the only record and must survive the run's completion.
+    await runSlashCommand(sid, "/start");
+    const echoes = listOf(sid).filter((m) => m.info.id.startsWith("cmd:"));
+    assert.equal(echoes.length, 1);
+    const stored = JSON.parse(
+      localStorageStub.getItem(`opencode-cmd-${sid}`) ?? "[]",
+    ) as { cid: string }[];
+    assert.equal(stored.length, 1);
+  });
+  it("a replayed admission for a row older than the run claims nothing", async () => {
+    const sid = "cs4";
+    commands.value = [{ name: "start" }];
+    sessions.value = [sessRow(sid)];
+    open(sid, [
+      row("u1", "user", T0),
+      row("a1", "assistant", T0 + 1, { providerID: "pp", modelID: "mm" }),
+    ]);
+    const run = runSlashCommand(sid, "/start");
+    await settle(2);
+    // A reconnect can replay an admission for a row the client already
+    // had before the run (u1) — it must not eat a no-row command's echo.
+    await sseFlush("session.next.prompt.admitted", {
+      sessionID: sid,
+      messageID: "u1",
+      prompt: { text: "old row" },
+      timestamp: T0,
+    });
+    await run;
+    assert.equal(
+      listOf(sid).filter((m) => m.info.id.startsWith("cmd:")).length,
+      1,
+    );
+    const stored = JSON.parse(
+      localStorageStub.getItem(`opencode-cmd-${sid}`) ?? "[]",
+    ) as { cid: string }[];
+    assert.equal(stored.length, 1);
+  });
 });
 
 describe("/init builtin", () => {
