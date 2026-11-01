@@ -2709,11 +2709,17 @@ function applyEvent(event: ServerEvent): void {
         m.parts.some((p) => p.id === shell.id),
       );
       if (!row) break;
+      // killed is the user's stop, timeout the server's (the shell
+      // schema's literals) — both read failed, not completed.
+      const failed =
+        shell.status === "failed" ||
+        shell.status === "killed" ||
+        shell.status === "timeout";
       patchToolState(sid, row.info.id, shell.id, (s) => ({
         ...s,
-        status: shell.status === "failed" ? "error" : "completed",
+        status: failed ? "error" : "completed",
         ...(out !== undefined ? { output: out } : {}),
-        ...(shell.status === "failed"
+        ...(failed
           ? { error: out ?? "The shell command failed." }
           : {}),
         time: { ...s.time, end: data.timestamp ?? Date.now() },

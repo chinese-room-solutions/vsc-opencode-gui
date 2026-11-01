@@ -1453,7 +1453,11 @@ export async function fetchMessages(
     // the store's tail poller owns settling it — and every native row
     // carries the marker that tells it apart from agent bash calls.
     if (r.type === "shell") {
-      const failed = r.status === "failed";
+      // Real statuses are running | exited | timeout | killed (the shell
+      // schema's literals): killed is the user's stop, timeout the
+      // server's — both must read failed, not completed.
+      const failed =
+        r.status === "failed" || r.status === "killed" || r.status === "timeout";
       const running = r.status === "running";
       // The wire's output is the Shell.Output struct, not a string — fold
       // it, or the row's abort check crashes the whole view.

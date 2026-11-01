@@ -3606,6 +3606,50 @@ describe("native shell output folding", () => {
     assert.equal(part.state?.output, "done bytes");
     assert.equal(part.state?.status, "completed");
   });
+  it("a stopped or timed-out shell reads failed, live and fetched", async () => {
+    const sid = "ns3";
+    sessions.value = [sessRow(sid)];
+    open(sid, []);
+    await sseFlush("session.shell.started", {
+      sessionID: sid,
+      shell: { id: "sh_3", command: "ping -n 99 127.0.0.1", status: "running" },
+    });
+    await sseFlush("session.shell.ended", {
+      sessionID: sid,
+      shell: { id: "sh_3", status: "killed" },
+      output: { output: "partial", cursor: 7, size: 7, truncated: false },
+    });
+    const live = listOf(sid)
+      .find((m) => m.parts.some((p) => p.id === "sh_3"))
+      ?.parts.find((p) => p.id === "sh_3") as
+      | { state?: { status?: string; error?: unknown } }
+      | undefined;
+    assert.equal(live?.state?.status, "error");
+    assert.equal(live?.state?.error, "partial");
+
+    onApi(
+      messageMock(sid, {
+        data: [
+          {
+            id: "msg_s3",
+            type: "shell",
+            time: { created: T0, completed: T0 + 5 },
+            shellID: "sh_4",
+            command: "ping -n 99 127.0.0.1",
+            status: "timeout",
+            output: { output: "some bytes", cursor: 9, size: 9, truncated: true },
+          },
+        ],
+        cursor: {},
+      }),
+    );
+    await refreshMessages(sid);
+    const fetched = listOf(sid).find((m) => m.info.id === "msg_s3")?.parts[0] as
+      | { state?: { status?: string; error?: unknown } }
+      | undefined;
+    assert.equal(fetched?.state?.status, "error");
+    assert.equal(fetched?.state?.error, "some bytes");
+  });
 });
 
 describe("/init builtin", () => {
