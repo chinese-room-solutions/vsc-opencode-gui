@@ -39,12 +39,19 @@ type ActiveSubagent = {
 // The session's live task parts, oldest first, under the same liveness
 // rules the transcript's chips use: a part pending/running in the live
 // turn, a child session still working (a steer re-activating a settled
-// card included), or a child waiting on an ask.
-function activeSubagents(
+// card included), or a child waiting on an ask. One row per CHILD
+// SESSION: two live parts can vouch for the same child — a steer
+// re-opening it, a spawn race before the ids land, the title fallback
+// binding both to the newest same-labeled child — and this is a roster
+// of sub-agents, not of the parts that spawned them. Parts with no
+// resolvable child stay distinct; the active call represents a merged
+// session.
+export function activeSubagents(
   id: string,
   liveId: string | undefined,
 ): ActiveSubagent[] {
   const out: ActiveSubagent[] = [];
+  const byChild = new Map<string, number>();
   for (const m of (messagesFor(id).value ?? []) as ChatMessage[]) {
     for (const part of m.parts) {
       if (!isTool(part)) continue;
@@ -58,7 +65,23 @@ function activeSubagents(
         (live && (status === "pending" || status === "running")) ||
         sessionWorking(sessionId);
       const asking = childAsk(sessionId);
-      if (running || asking) out.push({ part, live, asking });
+      if (!(running || asking)) continue;
+      // The active call represents the session: a completed part only
+      // stands in while its child works (a steer), and the live turn's
+      // part beats a same-status older one.
+      const rank = (p: ActiveSubagent): number =>
+        (p.part.state?.status === "pending" ||
+        p.part.state?.status === "running"
+          ? 2
+          : 0) + (p.live ? 1 : 0);
+      const next = { part, live, asking };
+      const at = sessionId === undefined ? undefined : byChild.get(sessionId);
+      if (at !== undefined) {
+        if (rank(next) > rank(out[at])) out[at] = next;
+        continue;
+      }
+      if (sessionId !== undefined) byChild.set(sessionId, out.length);
+      out.push(next);
     }
   }
   return out;

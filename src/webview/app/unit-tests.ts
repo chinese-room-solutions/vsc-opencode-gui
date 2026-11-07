@@ -7,6 +7,7 @@ import "./markdown.test";
 import "./rate.test";
 import "./store.test";
 import "./components/ToolCard.test";
+import "./components/SubagentMenu.test";
 import "./v2.test";
 import "./stuck.test";
 import "./disabledProviders.test";

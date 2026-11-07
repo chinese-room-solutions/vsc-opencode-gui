@@ -29,6 +29,10 @@ const blocked = process.env.FAKE_API_BLOCKED === "1";
 // (the running transition missed) while the child session works — the
 // chip spins on the child's status, so "no progress" would be false.
 const childPending = process.env.FAKE_API_CHILD_PENDING === "1";
+// FAKE_API_DUP_CHILD=1 seeds two live task parts bound to the SAME child
+// session (a steer re-opening it, or the title fallback double-binding) —
+// the roster must count the sub-agent once, not once per part.
+const dupChild = process.env.FAKE_API_DUP_CHILD === "1";
 // FAKE_API_STALLED=1 seeds the live turn with a "running" edit whose
 // input never arrived — the wire shape a stalled provider stream leaves
 // (v2 tool args stream as ephemeral deltas; the durable row keeps {}
@@ -315,6 +319,7 @@ for (let i = 1; i <= SEED_TURNS; i++) {
                 : {
                     status: "completed",
                     input: { description: "Check the retry paths", subagent_type: "general" },
+                    ...(dupChild ? { metadata: { sessionId: "ses_child_1" } } : {}),
                     output: "done",
                     time: { start: ca + 8_600, end: ca + 9_400 },
                   },
@@ -323,15 +328,22 @@ for (let i = 1; i <= SEED_TURNS; i++) {
             type: "tool",
             id: "pt_task2",
             name: "task",
-            state: {
-              status: "completed",
-              input: {
-                description: "Explore the attribution retry paths",
-                subagent_type: "oc-model-ai-gateway-fireworks-glm-5-3-flash",
-              },
-              output: "done",
-              time: { start: ca + 9_600, end: ca + 10_400 },
-            },
+            state: dupChild
+              ? {
+                  status: "running",
+                  input: { description: "Check the retry paths", subagent_type: "general" },
+                  metadata: { sessionId: "ses_child_1" },
+                  time: { start: ca + 10_600 },
+                }
+              : {
+                  status: "completed",
+                  input: {
+                    description: "Explore the attribution retry paths",
+                    subagent_type: "oc-model-ai-gateway-fireworks-glm-5-3-flash",
+                  },
+                  output: "done",
+                  time: { start: ca + 9_600, end: ca + 10_400 },
+                },
           },
           ...(stalled
             ? [
@@ -1012,7 +1024,7 @@ const server = http.createServer(async (req, res) => {
 
   // boot / reads
   if (method === "GET") {
-    if (path === "/session/status") { json(res, 200, { [SESSION_ID]: { type: stepsActive || blocked || stalled || childPending ? "busy" : "idle" } }); return; }
+    if (path === "/session/status") { json(res, 200, { [SESSION_ID]: { type: stepsActive || blocked || stalled || childPending || dupChild ? "busy" : "idle" } }); return; }
     // v2: the child is mid-run — the seeded session itself stays idle so
     // the chip's running state comes from the child, not the parent,
     // except in the blocked rig (parent mid-turn on that child).
@@ -1020,7 +1032,7 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, {
         data: {
           ses_child_1: { agent: "general" },
-          ...((blocked || stalled || childPending) ? { [SESSION_ID]: { agent: "build" } } : {}),
+          ...((blocked || stalled || childPending || dupChild) ? { [SESSION_ID]: { agent: "build" } } : {}),
         },
       });
       return;
