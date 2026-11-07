@@ -13,3 +13,4 @@ out/
 
 # Playwright (test:ui) output
 test-results/
+.raein/
