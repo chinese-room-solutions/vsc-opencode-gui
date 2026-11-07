@@ -45,13 +45,12 @@ light weight.
   name (the user's own window shares it). The webview DOM is unreachable
   from tools; read its state from screenshots via OCR.
 - The top-level agent can be not multimodal (check). Screenshot/visual inspection is
-  delegated to a subagent running the vision-capable model
-  (zai-coding-plan/glm-5.3-flash), never judged from the top level.
+  delegated to a subagent running the vision-capable model, never judged from the top level.
 
 ## Working style
 
 - Top-level agent: plan, orchestrate, and review. Make simple changes yourself — a settled, small, contained edit costs more to hand off than to make.
-- Delegate the rest, at most 2 subagents at a time: work spanning several files, needing its own exploration, or running long. Each starts cold — hand it the diagnosis, file refs, design, environment setup, and what to verify.
+- Delegate the rest: work spanning several files, needing its own exploration, or running long. Each starts cold — hand it the diagnosis, file refs, design, environment setup, and what to verify.
 - Subagent: do the work yourself. Never spawn further agents.
 - Scale verification to risk: a webview markup/CSS change needs a compile and one look in the Extension Development Host; lifecycle, process, or multi-file changes need `npm test` (and the changed behavior exercised for real when it can't be asserted from the harness).
 - Verify a diagnosis against current code before fixing it. One commit per fix.
