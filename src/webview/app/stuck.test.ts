@@ -325,6 +325,79 @@ describe("stuck", () => {
       assert.equal(marksOf(sid)?.parts["p1"], undefined);
     });
 
+    it("a pending task spawn with a working child holds the turn clock", () => {
+      const sid = "sk12";
+      busySession(sid);
+      busySession("childP");
+      open(sid, [
+        {
+          info: { id: "m1", role: "assistant", time: { created: T0 } },
+          parts: [
+            {
+              id: "p1",
+              messageID: "m1",
+              sessionID: sid,
+              type: "tool",
+              tool: "task",
+              state: {
+                status: "pending",
+                time: { start: T0 },
+                metadata: { sessionId: "childP" },
+              },
+            },
+          ],
+        },
+      ]);
+      setNow(T0 + 100);
+      runStuckTick(); // seeds the turn clock
+      setNow(T0 + 5_000); // far past the threshold, but the child works
+      runStuckTick();
+      assert.equal(marksOf(sid), undefined);
+      // The child ends — the quiet turn is the hang now, from a fresh grace.
+      sessionStatus.value = {
+        ...sessionStatus.value,
+        childP: { type: "idle" },
+      };
+      setNow(T0 + 5_100);
+      runStuckTick();
+      assert.equal(marksOf(sid), undefined);
+      setNow(T0 + 6_400);
+      runStuckTick();
+      // The grace re-arms from the child's last held tick (T0+5_000), the
+      // same convention as the part clock's.
+      assert.deepEqual(marksOf(sid)?.turn, { since: T0 + 5_000 });
+    });
+
+    it("a backgrounded task part's working child holds the turn clock", () => {
+      const sid = "sk13";
+      busySession(sid);
+      busySession("childBg");
+      open(sid, [
+        {
+          info: { id: "m1", role: "assistant", time: { created: T0 } },
+          parts: [
+            {
+              id: "p1",
+              messageID: "m1",
+              sessionID: sid,
+              type: "tool",
+              tool: "task",
+              state: {
+                status: "completed",
+                time: { start: T0, end: T0 + 1_000 },
+                metadata: { sessionId: "childBg", background: true },
+              },
+            },
+          ],
+        },
+      ]);
+      setNow(T0 + 100);
+      runStuckTick();
+      setNow(T0 + 5_000); // the backgrounded child still works
+      runStuckTick();
+      assert.equal(marksOf(sid), undefined);
+    });
+
     it("a live compaction turn is excluded wholesale", () => {
       const sid = "sk8";
       busySession(sid);

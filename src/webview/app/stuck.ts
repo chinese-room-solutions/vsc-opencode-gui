@@ -145,20 +145,20 @@ function stuckTick(): void {
     const seen = toolSeen.get(sid) ?? new Map<string, number>();
     const parts: Record<string, StuckPartMark> = {};
     let anyRunning = false;
+    // A sub-agent still working under this session is progress elsewhere,
+    // not turn silence: the part fingerprint can sit still for the whole
+    // life of a healthy long child turn — and the part itself can read as
+    // anything but "running" while its child works (a pending spawn, a
+    // backgrounded completion). The child's own busy status holds the
+    // turn clock too, exactly as it holds the part clock below. No status
+    // entry (never seen, or already ended) keeps the wedge detection — a
+    // child done while the turn sits silent is the hang worth flagging.
+    let busyChild = false;
     for (const m of list) {
       if (m.info.agent === "compaction") continue;
       for (const p of m.parts) {
         if (!isTool(p) || !p.state) continue;
         const st = p.state.status;
-        if (st === "completed" || st === "error") {
-          seen.delete(p.id);
-          continue;
-        }
-        // Seeds restored rows (reload/reconnect) from their start stamp.
-        if (!seen.has(p.id)) seen.set(p.id, p.state.time?.start || now);
-        if (st !== "running") continue;
-        anyRunning = true;
-        const since = seen.get(p.id)!;
         // v1's task tool writes the child as `sessionId`, v2's subagent
         // tool as `sessionID`.
         const meta = p.state.metadata as
@@ -171,21 +171,23 @@ function stuckTick(): void {
             ? ((meta?.sessionId ?? meta?.sessionID) as string)
             : undefined;
         // A child stalled on its own permission/question ask isn't stuck —
-        // the ask is the explanation; hold the clock until it's answered.
-        if (childId && hasPendingAsk(childId)) {
-          seen.set(p.id, now);
+        // the ask is the explanation; hold until it's answered. Retry
+        // counts as working: the provider backoff is mid-turn.
+        const childBusy =
+          childId !== undefined &&
+          (hasPendingAsk(childId) ||
+            (sessionStatus.value[childId]?.type ?? "idle") !== "idle");
+        if (childBusy) busyChild = true;
+        if (st === "completed" || st === "error") {
+          seen.delete(p.id);
           continue;
         }
-        // A sub-agent still working is progress elsewhere, not silence: the
-        // parent's part fingerprint can sit still for the whole life of a
-        // healthy long child turn, so the child's own busy status holds the
-        // clock too. No status entry (never seen, or already ended) keeps
-        // the wedge detection — a child done while this part still runs is
-        // the hang worth flagging.
-        if (
-          childId &&
-          (sessionStatus.value[childId]?.type ?? "idle") !== "idle"
-        ) {
+        // Seeds restored rows (reload/reconnect) from their start stamp.
+        if (!seen.has(p.id)) seen.set(p.id, p.state.time?.start || now);
+        if (st !== "running") continue;
+        anyRunning = true;
+        const since = seen.get(p.id)!;
+        if (childBusy) {
           seen.set(p.id, now);
           continue;
         }
@@ -201,6 +203,7 @@ function stuckTick(): void {
     }
     if (seen.size) toolSeen.set(sid, seen);
     else toolSeen.delete(sid);
+    if (busyChild) sessionSeen.set(sid, now);
     const turnSince = sessionSeen.get(sid)!;
     const turn =
       !anyRunning && now - turnSince >= toolMs

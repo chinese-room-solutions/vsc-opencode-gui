@@ -24,6 +24,11 @@ const SEED_TURNS = process.env.FAKE_API_LONG === "1" ? 100 : 12;
 // (vouching for child ses_child_1) and the status endpoints serve the
 // parent busy — the fixture for sendPrompt's auto-background release.
 const blocked = process.env.FAKE_API_BLOCKED === "1";
+// FAKE_API_CHILD_PENDING=1 seeds the wire shape the stuck turn-mark
+// misread: the parent busy mid-turn with its task part still "pending"
+// (the running transition missed) while the child session works — the
+// chip spins on the child's status, so "no progress" would be false.
+const childPending = process.env.FAKE_API_CHILD_PENDING === "1";
 // FAKE_API_STALLED=1 seeds the live turn with a "running" edit whose
 // input never arrived — the wire shape a stalled provider stream leaves
 // (v2 tool args stream as ephemeral deltas; the durable row keeps {}
@@ -300,12 +305,19 @@ for (let i = 1; i <= SEED_TURNS; i++) {
                   metadata: { sessionId: "ses_child_1" },
                   time: { start: ca + 8_600 },
                 }
-              : {
-                  status: "completed",
-                  input: { description: "Check the retry paths", subagent_type: "general" },
-                  output: "done",
-                  time: { start: ca + 8_600, end: ca + 9_400 },
-                },
+              : childPending
+                ? {
+                    status: "pending",
+                    input: { description: "Check the retry paths", subagent_type: "general" },
+                    metadata: { sessionId: "ses_child_1" },
+                    time: { start: ca + 8_600 },
+                  }
+                : {
+                    status: "completed",
+                    input: { description: "Check the retry paths", subagent_type: "general" },
+                    output: "done",
+                    time: { start: ca + 8_600, end: ca + 9_400 },
+                  },
           },
           {
             type: "tool",
@@ -1000,7 +1012,7 @@ const server = http.createServer(async (req, res) => {
 
   // boot / reads
   if (method === "GET") {
-    if (path === "/session/status") { json(res, 200, { [SESSION_ID]: { type: stepsActive || blocked || stalled ? "busy" : "idle" } }); return; }
+    if (path === "/session/status") { json(res, 200, { [SESSION_ID]: { type: stepsActive || blocked || stalled || childPending ? "busy" : "idle" } }); return; }
     // v2: the child is mid-run — the seeded session itself stays idle so
     // the chip's running state comes from the child, not the parent,
     // except in the blocked rig (parent mid-turn on that child).
@@ -1008,7 +1020,7 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, {
         data: {
           ses_child_1: { agent: "general" },
-          ...((blocked || stalled) ? { [SESSION_ID]: { agent: "build" } } : {}),
+          ...((blocked || stalled || childPending) ? { [SESSION_ID]: { agent: "build" } } : {}),
         },
       });
       return;
