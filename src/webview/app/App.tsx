@@ -6,7 +6,7 @@ import { route } from "./router";
 import { status } from "./store";
 import DOMPurify from "dompurify";
 
-// Shell: one floating content panel on the backdrop color. A session
+// Shell: one content panel filling the host. A session
 // host renders its conversation; the navigator host renders the session
 // browser. The server connection state has no chrome — failures surface
 // through the error view below.

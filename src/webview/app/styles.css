@@ -5,9 +5,8 @@
    specificity so injected theme values always win. */
 
 /* Tokens:
-   --oc-bg         page backdrop behind the floating panel
-   --oc-panel      the floating content panel
-   --oc-border     hairlines (panel edge, dividers)
+   --oc-panel      the surface: editor background, sideBar's in the navigator
+   --oc-border     hairlines (dividers)
    --oc-text       primary text
    --oc-text-2     secondary text (inactive tabs, project names)
    --oc-surface-2  recessed fill (user box, docks) — the theme's input fill
@@ -20,7 +19,7 @@
    --oc-send       composer send button
 
    Corner radii sit on Claude Code's scale: 4 for chips and minor buttons,
-   6 for controls and inputs, 8 for cards, menus, the panel.
+   6 for controls and inputs, 8 for cards and menus.
 
    Buttons have four voices:
    - Primary, one per surface: fills --oc-send (button-background), ink
@@ -41,7 +40,6 @@
   /* Code follows the editor's font size, capped at the UI base — an editor
      size above 13px made code blocks loom over the prose around them. */
   --oc-code-size: min(var(--vscode-editor-font-size, 13px), 13px);
-  --oc-bg: var(--vscode-sideBar-background, #fafafa);
   --oc-panel: var(--vscode-editor-background, #ffffff);
   --oc-border: var(--vscode-panel-border, #dbdbdb);
   --oc-text: var(--vscode-foreground, #161616);
@@ -97,10 +95,17 @@
   --vscode-charts-purple: #8250df;
 }
 
+/* The navigator lives in the sidebar. */
+:root[data-host="navigator"] {
+  --oc-panel: var(--vscode-sideBar-background, #fafafa);
+}
+
 body {
   margin: 0;
+  /* Overrides VS Code's injected webview default `padding: 0 20px`. */
+  padding: 0;
   color: var(--oc-text);
-  background: var(--oc-bg);
+  background: var(--oc-panel);
   font-family: var(--vscode-font-family, -apple-system, "Segoe UI", sans-serif);
   font-size: var(--vscode-font-size, 13px);
 }
@@ -123,16 +128,12 @@ body {
   font-family: var(--vscode-editor-font-family);
 }
 
-/* --- Shell: backdrop, toolbar, floating panel --- */
+/* --- Shell: toolbar, panel --- */
 
 .app {
   display: flex;
   flex-direction: column;
-  gap: 4px;
   height: 100vh;
-  box-sizing: border-box;
-  padding: 4px 1px;
-  background: var(--oc-bg);
 }
 
 .panel {
@@ -140,8 +141,6 @@ body {
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  border: 1px solid color-mix(in srgb, var(--oc-border) 55%, transparent);
-  border-radius: 8px;
   background: var(--oc-panel);
   overflow: hidden;
 }
@@ -228,18 +227,17 @@ body {
 }
 
 /* Section header rows: chevron + title, the toggle button fills the row
-   so its hover reads as the whole row. The first opens 8px under the
-   panel top — where the old search row's top gap sat. */
+   so its hover reads as the whole row. The first sits flush under
+   the view title. */
 .sec-head {
   display: flex;
   align-items: center;
   gap: 4px;
   flex: none;
   height: 22px;
-  margin: 8px 0 0;
 }
 
-/* A section stacked under another keeps the tighter rhythm. */
+/* A section stacked under another keeps a 4px gap above its header. */
 .sess-sec > .sec-head {
   margin-top: 4px;
 }
@@ -3692,7 +3690,7 @@ a.tool-pill:hover {
 /* --- parity fix: ring panel + home (pass 4) --- */
 
 /* The context panel is anchored to the session view, which fills the
-   floating panel edge to edge. */
+   host edge to edge. */
 .chat {
   position: relative;
 }
