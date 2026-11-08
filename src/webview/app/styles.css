@@ -129,7 +129,7 @@ body {
   gap: 4px;
   height: 100vh;
   box-sizing: border-box;
-  padding: 4px;
+  padding: 4px 1px;
   background: var(--oc-bg);
 }
 
@@ -721,7 +721,7 @@ body {
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
-  padding: 4px 16px 2px;
+  padding: 4px 25px 2px;
 }
 
 /* Sub-session breadcrumb, the official app's "parent / child" path: the
@@ -835,7 +835,7 @@ body {
   transition: stroke-dasharray 0.3s;
 }
 
-/* Transcript: gutters hug the panel (32px), assistant text indented to its
+/* Transcript: gutters hug the panel (25px), assistant text indented to its
    own column past the status dots. The wrap carries the bottom fade so it
    can sit over the scroller's viewport edge instead of scrolling with the
    content. */
@@ -859,7 +859,7 @@ body {
   /* Bottom clearance for the floating composer stack (Session.tsx measures
      it): at rest the last line sits just above the composer, and anything
      streaming under it dissolves — no reserve would put it behind the card. */
-  padding: 0 32px var(--oc-clearance, 110px);
+  padding: 0 25px var(--oc-clearance, 110px);
   /* The top gap is a scrolling spacer, not padding: a sticky prompt pins to
      the padding-box edge, so padding would hold it 4px down with a strip
      the slide-under content shows through. */
@@ -933,7 +933,7 @@ body {
   display: block;
   width: 680px;
   height: auto;
-  max-width: calc(100% - 64px);
+  max-width: calc(100% - 50px);
   margin: 0 auto;
   color: var(--oc-text);
 }
@@ -1212,14 +1212,14 @@ body {
 /* In the floating chrome, right above the composer (Claude Code's error
    line): the in-flow spot rested inside the fade band, so a short panel
    washed the error out exactly when it mattered. Centered over the input
-   — the docks' 744px grid and the composer's 680px card are concentric,
+   — the docks' 730px grid and the composer's 680px card are concentric,
    so text-align centers on the same axis. No backdrop: the chrome paints
    over the gradient, and a solid band across it read as a seam. */
 .chat-bottom .send-error {
   box-sizing: border-box;
-  max-width: 744px;
+  max-width: 730px;
   margin: 0 auto;
-  padding: 0 32px 6px;
+  padding: 0 25px 6px;
   text-align: center;
 }
 
@@ -1325,7 +1325,7 @@ body {
 
 .composer {
   flex: none;
-  padding: 8px 32px 14px;
+  padding: 8px 25px 14px;
 }
 
 .composer-card {
@@ -1962,10 +1962,10 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 0 32px 6px;
+  padding: 0 25px 6px;
   /* The composer caps at 680px, centered; the docks above it match
-     (680 content + 2×32 side padding). */
-  max-width: 744px;
+     (680 content + 2×25 side padding). */
+  max-width: 730px;
   width: 100%;
   box-sizing: border-box;
   margin: 0 auto;
