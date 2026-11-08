@@ -17,8 +17,9 @@ and the chat UI talks to it directly.
 
 ## ✨ Features
 
-- **Chat in an editor tab** - also available as a sidebar view. Sessions
-  open as tabs.
+- **One editor tab per session** - like any editor: each conversation is
+  its own tab, titled with the session name, revived after a reload. A
+  sidebar view lists sessions too.
 - **All sessions on one screen** - grouped by project. Rename projects in
   place. Open a session from any folder.
 - **Sub-agents are sessions** - open one from its task chip, steer it, or
@@ -54,11 +55,11 @@ All commands live under the **`Open Code:`** prefix in the command palette.
 
 | | |
 | --- | --- |
-| `Open Code: Open in Primary Editor` | Open the chat in an editor tab |
-| `Open Code: Toggle Chat` | Open or close the chat tab (`Ctrl+Esc`) |
+| `Open Code: Open in Primary Editor` | Reveal the last-active session tab, or start one |
+| `Open Code: Toggle Chat` | Close the active session tab, or reveal/start one (`Ctrl+Esc`) |
 | `Open Code: Toggle Side Panel` | Sidebar view |
-| `Open Code: New Session` | Start a session |
-| `Open Code: Show History` | Session picker |
+| `Open Code: New Session` | Start a session in its own tab |
+| `Open Code: Show History` | Session picker — opens the picked session's tab |
 | `Open Code: Add Selection to Chat` | Send the editor selection as context |
 | `Open Code: Add to Chat` | Insert the file's relative path into the chat |
 | `Open Code: Manage Models` | Provider and model picker |

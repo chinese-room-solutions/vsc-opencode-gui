@@ -2,40 +2,53 @@ import * as assert from "assert";
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
-import { CHAT_VIEWTYPE } from "../webview/ChatPanel";
+import {
+  type SessionPanels,
+  sessionTabId,
+  sessionViewType,
+} from "../webview/ChatPanel";
 
 // Runs inside the extension host (see lifecycle.ts for the harness). Covers
-// the main.ts commands observable without a visible UI: panel/view/terminal
-// creation and reuse. Effects that only exist inside the webview DOM (the
-// insert-text, new-session, and toggle-context posts) are asserted as
-// "command resolves without error" — the DOM is unreachable from the host.
+// the main.ts commands observable without a visible UI: session panels,
+// view/terminal creation and reuse. Effects that only exist inside the
+// webview DOM (the insert-text post reaching the composer) are asserted as
+// "command resolves and a panel exists" — the DOM is unreachable from the
+// host.
 
-type HubState = { kind: string; url?: string; message?: string };
+type HubState = {
+  kind: string;
+  url?: string;
+  message?: string;
+  dialect?: "v1" | "v2";
+};
 type Api = {
   hub: { state: HubState };
   provider: {
     isViewVisible: boolean;
     sidebarType: "primary" | "auxiliary" | null;
   };
+  panels: SessionPanels;
   serverPort: number | undefined;
   ensureServer: () => void;
 };
 
-function isChatTab(tab: vscode.Tab): boolean {
-  const viewType = (tab.input as { viewType?: string } | undefined)?.viewType;
-  // A restored tab reports VS Code's internal prefix (see main.ts's
-  // isChatTab); match both forms.
-  return viewType === CHAT_VIEWTYPE || viewType === `mainThreadWebview-${CHAT_VIEWTYPE}`;
-}
-
-function chatTabCount(): number {
+function sessionTabCount(): number {
   return vscode.window.tabGroups.all.reduce(
-    (n, g) => n + g.tabs.filter(isChatTab).length,
+    (n, g) => n + g.tabs.filter((t) => sessionTabId(t) !== undefined).length,
     0,
   );
 }
 
-async function until(pred: () => boolean, ms = 10_000): Promise<void> {
+function tabFor(id: string): vscode.Tab | undefined {
+  return vscode.window.tabGroups.all
+    .flatMap((g) => g.tabs)
+    .find((t) => sessionTabId(t) === id);
+}
+
+async function until(
+  pred: () => boolean,
+  ms = 20_000,
+): Promise<void> {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
     if (pred()) return;
@@ -73,17 +86,73 @@ suite("opencode GUI commands", function () {
     api = (await ext.activate()) as Api;
   });
 
-  test("openChat opens a single chat editor tab", async function () {
-    await vscode.commands.executeCommand("opencodeGui.openChat");
-    await until(() => chatTabCount() === 1);
-    assert.strictEqual(chatTabCount(), 1, "singleton tab");
+  test("sessionTabId reads live and restored-but-unclaimed tab forms", function () {
+    const live = { input: { viewType: sessionViewType("ses_1") } };
+    const pending = {
+      input: { viewType: `mainThreadWebview-${sessionViewType("ses_2")}` },
+    };
+    const foreign = { input: { viewType: "opencodeGui.chatPanel" } };
+    const none = { input: { viewType: undefined } };
+    assert.strictEqual(sessionTabId(live as never), "ses_1");
+    assert.strictEqual(sessionTabId(pending as never), "ses_2");
+    assert.strictEqual(sessionTabId(foreign as never), undefined);
+    assert.strictEqual(sessionTabId(none as never), undefined);
   });
 
-  test("toggleChat closes the active tab and opens it again", async function () {
+  test("newSession creates a session and opens its own editor tab", async function () {
+    await vscode.commands.executeCommand("opencodeGui.newSession");
+    await until(() => api.panels.ids().length === 1);
+    const id = api.panels.ids()[0];
+    assert.ok(id, "a session was created");
+    assert.ok(api.panels.has(id), "panel registered for it");
+    await until(() => tabFor(id) !== undefined);
+    // The Tab API reports webview inputs with a mainThreadWebview- prefix
+    // even for live panels; sessionTabId is the seam that folds it.
+    assert.strictEqual(
+      sessionTabId(tabFor(id)!),
+      id,
+      "the tab's viewType embeds the session id",
+    );
+    assert.strictEqual(api.panels.lastActiveId, id, "opened as last-active");
+  });
+
+  test("a second session opens a second panel; closing one leaves the other", async function () {
+    await vscode.commands.executeCommand("opencodeGui.newSession");
+    await until(() => api.panels.ids().length === 2);
+    const [first, second] = api.panels.ids();
+    assert.notStrictEqual(first, second);
+    await until(() => tabFor(first) !== undefined && tabFor(second) !== undefined);
+    assert.strictEqual(sessionTabCount(), 2, "two session tabs");
+
+    const tab = tabFor(first)!;
+    await vscode.window.tabGroups.close(tab);
+    await until(() => !api.panels.has(first));
+    assert.ok(api.panels.has(second), "the other panel survives");
+    assert.strictEqual(sessionTabCount(), 1, "one session tab left");
+  });
+
+  test("toggleChat closes the active session panel, then opens a fresh session", async function () {
+    const before = api.panels.ids().length;
+    assert.ok(before > 0, "a panel is open from the earlier tests");
+    // toggleChat's close branch needs a session tab as the active editor.
+    const target = api.panels.target();
+    assert.ok(target, "a target panel exists");
+    target.reveal();
+    await until(() => tabFor(target.id)?.isActive === true);
     await vscode.commands.executeCommand("opencodeGui.toggleChat");
-    await until(() => chatTabCount() === 0);
+    await until(() => api.panels.ids().length === before - 1);
     await vscode.commands.executeCommand("opencodeGui.toggleChat");
-    await until(() => chatTabCount() === 1);
+    await until(() => api.panels.ids().length === before);
+    assert.strictEqual(sessionTabCount(), before, "session tabs restored");
+  });
+
+  test("openChat reveals a session panel (never zero after one exists)", async function () {
+    await vscode.commands.executeCommand("opencodeGui.openChat");
+    await until(() => api.panels.ids().length > 0);
+    const count = api.panels.ids().length;
+    await vscode.commands.executeCommand("opencodeGui.openChat");
+    await new Promise((r) => setTimeout(r, 500));
+    assert.strictEqual(api.panels.ids().length, count, "reveal reuses the panel");
   });
 
   test("toggleChatView hides the revealed sidebar view", async function () {
@@ -100,13 +169,7 @@ suite("opencode GUI commands", function () {
     await until(() => !api.provider.isViewVisible);
   });
 
-  test("newSession and openContextSummary resolve with a chat target", async function () {
-    await vscode.commands.executeCommand("opencodeGui.newSession");
-    await vscode.commands.executeCommand("opencodeGui.openContextSummary");
-    assert.strictEqual(chatTabCount(), 1, "chat target still there");
-  });
-
-  test("addSelectionToChat and addToChat resolve and keep a chat target", async function () {
+  test("addSelectionToChat and addToChat resolve and keep a session target", async function () {
     fs.writeFileSync(scratch.fsPath, "alpha\nbeta\ngamma\n");
     try {
       const doc = await vscode.workspace.openTextDocument(scratch);
@@ -116,10 +179,20 @@ suite("opencode GUI commands", function () {
       editor.selection = new vscode.Selection(2, 2, 2, 2); // cursor only
       await vscode.commands.executeCommand("opencodeGui.addSelectionToChat");
       await vscode.commands.executeCommand("opencodeGui.addToChat", doc.uri);
-      assert.strictEqual(chatTabCount(), 1, "chat target still there");
+      assert.ok(api.panels.ids().length > 0, "chat target still there");
     } finally {
       await closeEditorFor(scratch);
     }
+  });
+
+  test("restart keeps the open panels mapped to their sessions", async function () {
+    const before = [...api.panels.ids()];
+    assert.ok(before.length > 0, "a panel is open from the earlier tests");
+    await vscode.commands.executeCommand("opencodeGui.restart");
+    const url = await hubUrl(api);
+    assert.ok(url, "server back after restart");
+    assert.deepStrictEqual(api.panels.ids(), before, "panels unchanged");
+    for (const id of before) assert.ok(tabFor(id), `tab still there for ${id}`);
   });
 
   test("openTerminal creates one reused opencode terminal", async function () {
@@ -153,19 +226,10 @@ suite("opencode GUI commands", function () {
   });
 
   test("showHistory reaches the session picker and stays pending", async function () {
-    await vscode.commands.executeCommand("opencodeGui.openChat");
-    const url = await hubUrl(api);
-    // The picker needs at least one session; seed one only when the project
-    // has none (no model turns involved).
-    const sessions = await (await fetch(`${url}/session`)).json();
-    if (!Array.isArray(sessions) || sessions.length === 0) {
-      const res = await fetch(`${url}/session`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}",
-      });
-      assert.ok(res.ok, "seed session created");
-    }
+    // The newSession tests above created sessions through the extension's
+    // own create path, so the picker has rows to list — no seeding fetch
+    // here (the spawn password lives inside the extension bundle's module
+    // state; a raw fetch from the test host cannot authenticate).
     let settled = false;
     const picker = vscode.commands
       .executeCommand("opencodeGui.showHistory")

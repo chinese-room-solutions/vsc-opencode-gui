@@ -262,6 +262,15 @@ function leaseEntries(
 }
 
 export class ServerManager {
+  // Managers alive in this host. The spawn password is module-global: a
+  // fresh start drops it before probing (it may attach to someone else's
+  // server), but while another manager here is still alive the password
+  // is theirs to speak too — a second manager attaching to the first's
+  // server (the harness's dual-boot; production restarts dispose the old
+  // manager first) must not lose it, or every probe reads 401 and a
+  // fresh server gets spawned instead of attaching.
+  private static readonly _live = new Set<ServerManager>();
+
   private serverProcess: ChildProcess | undefined;
   private bootTimer: NodeJS.Timeout | undefined;
   private disposed = false;
@@ -280,6 +289,10 @@ export class ServerManager {
   // Resolves once startup has either produced an API base URL or failed;
   // lets callers issued right at start (lazy spawn) wait out the boot.
   readonly ready: Promise<void> = new Promise((r) => (this._markReady = r));
+
+  constructor() {
+    ServerManager._live.add(this);
+  }
 
   async start(
     hub: ChatHub,
@@ -304,8 +317,9 @@ export class ServerManager {
     }
 
     // A fresh start may attach to someone else's server — drop any
-    // password a previous spawn of ours registered.
-    setSpawnedServerPassword(undefined);
+    // password a previous spawn of ours registered, unless another live
+    // manager in this host still owns it (see _live).
+    if (ServerManager._live.size <= 1) setSpawnedServerPassword(undefined);
 
     // Persist the port so we can reuse it next time (preserves webview
     // localStorage, which is tied to the origin).
@@ -328,18 +342,21 @@ export class ServerManager {
       // predate the routes being ready (early-init v2 answers with the SPA
       // fallback), and a wrong verdict is sticky — cached per origin and
       // baked into the webview page for this server's whole lifetime.
-      this._dialect = await awaitDialect(
+      const dialect = await awaitDialect(
         this._apiBaseUrl,
         serverAuthHeaders(),
       );
+      this._dialect = dialect;
       log.info(
-        `server attached on port ${parsed.port} (dialect ${this._dialect})`,
+        `server attached on port ${parsed.port} (dialect ${dialect})`,
       );
       this._markReady();
       this.ensureProjectColor(this._apiBaseUrl, cwd).catch((err) =>
         log.warn("project color assignment failed:", err),
       );
-      hub.setServerUrl(this._apiBaseUrl);
+      // The dialect rides with the url: ChatHub bakes it into every page
+      // (no per-host probe) and picks the pump set from it.
+      hub.setServerUrl(this._apiBaseUrl, dialect);
       this._startLease(context, Number(parsed.port));
     };
 
@@ -542,6 +559,7 @@ export class ServerManager {
   // shell, orphaning opencode.
   async dispose(): Promise<void> {
     this.disposed = true;
+    ServerManager._live.delete(this);
     if (this.bootTimer) clearTimeout(this.bootTimer);
     this.bootTimer = undefined;
     setSpawnedServerPassword(undefined);
@@ -693,6 +711,31 @@ export class ServerManager {
       return page?.data;
     }
     return this._request<SessionSummary[]>("GET", "/session");
+  }
+
+  // POST /session (v1) / POST /api/session (v2) — the same create the
+  // webview app's own new-session runs (see createSession in
+  // src/webview/app/api.ts): no title, so the server names it; v1 replies
+  // a flat row, v2 {data:{row}}. Returns the new session id.
+  async createSession(): Promise<string | undefined> {
+    await this.ready;
+    const row = await this._request<{ id?: string; data?: { id?: string } }>(
+      "POST",
+      this._dialect === "v2" ? "/api/session" : "/session",
+      {},
+    );
+    return row?.data?.id ?? row?.id;
+  }
+
+  // GET /session/{id} (v1 flat row) / /api/session/{id} (v2 {data} row) —
+  // one session's title, for its editor tab's label.
+  async sessionTitle(id: string): Promise<string | undefined> {
+    await this.ready;
+    const row = await this._request<{ title?: string; data?: { title?: string } }>(
+      "GET",
+      this._dialect === "v2" ? `/api/session/${id}` : `/session/${id}`,
+    );
+    return row?.data?.title || row?.title;
   }
 
   // GET /session/{id}/diff — the session's file changes as unified patches.

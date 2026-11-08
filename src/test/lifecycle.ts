@@ -140,8 +140,8 @@ suite("opencode GUI lifecycle", function () {
   });
 
   test("isUnresponsive catches a page that never pinged, then a ping revives it", async function () {
-    // The grey-tab watchdog (activate) rebuilds the panel on this signal,
-    // so its logic matters beyond Restart: a page that booted pings within
+    // The grey-tab watchdog (activate) rebuilds panels on this signal, so
+    // its logic matters beyond Restart: a page that booted pings within
     // 15 s; one that never loaded (blank tab) has silence-since-attach as
     // its only symptom. Ages the private stamps directly — 60 s of real
     // waiting would dwarf the suite.
@@ -151,19 +151,21 @@ suite("opencode GUI lifecycle", function () {
       "chinese-room-solutions.vsc-opencode-gui",
     )!.extensionUri;
     const noopStore = { get: () => undefined, set: () => {} };
-    const host = new AppHost(
-      extUri,
-      noopStore as never,
-      { get: () => [] } as never,
-      {
+    const host = new AppHost({
+      extensionUri: extUri,
+      kind: "session",
+      sessionId: "ses-host-probe",
+      routeStore: noopStore as never,
+      tabsStore: { get: () => [] } as never,
+      projectStore: {
         list: () => [],
         tombstoned: () => false,
         tombstone: () => {},
       } as never,
-      () => Promise.resolve(),
-      { get: () => [] },
-      { get: () => [] },
-    );
+      openProject: () => Promise.resolve(),
+      hiddenModels: { get: () => [] },
+      hiddenProviders: { get: () => [] },
+    });
     let onMessage: ((m: unknown) => void) | undefined;
     const webview = {
       options: undefined,
@@ -207,19 +209,21 @@ suite("opencode GUI lifecycle", function () {
       "chinese-room-solutions.vsc-opencode-gui",
     )!.extensionUri;
     const noopStore = { get: () => undefined, set: () => {} };
-    const host = new AppHost(
-      extUri,
-      noopStore as never,
-      { get: () => [] } as never,
-      {
+    const host = new AppHost({
+      extensionUri: extUri,
+      kind: "session",
+      sessionId: "ses-host-probe",
+      routeStore: noopStore as never,
+      tabsStore: { get: () => [] } as never,
+      projectStore: {
         list: () => [],
         tombstoned: () => false,
         tombstone: () => {},
       } as never,
-      () => Promise.resolve(),
-      { get: () => [] },
-      { get: () => [] },
-    );
+      openProject: () => Promise.resolve(),
+      hiddenModels: { get: () => [] },
+      hiddenProviders: { get: () => [] },
+    });
     const posted: { type?: string; path?: string; url?: string }[] = [];
     let onMessage: ((m: unknown) => void) | undefined;
     const webview = {

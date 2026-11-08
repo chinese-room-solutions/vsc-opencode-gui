@@ -10,9 +10,19 @@ import {
 } from "./AppHost";
 import { ChatHub } from "./ChatHub";
 
-// Sidebar host for the chat webview. All rendering/message logic lives in
-// AppHost; this adapter only tracks view-specific state (visibility, which
-// sidebar the view sits in).
+export interface NavigatorHostDeps {
+  routeStore: RouteStore;
+  tabsStore: TabsStore;
+  projectStore: ProjectStore;
+  openProject: OpenProjectHandler;
+  hiddenModels: HiddenModels;
+  hiddenProviders: HiddenProviders;
+}
+
+// Sidebar host for the chat webview (Stage B turns it into the session
+// navigator). All rendering/message logic lives in AppHost; this adapter
+// only tracks view-specific state (visibility, which sidebar the view
+// sits in).
 export class OpencodeViewProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private _visSub?: vscode.Disposable;
@@ -20,26 +30,17 @@ export class OpencodeViewProvider implements vscode.WebviewViewProvider {
   private readonly _chat: AppHost;
 
   constructor(
-    hub: ChatHub,
+    private readonly _hub: ChatHub,
     extensionUri: vscode.Uri,
     private readonly _onResolve: () => void,
-    routeStore: RouteStore,
-    tabsStore: TabsStore,
-    projectStore: ProjectStore,
-    openProject: OpenProjectHandler,
-    hiddenModels: HiddenModels,
-    hiddenProviders: HiddenProviders,
+    deps: NavigatorHostDeps,
   ) {
-    this._chat = new AppHost(
+    this._chat = new AppHost({
       extensionUri,
-      routeStore,
-      tabsStore,
-      projectStore,
-      openProject,
-      hiddenModels,
-      hiddenProviders,
-    );
-    hub.register(this._chat);
+      kind: "navigator",
+      ...deps,
+    });
+    _hub.register(this._chat);
   }
 
   get isViewVisible(): boolean {
@@ -62,6 +63,7 @@ export class OpencodeViewProvider implements vscode.WebviewViewProvider {
     this._view = webviewView;
     this._onResolve();
     this._chat.attach(webviewView.webview);
+    this._hub.noteAttached(this._chat);
     // Events posted while VS Code had this view hidden can be dropped;
     // resync when it shows again.
     this._visSub?.dispose();

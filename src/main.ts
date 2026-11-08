@@ -1,10 +1,12 @@
 import * as vscode from "vscode";
 import { OpencodeViewProvider } from "./webview/OpencodeViewProvider";
 import { ChatHub } from "./webview/ChatHub";
-import { ChatPanel, CHAT_VIEWTYPE } from "./webview/ChatPanel";
+import {
+  SessionPanels,
+  sessionTabId,
+} from "./webview/ChatPanel";
 import { PeerRegistry } from "./webview/Peers";
 import type {
-  AppHost,
   HiddenModels,
   HiddenProviders,
   OpenProjectHandler,
@@ -49,8 +51,10 @@ const SIDEBAR_CMDS = {
 // and inspects the chat state through it.
 export function activate(context: vscode.ExtensionContext) {
   initLog(context);
-  // Shared chat state, fanned out to the sidebar and the editor tab
+  // Shared chat state + the server event-stream pumps, fanned out to the
+  // sidebar and every session panel.
   const hub = new ChatHub();
+  context.subscriptions.push(hub);
 
   // opencode-peers registry: names inbound peer-card senders.
   // A 10 s poll rides the plugin's own heartbeat cadence, so peer and
@@ -59,16 +63,16 @@ export function activate(context: vscode.ExtensionContext) {
   peerRegistry.start();
   context.subscriptions.push(peerRegistry);
 
-  // Last app route (per-folder workspaceState, so no cross-folder checks).
-  // Baked into the page for boot restore.
+  // Last-active session route (per-folder workspaceState, so no
+  // cross-folder checks): one editor panel per session now, and the active
+  // panel writes this — commands read it.
   const routeStore = {
     get: () => context.workspaceState.get<string>("opencode.route"),
     set: (value: string) => void context.workspaceState.update("opencode.route", value),
   };
 
-  // Open session tabs, in bar order (beside the route, same
-  // workspaceState): a restart restores the whole set, not just the
-  // visible session.
+  // Open session panels' ids (same workspaceState): a reload registers one
+  // revival serializer per id, so the tabs come back as their own panels.
   const tabsStore = {
     get: () =>
       (context.workspaceState.get<unknown[]>("opencode.tabs") ?? []).filter(
@@ -116,18 +120,18 @@ export function activate(context: vscode.ExtensionContext) {
   // Model rows the webview picker hides (Manage Models). globalState: model
   // availability is machine-wide, like the stored server port. Baked into
   // the page on every render; setHiddenModels pushes changes to the live
-  // webviews (provider and ChatPanel.instance both exist by then — the only
-  // caller is the command below).
+  // webviews (the provider and any panels exist by then — the only caller
+  // is the command below).
   const hiddenModels: HiddenModels = {
     get: () =>
       (context.globalState.get<string[]>("opencode.hiddenModels") ?? []).filter(
-        (r) => typeof r === "string",
+        (r): r is string => typeof r === "string",
       ),
   };
   const setHiddenModels = (refs: string[]) => {
     void context.globalState.update("opencode.hiddenModels", refs);
-    ChatPanel.instance?.chat.setHiddenModels(refs);
     provider.chat.setHiddenModels(refs);
+    for (const p of panels.all()) p.chat.setHiddenModels(refs);
   };
 
   // Providers the webview picker hides (Manage Providers) — bare providerID
@@ -136,12 +140,12 @@ export function activate(context: vscode.ExtensionContext) {
     get: () =>
       (
         context.globalState.get<string[]>("opencode.hiddenProviders") ?? []
-      ).filter((r) => typeof r === "string"),
+      ).filter((r): r is string => typeof r === "string"),
   };
   const setHiddenProviders = (refs: string[]) => {
     void context.globalState.update("opencode.hiddenProviders", refs);
-    ChatPanel.instance?.chat.setHiddenProviders(refs);
     provider.chat.setHiddenProviders(refs);
+    for (const p of panels.all()) p.chat.setHiddenProviders(refs);
   };
 
   // Start the opencode server lazily, on first chat use: a server spawn
@@ -220,41 +224,77 @@ export function activate(context: vscode.ExtensionContext) {
     void sm.ready.then(() => syncAfterReady());
   };
 
-  // Open/reveal the singleton chat tab and make sure the server is up.
-  // Persist whether the tab was open so onStartupFinished can reopen it
-  // after a restart — the panel serializer doesn't always fire (collapsed
-  // editor groups, long-uptime state corruption).
-  const onPanelDispose = () => {
-    void context.workspaceState.update("opencode.panelOpen", false);
-  };
-  const showPanel = (): ChatPanel => {
-    ensureServer();
-    void context.workspaceState.update("opencode.panelOpen", true);
-    return ChatPanel.show(
-      hub,
-      context.extensionUri,
-      onPanelDispose,
-      routeStore,
-      tabsStore,
-      projectStore,
-      openProject,
-      hiddenModels,
-      hiddenProviders,
-    );
-  };
-
-  // Register the webview panel provider; resolving the sidebar view is a
-  // chat-use signal, so it starts the server too.
-  const provider = new OpencodeViewProvider(
+  // Open session panels (one editor tab per session) — created on demand,
+  // revived by per-viewType serializers after a reload.
+  const panels = new SessionPanels({
     hub,
-    context.extensionUri,
-    ensureServer,
+    extensionUri: context.extensionUri,
     routeStore,
     tabsStore,
     projectStore,
     openProject,
     hiddenModels,
     hiddenProviders,
+    ensureServer: () => void ensureServer(),
+    // opencode.panelOpen is a compatibility surface (nothing here reads it
+    // anymore); keep it truthful for external consumers.
+    onPanelsChanged: (ids) =>
+      void context.workspaceState.update("opencode.panelOpen", ids.length > 0),
+  });
+  context.subscriptions.push(panels);
+
+  // Reveal or create one session's panel, titled from the server once it
+  // can name it (the tab starts as the raw id). This is also the host side
+  // of the webview's "open-session" message (Stage B's navigator).
+  const openSession = (id: string) => {
+    const sm = ensureServer() ?? serverManager;
+    const panel = panels.open(id);
+    if (sm)
+      void sm.ready.then(async () => {
+        if (serverManager !== sm) return;
+        const title = await sm.sessionTitle(id);
+        if (title) panels.setTitle(id, title);
+      });
+    return panel;
+  };
+  context.subscriptions.push(
+    vscode.commands.registerCommand("opencodeGui.openSession", (id?: unknown) => {
+      if (typeof id === "string") openSession(id);
+    }),
+  );
+
+  // Create a session through the server (the app's own new-session path)
+  // and open its panel; undefined when the server could not.
+  const createSessionPanel = async (): Promise<string | undefined> => {
+    const sm = ensureServer() ?? serverManager;
+    await sm?.ready;
+    const id = await sm?.createSession();
+    if (!id) {
+      vscode.window.showErrorMessage(
+        "Could not create a session — the opencode server is not reachable. Try Open Code: Restart.",
+      );
+      return undefined;
+    }
+    openSession(id);
+    return id;
+  };
+
+  // Register the webview view provider; resolving the sidebar view is a
+  // chat-use signal, so it starts the server too.
+  const provider = new OpencodeViewProvider(
+    hub,
+    context.extensionUri,
+    () => {
+      ensureServer();
+    },
+    {
+      routeStore,
+      tabsStore,
+      projectStore,
+      openProject,
+      hiddenModels,
+      hiddenProviders,
+    },
   );
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("opencodeGui.chatView", provider, {
@@ -262,38 +302,17 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
-  // Bring back the editor tab after a window reload/restart, like any
-  // other editor tab. A restored tab means the user had chat open; it is
-  // swapped for a fresh panel (ChatPanel.replace) because a revived one
-  // carries its persisted panel options, which predate enableFindWidget.
-  context.subscriptions.push(
-    vscode.window.registerWebviewPanelSerializer(CHAT_VIEWTYPE, {
-      deserializeWebviewPanel: (panel) => {
-        ensureServer();
-        void context.workspaceState.update("opencode.panelOpen", true);
-        ChatPanel.replace(
-          hub,
-          context.extensionUri,
-          panel,
-          onPanelDispose,
-          routeStore,
-          tabsStore,
-          projectStore,
-          openProject,
-          hiddenModels,
-          hiddenProviders,
-        );
-        return Promise.resolve();
-      },
-    }),
-  );
+  // Boot restore: never open panels eagerly — a restored tab is revived by
+  // its per-session serializer when VS Code shows it (the layout tells
+  // whether one is pending; eager opens next to restored tabs are the
+  // duplicated-tab bug). One serializer per persisted id now, lazily more
+  // when a panel with a new id opens.
+  for (const id of tabsStore.get()) panels.ensureSerializer(id);
 
   // Cross-window session deep-link: another window's "open-project" click
   // stashed this intent just before VS Code opened this folder. Consume it
-  // once: the session route is written to the route store before the chat
-  // panel is created, so the first page bake carries it and the app boots
-  // straight into the session; a stale id bounces home on the store's
-  // first fetch.
+  // once: open the session's own panel; a stale id bounces home in the app
+  // on the store's first fetch.
   const pendingOpen = context.globalState.get<{
     worktree: string;
     session: string;
@@ -309,84 +328,59 @@ export function activate(context: vscode.ExtensionContext) {
     Date.now() - pendingOpen.ts < 120_000
   ) {
     void context.globalState.update("opencode.pendingOpen", undefined);
-    routeStore.set(JSON.stringify({ view: "session", id: pendingOpen.session }));
-    showPanel();
+    openSession(pendingOpen.session);
   }
 
-  // A restored chat tab sits in the editor layout before its webview is
-  // deserialized — the serializer fires only when the tab is shown, which
-  // can be long after activate(). The layout, not a timer, tells whether
-  // one is pending. A pending tab reports VS Code's internal provider
-  // prefix ("mainThreadWebview-…") on its viewType and an unrevived input
-  // class, so match the property in both forms — instanceof is false for
-  // it, and an exact match made the eager open run and twin the tab.
-  const isChatTab = (tab: vscode.Tab): boolean => {
-    const viewType = (tab.input as { viewType?: string } | undefined)
-      ?.viewType;
-    return (
-      viewType === CHAT_VIEWTYPE ||
-      viewType === `mainThreadWebview-${CHAT_VIEWTYPE}`
-    );
-  };
-
-  // Reopen the chat tab if it was open before restart but left no tab to
-  // restore (state loss). When a tab was restored, the serializer claims
-  // it; creating ours alongside it is the duplicate-tab bug.
-  if (context.workspaceState.get<boolean>("opencode.panelOpen")) {
-    const chatTabs = (viewType: string) =>
-      vscode.window.tabGroups.all.flatMap((g) =>
-        g.tabs.filter(
-          (t) => (t.input as { viewType?: string })?.viewType === viewType,
-        ),
-      );
-    const stale = () => [
-      ...chatTabs(CHAT_VIEWTYPE),
-      ...chatTabs(`mainThreadWebview-${CHAT_VIEWTYPE}`),
-    ];
-    const heal = () => {
-      if (ChatPanel.instance) return;
-      for (const tab of stale()) void vscode.window.tabGroups.close(tab);
-      showPanel();
-    };
-    if (stale().length === 0) {
-      showPanel();
-    } else {
-      // The serializer is the designated reviver, but after an
-      // extension-host restart the surviving tab never deserializes —
-      // no panel, no server, a frozen page as the whole UI. A live
-      // restore is claimed within moments of activation, so an active
-      // tab still unclaimed after 2 s is that corpse: heal fast (the
-      // user is staring at it). A hidden/background tab may deserialize
-      // only when shown, so it gets the long grace instead.
-      const grace = stale().some((t) => t.isActive) ? 2_000 : 10_000;
-      const claimTimer = setTimeout(heal, grace);
-      claimTimer.unref?.();
-      context.subscriptions.push({
-        dispose: () => clearTimeout(claimTimer),
-      });
-    }
-  }
-
-  // A chat tab can also close without ever being shown (closed from the
-  // background after a relaunch): no panel exists to report the close, so
-  // keep opencode.panelOpen truthful here.
-  context.subscriptions.push(
-    vscode.window.tabGroups.onDidChangeTabs((e) => {
-      if (!ChatPanel.instance && e.closed.some(isChatTab)) {
-        void context.workspaceState.update("opencode.panelOpen", false);
+  // A restored session tab that no panel claims is a corpse (its claiming
+  // extension host died): a frozen page nothing will ever revive — close
+  // it and rebuild the panel. A live panel claims itself within moments
+  // of showing, so every check runs after a grace. The Tab API reports
+  // webview inputs with VS Code's internal provider prefix
+  // ("mainThreadWebview-…") for live and restored tabs alike, so the
+  // claim check is the manager's map, never the viewType spelling.
+  const activeStrays = () =>
+    vscode.window.tabGroups.all.flatMap((g) => g.tabs).flatMap((tab) => {
+      const id = sessionTabId(tab);
+      return id !== undefined && tab.isActive && !panels.has(id)
+        ? [{ tab, id }]
+        : [];
+    });
+  let healTimer: NodeJS.Timeout | undefined;
+  const healSoon = () => {
+    if (healTimer) clearTimeout(healTimer);
+    healTimer = setTimeout(() => {
+      healTimer = undefined;
+      for (const { tab, id } of activeStrays()) {
+        void vscode.window.tabGroups.close(tab).then(
+          () => openSession(id),
+          (err) => log.error("heal: closing a stray session tab failed:", err),
+        );
       }
-    }),
-  );
-
-  // The chat to talk to: visible editor tab first, then the visible sidebar;
-  // open the editor tab if neither is visible.
-  const targetChat = (): AppHost => {
-    const panel = ChatPanel.instance;
-    if (panel?.isVisible) return panel.chat;
-    if (provider.isViewVisible) return provider.chat;
-    return showPanel().chat;
+    }, 2_000);
+    healTimer.unref?.();
   };
-  const postToChat = (ref: string) => targetChat().addToChat(ref);
+  // A stray the user activates fires onDidChangeTabs; the tab active at
+  // activation (a corpse left by an extension-host restart) never does,
+  // so check once up front too — same grace either way.
+  context.subscriptions.push(
+    vscode.window.tabGroups.onDidChangeTabs(healSoon),
+    { dispose: () => healTimer && clearTimeout(healTimer) },
+  );
+  healSoon();
+
+  // Text into the last-active session's composer: with no panel open, one
+  // is created for a fresh session — AppHost queues the insert until the
+  // new page's listener exists, so the text never drops.
+  const postToChat = async (ref: string) => {
+    const panel = panels.target();
+    if (panel) {
+      panel.reveal();
+      panel.chat.addToChat(ref);
+      return;
+    }
+    const id = await createSessionPanel();
+    if (id !== undefined) panels.get(id)?.chat.addToChat(ref);
+  };
 
   // Register the addToChat command
   context.subscriptions.push(
@@ -396,7 +390,7 @@ export function activate(context: vscode.ExtensionContext) {
         const fileUri = uri || vscode.window.activeTextEditor?.document.uri;
         if (fileUri) {
           const relativePath = vscode.workspace.asRelativePath(fileUri);
-          postToChat(relativePath);
+          void postToChat(relativePath);
         }
       },
     ),
@@ -427,31 +421,47 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
-  // Register the openChat command — reveal the singleton editor tab
+  // Register the openChat command — reveal the last-active session panel;
+  // with none open, a fresh session gets one (the bare "Open in Primary
+  // Editor" must always yield a usable tab).
   context.subscriptions.push(
     vscode.commands.registerCommand("opencodeGui.openChat", () => {
-      showPanel();
+      const panel = panels.target();
+      if (panel) {
+        panel.reveal();
+        ensureServer();
+        return;
+      }
+      void createSessionPanel();
     }),
   );
 
-  // Register the toggleChat command — close the chat tab when it is
-  // the active tab, otherwise open/reveal it (Claude Code Cmd+Esc semantics)
+  // Register the toggleChat command — close the active session's tab when
+  // one is the active editor, otherwise reveal the last-active session
+  // panel, or start a new session (Claude Code Cmd+Esc semantics)
   context.subscriptions.push(
     vscode.commands.registerCommand("opencodeGui.toggleChat", () => {
-      const panel = ChatPanel.instance;
-      if (panel?.isActive) {
-        panel.dispose();
-      } else {
-        showPanel();
+      for (const panel of panels.all()) {
+        if (panel.isActive) {
+          panel.dispose();
+          return;
+        }
       }
+      const panel = panels.target();
+      if (panel) {
+        panel.reveal();
+        ensureServer();
+        return;
+      }
+      void createSessionPanel();
     }),
   );
 
-  // Register the newSession command — a fresh session, the way the app's
-  // own tab-bar + button does (the webview makes it inside the app)
+  // Register the newSession command — create the session on the server
+  // and open its own panel (no live app needed).
   context.subscriptions.push(
     vscode.commands.registerCommand("opencodeGui.newSession", () => {
-      targetChat().newSession();
+      void createSessionPanel();
     }),
   );
 
@@ -490,8 +500,11 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
-  // The session the visible chat is on (last route it reported).
+  // The session commands act on: the target panel's, else the last route
+  // a panel/app reported.
   const currentSession = (): string | undefined => {
+    const panel = panels.target();
+    if (panel) return panel.id;
     try {
       const r = JSON.parse(routeStore.get() ?? "") as {
         view?: string;
@@ -577,15 +590,24 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
-  // Focus the chat and toggle the context ring's expanded breakdown.
+  // Focus the session panel and toggle the context ring's expanded
+  // breakdown.
   context.subscriptions.push(
     vscode.commands.registerCommand("opencodeGui.openContextSummary", () => {
-      targetChat().toggleContext();
+      const panel = panels.target();
+      if (!panel) {
+        vscode.window.showInformationMessage(
+          "Open a session first to see its context.",
+        );
+        return;
+      }
+      panel.reveal();
+      panel.chat.toggleContext();
     }),
   );
 
   // Register the showHistory command — pick a past session, newest
-  // first, and navigate the visible chat to it
+  // first, and open it in its own panel
   context.subscriptions.push(
     vscode.commands.registerCommand("opencodeGui.showHistory", async () => {
       ensureServer();
@@ -611,7 +633,7 @@ export function activate(context: vscode.ExtensionContext) {
         placeHolder: "Select a session to open",
       });
       if (pick) {
-        targetChat().navigate(`/session/${pick.id}`);
+        openSession(pick.id);
       }
     }),
   );
@@ -657,21 +679,6 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
-  // Build a fresh chat panel over the same stores — the recovery path for
-  // a dead tab, shared by the restart command and the watchdog below.
-  const recreateChatPanel = () =>
-    ChatPanel.recreate(
-      hub,
-      context.extensionUri,
-      onPanelDispose,
-      routeStore,
-      tabsStore,
-      projectStore,
-      openProject,
-      hiddenModels,
-      hiddenProviders,
-    );
-
   // Register the restart command to kill the server and start fresh
   context.subscriptions.push(
     vscode.commands.registerCommand("opencodeGui.restart", async () => {
@@ -684,13 +691,17 @@ export function activate(context: vscode.ExtensionContext) {
       // wires the replacement (unexpected-exit respawn, model-agent sync);
       // it returns before the boot finishes, like every other spawn site.
       const sm = ensureServer();
-      // Restart doubles as dead-webview recovery: a chat tab whose
+      // Restart doubles as dead-webview recovery: a session tab whose
       // renderer process died shows VS Code's grey placeholder forever,
-      // and only a fresh webview brings it back — rebuild when the tab's
-      // heartbeat (AppHost.isUnresponsive) has stopped. A live tab is
-      // left alone; the sidebar re-renders from hub state changes.
+      // and only a fresh webview brings it back — rebuild every VISIBLE
+      // panel whose heartbeat (AppHost.isUnresponsive) has stopped. Live
+      // tabs are left alone; the sidebar re-renders from hub state
+      // changes.
       void sm?.ready.then(() => {
-        if (ChatPanel.instance?.chat.isUnresponsive) recreateChatPanel();
+        for (const panel of panels.all()) {
+          if (panel.isVisible && panel.chat.isUnresponsive)
+            panels.recreate(panel.id);
+        }
       });
     }),
   );
@@ -706,10 +717,13 @@ export function activate(context: vscode.ExtensionContext) {
   // A genuinely unloadable app (broken install) keeps recycling the tab,
   // which is the same retry VS Code itself does for crashed webviews.
   const watchdog = setInterval(() => {
-    const panel = ChatPanel.instance;
-    if (panel?.isVisible && panel.chat.isUnresponsive) {
-      log.info("watchdog: visible chat tab unresponsive, recreating panel");
-      recreateChatPanel();
+    for (const panel of panels.all()) {
+      if (panel.isVisible && panel.chat.isUnresponsive) {
+        log.info(
+          `watchdog: visible session tab ${panel.id} unresponsive, recreating panel`,
+        );
+        panels.recreate(panel.id);
+      }
     }
   }, 5_000);
   context.subscriptions.push({ dispose: () => clearInterval(watchdog) });
@@ -1060,6 +1074,7 @@ export function activate(context: vscode.ExtensionContext) {
   return {
     hub,
     provider,
+    panels,
     get serverPort() { return serverManager?.serverPort; },
     ensureServer,
   };

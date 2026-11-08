@@ -37,10 +37,9 @@ light weight.
   `Code.exe --user-data-dir <tmp profile> --extensionDevelopmentPath <repo>
   <folder>`, with `ELECTRON_RUN_AS_NODE` unset from env (else Code.exe runs
   as plain node). Disable `security.workspace.trust.enabled` in the profile's
-  settings.json (the trust prompt blocks activation); to auto-open the chat,
-  seed `{"opencode.panelOpen":true}` under extension key
-  `chinese-room-solutions.vsc-opencode-gui` (exact case) in the profile's
-  `User/workspaceStorage/<hash>/state.vscdb` and relaunch. Kill only
+  settings.json (the trust prompt blocks activation); chat tabs no longer
+  auto-open from a seeded key — run `Open Code: New Session` from the
+  command palette once the host is up. Kill only
   processes whose command line matches the profile dir — never by image
   name (the user's own window shares it). The webview DOM is unreachable
   from tools; read its state from screenshots via OCR.

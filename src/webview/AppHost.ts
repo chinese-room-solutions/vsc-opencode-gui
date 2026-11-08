@@ -6,20 +6,22 @@ import { themeStyle } from "../theme";
 import { tokenizeToTokens } from "../tokenizer";
 import { saveAttachment, savePromptAttachments } from "../attachments";
 import { serverAuthHeaders } from "../server/serverAuth";
-import { detectDialect, type Dialect } from "../server/dialect";
+import type { Dialect } from "../server/dialect";
 import { log } from "../log";
 import type { PeerInfo } from "./Peers";
 
 // The last app route (workspaceState-backed; per-folder, so no cross-folder
-// validation is needed). Baked into the page so a reload restores it.
+// validation is needed). Written by the hosts (last-active session) and
+// read by commands that need the current session.
 export interface RouteStore {
   get(): string | undefined;
   set(value: string): void;
 }
 
-// Open session tabs, in bar order (workspaceState-backed in main.ts,
-// beside the route). Persisted so a restart restores the whole set; baked
-// into the page on every render for boot restore.
+// Open session panels' ids, in open order (workspaceState-backed in
+// main.ts). Persisted so the next activation can register a revival
+// serializer per session; still baked into the page for the transitional
+// in-app tab bar (Stage B drops it).
 export interface TabsStore {
   get(): string[];
   set(value: string[]): void;
@@ -55,12 +57,25 @@ export interface HiddenProviders {
   get(): string[];
 }
 
-// Cap of the event-stream reconnect backoff (1s * 2^attempt).
-const MAX_BACKOFF_MS = 15_000;
-// The server heartbeats both streams every 10 s, quiet turns included. A
-// stream silent for this long is dead-but-open (standby, network switch) —
-// `read()` would pend forever without this, wedging the app mid-turn.
-const NO_FRAME_MS = 30_000;
+// Which host a page is baked for (read by the app from the
+// opencode-host meta): a "session" host is one conversation's editor tab,
+// a "navigator" host is the sidebar view. Stage B splits the app on it.
+export type HostKind = "navigator" | "session";
+
+export interface AppHostOptions {
+  extensionUri: vscode.Uri;
+  kind: HostKind;
+  // The session a "session" host is bound to; pinned into the baked boot
+  // route so the app opens straight into it.
+  sessionId?: string;
+  routeStore: RouteStore;
+  tabsStore: TabsStore;
+  projectStore: ProjectStore;
+  openProject: OpenProjectHandler;
+  hiddenModels: HiddenModels;
+  hiddenProviders: HiddenProviders;
+}
+
 // The app pings at boot, then every 15 s. Silence past three cadences
 // means the renderer process is dead (VS Code's grey placeholder) —
 // Restart rebuilds the chat tab on this signal.
@@ -93,51 +108,61 @@ function serverErrorMessage(json: unknown): string | undefined {
 
 
 // ServerEvent, as fed to the app through the pump (mirrors
-// src/webview/app/events.ts across the postMessage seam).
-interface ServerEvent {
+// src/webview/app/events.ts across the postMessage seam). ChatHub owns the
+// connection and forwards frames here.
+export interface ServerEvent {
   id: string;
   type: string;
   data: unknown;
 }
 
-type SseState = "connecting" | "connected" | "offline";
+export type SseState = "connecting" | "connected" | "offline";
 
-// Host-side half of the chat webview: renders the app shell (chat.html +
+// Host-side half of a chat webview: renders the app shell (chat.html +
 // out/webview/app.js), shows server status, and relays the app's traffic to
 // the server — the webview origin is opaque, so the server's CORS would
 // block every direct call; the app posts api-requests here and receives the
-// SSE stream pumped from here. State is fanned out from ChatHub; every
-// change re-renders the shell because CSP and the app's boot state are
-// baked into the HTML — a host postMessage can race the first load.
+// SSE stream forwarded from ChatHub (one pump set per server, not per
+// host). State is fanned out from ChatHub; every change re-renders the
+// shell because CSP and the app's boot state are baked into the HTML — a
+// host postMessage can race the first load.
 export class AppHost implements vscode.Disposable {
-  constructor(
-    private readonly _extensionUri: vscode.Uri,
-    private readonly _routeStore: RouteStore,
-    private readonly _tabsStore: TabsStore,
-    private readonly _projectStore: ProjectStore,
-    private readonly _openProject: OpenProjectHandler,
-    private readonly _hiddenModels: HiddenModels,
-    private readonly _hiddenProviders: HiddenProviders,
-  ) {}
+  private readonly _extensionUri: vscode.Uri;
+  private readonly _kind: HostKind;
+  private readonly _sessionId: string | undefined;
+  private readonly _routeStore: RouteStore;
+  private readonly _tabsStore: TabsStore;
+  private readonly _projectStore: ProjectStore;
+  private readonly _openProject: OpenProjectHandler;
+  private readonly _hiddenModels: HiddenModels;
+  private readonly _hiddenProviders: HiddenProviders;
+
+  constructor(options: AppHostOptions) {
+    this._extensionUri = options.extensionUri;
+    this._kind = options.kind;
+    this._sessionId = options.sessionId;
+    this._routeStore = options.routeStore;
+    this._tabsStore = options.tabsStore;
+    this._projectStore = options.projectStore;
+    this._openProject = options.openProject;
+    this._hiddenModels = options.hiddenModels;
+    this._hiddenProviders = options.hiddenProviders;
+  }
 
   private _webview?: vscode.Webview;
   // Route → consecutive failed relays; collapses restart-time bursts to
   // one line per route (see _relayApi).
   private _relayFailures = new Map<string, number>();
   private _serverUrl?: string;
-  // Dialect of the server behind _serverUrl; probed once per origin before
-  // the page is (re)baked with it, so the app boots knowing its routes.
+  // Dialect of the server behind _serverUrl; probed once by ServerManager
+  // and fanned out through ChatHub with the url, so the app boots knowing
+  // its routes.
   private _dialect: Dialect = "v1";
-  // Guards the async dialect probe: only the newest url/error wins.
-  private _urlSeq = 0;
   private _error?: { message: string; showInstallHint: boolean };
   private _attachments: vscode.Disposable[] = [];
-  // SSE pumps to the server: (re)started with a server url, aborted when it
-  // changes or the host errors/disposes. Two streams — /api/event (v2:
-  // asks, model switches, v2-turn steps) and /event (v1: the turn dialect
-  // v1-prompted sessions stream over, compaction included).
-  private _pumps: AbortController[] = [];
-  private _pumpTimers: NodeJS.Timeout[] = [];
+  // insert-text texts that arrived before the page's message listener
+  // existed (see addToChat); delivered on the first ping.
+  private _pendingInserts: string[] = [];
   // Last heartbeat from the app; undefined until its first ping (a fresh
   // page pings at boot, so a just-loaded webview never reads as dead).
   private _lastPingAt?: number;
@@ -214,6 +239,12 @@ export class AppHost implements vscode.Disposable {
           // last push, and the store set is idempotent.
           if (this._peers.length > 0)
             this._post({ type: "peers", peers: this._peers });
+          // Text queued while this page was mid-boot (see addToChat): the
+          // ping says the boot script ran, so posts dispatched now reach
+          // the listener wired at its end.
+          const queued = this._pendingInserts;
+          this._pendingInserts = [];
+          for (const text of queued) this._post({ type: "insert-text", text });
         }
         // The webview's own console is unreachable from tooling; the app
         // forwards its failure diagnostics here.
@@ -224,17 +255,21 @@ export class AppHost implements vscode.Disposable {
               : undefined;
           if (level) log[level](message.text);
         }
-        // Route bookkeeping: store, never re-render (the app owns its view).
-        // The tabs ride along — the bar order is part of the same state.
-        if (message.type === "route-changed") {
+        // Route bookkeeping: the app owns its view; the host only records
+        // the last-active session (commands target it). The app-reported
+        // tab list is ignored — the host owns opencode.tabs (one editor
+        // panel per session) since Stage A.
+        if (
+          message.type === "route-changed" &&
+          message.route &&
+          typeof message.route === "object"
+        ) {
           this._routeStore.set(JSON.stringify(message.route));
-          if (Array.isArray(message.tabs)) {
-            this._tabsStore.set(
-              (message.tabs as unknown[]).filter(
-                (t): t is string => typeof t === "string",
-              ),
-            );
-          }
+        }
+        // The navigator's session rows (Stage B): open or reveal the
+        // session's own editor panel.
+        if (message.type === "open-session" && typeof message.id === "string") {
+          void vscode.commands.executeCommand("opencodeGui.openSession", message.id);
         }
         // Home: another project's folder opens in a new window, optionally
         // deep-linking a session (the target window consumes pendingOpen).
@@ -430,62 +465,60 @@ export class AppHost implements vscode.Disposable {
       }),
     );
 
-    // A url stored before any webview attached (registered at activation,
-    // resolved later): start the pumps now, not back then — a view that
-    // never resolves holds no streams.
-    if (this._serverUrl) this._startPump(this._serverUrl);
-
     this._renderCurrentState();
   }
 
-  setServerUrl(url: string) {
-    // Probe the dialect before baking the page: the app's routes, prompt
-    // body, and envelopes all hang off it, and a probe is two fast fetches
-    // (cached per origin). Until it resolves the page stays on loading —
-    // the same state a booting server shows.
-    const seq = ++this._urlSeq;
+  // The url arrives with its dialect (probed once by ServerManager): bake
+  // both — the app's routes, prompt body, and envelopes hang off the
+  // dialect.
+  setServerUrl(url: string, dialect: Dialect) {
+    this._serverUrl = url;
+    this._dialect = dialect;
     this._error = undefined;
-    this._stopPump();
-    void detectDialect(url, serverAuthHeaders()).then((dialect) => {
-      if (seq !== this._urlSeq) return;
-      this._serverUrl = url;
-      this._dialect = dialect;
-      if (this._webview) this._startPump(url);
-      this._renderCurrentState();
-      // Belt and braces for a page that somehow booted before the bake
-      // (idempotent in the app).
-      this._post({ type: "dialect", dialect });
-    });
+    this._renderCurrentState();
+    // Belt and braces for a page that somehow booted before the bake
+    // (idempotent in the app).
+    this._post({ type: "dialect", dialect });
   }
 
   setError(message: string, showInstallHint = true) {
-    this._urlSeq++;
     this._error = { message, showInstallHint };
     this._serverUrl = undefined;
-    this._stopPump();
     this._renderCurrentState();
   }
 
   setLoading() {
-    this._urlSeq++;
     this._serverUrl = undefined;
     this._error = undefined;
-    this._stopPump();
     this._renderCurrentState();
   }
 
   addToChat(text: string) {
+    // A page that has never pinged may still be mid-boot: host posts are
+    // dispatched only after the boot script task completes (its message
+    // listener is wired at the end), so an insert posted before the first
+    // ping can drop. Queue it; the ping proves the boot ran.
+    if (this._lastPingAt === undefined) {
+      this._pendingInserts.push(text);
+      return;
+    }
     void this._webview?.postMessage({ type: "insert-text", text });
   }
 
-  // Steer the app's router (e.g. "/session/{id}" from the history picker).
-  navigate(path: string) {
-    void this._webview?.postMessage({ type: "navigate", path });
-  }
-
-  // A fresh session (the app creates it and opens its tab).
+  // A fresh session (the navigator's own new-session affordance, Stage B;
+  // the app creates it and opens its tab).
   newSession() {
     void this._webview?.postMessage({ type: "new-session" });
+  }
+
+  // Hub-fed event stream (ChatHub owns the pumps): one frame, forwarded
+  // as-is.
+  receiveSseEvent(event: ServerEvent) {
+    this._post({ type: "sse-event", event });
+  }
+
+  receiveSseState(state: SseState) {
+    this._post({ type: "sse-state", state });
   }
 
   // Live picker-filter update from the Manage Models command (the boot
@@ -561,7 +594,6 @@ export class AppHost implements vscode.Disposable {
   }
 
   dispose() {
-    this._stopPump();
     for (const d of this._attachments) d.dispose();
     this._attachments = [];
     this._webview = undefined;
@@ -665,148 +697,6 @@ export class AppHost implements vscode.Disposable {
     }
   }
 
-  // (Re)start the event-stream pumps. The app subscribes by listening for
-  // the forwarded messages, so the pumps run regardless of app state — a
-  // late message to a reloading webview is harmless. They start at first
-  // webview attach (a never-resolved view holds no streams; see attach
-  // and setServerUrl). A v2 server never frames /event (and 1.18 servers
-  // drop /api/event subscribers when one connects), so only /api/event is
-  // pumped there.
-  private _startPump(base: string): void {
-    this._stopPump();
-    const v2 = new AbortController();
-    this._pumps = [v2];
-    void this._pumpEvents(base, v2, "/api/event");
-    if (this._dialect !== "v2") {
-      const v1 = new AbortController();
-      this._pumps.push(v1);
-      void this._pumpEvents(base, v1, "/event");
-    }
-  }
-
-  private _stopPump(): void {
-    for (const p of this._pumps) p.abort();
-    this._pumps = [];
-    for (const t of this._pumpTimers) clearTimeout(t);
-    this._pumpTimers = [];
-  }
-
-  // SSE against GET {path}: bare `data:` lines carrying a flat event
-  // envelope, no server keepalives. The v2 dialect addresses `data`; the v1
-  // one (`/event`) `properties` — normalized here so the app sees one shape.
-  // The server drops the stream on shutdown, so we own the reconnect loop
-  // with a capped backoff. Both pumps report connection state — either can drop
-  // alone, and the app resyncs on every reconnect.
-  private async _pumpEvents(
-    base: string,
-    pump: AbortController,
-    path: string,
-  ): Promise<void> {
-    // Per-pump reconnect backoff: survives this pump's reconnects, and one
-    // pump's success never resets the other's.
-    let attempt = 0;
-    while (!pump.signal.aborted) {
-      // Owns just this connection: the stall watchdog aborts it on frame
-      // silence, sending the loop to the reconnect below; the pump's own
-      // signal still wins wholesale.
-      const conn = new AbortController();
-      let stall: NodeJS.Timeout | undefined;
-      const armStall = () => {
-        if (stall) clearTimeout(stall);
-        stall = setTimeout(() => conn.abort(), NO_FRAME_MS);
-      };
-      try {
-        this._pumpState(pump, "connecting");
-        const res = await fetch(`${base}${path}`, {
-          signal: AbortSignal.any([pump.signal, conn.signal]),
-          headers: serverAuthHeaders(),
-        });
-        if (!res.ok || !res.body) {
-          throw new Error(`GET ${path} returned ${res.status}`);
-        }
-        this._pumpState(pump, "connected");
-        attempt = 0;
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        armStall();
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          armStall();
-          buffer += decoder.decode(value, { stream: true });
-          let nl = buffer.indexOf("\n");
-          while (nl >= 0) {
-            this._pumpFrame(pump, buffer.slice(0, nl));
-            buffer = buffer.slice(nl + 1);
-            nl = buffer.indexOf("\n");
-          }
-        }
-      } catch {
-        // Aborted: the pump is being replaced or stopped, or the watchdog
-        // killed a silent connection. Anything else is a dropped stream —
-        // both fall through to the reconnect below.
-      } finally {
-        if (stall) clearTimeout(stall);
-      }
-      if (pump.signal.aborted) return;
-      this._pumpState(pump, "offline");
-      const delay = Math.min(1000 * 2 ** attempt, MAX_BACKOFF_MS);
-      attempt += 1;
-      await this._pumpBackoff(delay, pump);
-    }
-  }
-
-  // Forward one `data:` frame; malformed JSON is skipped, as before. The
-  // v2 dialect stamps a top-level `created` (ms) on its frames — folded
-  // into `data.timestamp` so the app's step/idle stamps use wire time.
-  private _pumpFrame(pump: AbortController, line: string): void {
-    if (!line.startsWith("data:")) return;
-    try {
-      const raw = JSON.parse(line.slice(5).trim()) as ServerEvent & {
-        properties?: unknown;
-        created?: number;
-      };
-      if (!this._pumps.includes(pump)) return;
-      const body = raw.data ?? raw.properties;
-      const event: ServerEvent = {
-        id: raw.id,
-        type: raw.type,
-        data:
-          typeof body === "object" && body !== null && raw.created !== undefined
-            ? { timestamp: raw.created, ...body }
-            : body,
-      };
-      this._post({ type: "sse-event", event });
-    } catch {
-      // Malformed frame — nothing to dispatch.
-    }
-  }
-
-  private _pumpState(pump: AbortController, state: SseState): void {
-    if (!this._pumps.includes(pump)) return;
-    this._post({ type: "sse-state", state });
-  }
-
-  // Capped-backoff wait between reconnects; resolving (not hanging) on
-  // abort lets _pumpEvents return promptly.
-  private _pumpBackoff(ms: number, pump: AbortController): Promise<void> {
-    return new Promise<void>((resolve) => {
-      const done = () => {
-        pump.signal.removeEventListener("abort", onAbort);
-        this._pumpTimers = this._pumpTimers.filter((t) => t !== timer);
-        resolve();
-      };
-      const onAbort = () => {
-        clearTimeout(timer);
-        done();
-      };
-      const timer = setTimeout(done, ms);
-      this._pumpTimers.push(timer);
-      pump.signal.addEventListener("abort", onAbort, { once: true });
-    });
-  }
-
   private _post(message: unknown): void {
     void this._webview?.postMessage(message);
   }
@@ -856,17 +746,25 @@ export class AppHost implements vscode.Disposable {
       .replaceAll("{{DIALECT}}", this._dialect === "v2" ? "v2" : "")
       .replaceAll("{{ERROR_MESSAGE}}", escapeAttr(error?.message ?? ""))
       .replaceAll("{{INSTALL_HINT}}", error?.showInstallHint ? "1" : "")
+      // Which host this page is for (Stage B splits the app on it).
+      .replaceAll("{{HOST_KIND}}", this._kind)
+      // The boot route: a session panel opens straight into its session;
+      // the navigator starts home.
       .replaceAll(
         "{{ROUTE}}",
-        escapeAttr(this._routeStore?.get() ?? ""),
+        escapeAttr(
+          this._sessionId !== undefined
+            ? JSON.stringify({ view: "session", id: this._sessionId })
+            : JSON.stringify({ view: "home" }),
+        ),
       )
       .replaceAll(
         "{{TABS}}",
-        escapeAttr(JSON.stringify(this._tabsStore?.get() ?? [])),
+        escapeAttr(JSON.stringify(this._tabsStore.get())),
       )
       .replaceAll(
         "{{TOMBSTONES}}",
-        escapeAttr(JSON.stringify(this._projectStore?.list() ?? [])),
+        escapeAttr(JSON.stringify(this._projectStore.list())),
       )
       .replaceAll(
         "{{HIDDEN_MODELS}}",
