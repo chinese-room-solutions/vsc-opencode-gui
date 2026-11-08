@@ -2957,6 +2957,8 @@ body {
      it shares its message with a paragraph (one step often emits text+tool)
      or starts its own — the outer 10px collapses into this one. */
   margin: 10px 0;
+  /* Anchor for the header's corner copy button. */
+  position: relative;
 }
 
 .tool-row {
@@ -2982,6 +2984,14 @@ body {
   color: var(--oc-text);
   text-decoration: underline;
   text-decoration-color: var(--oc-border);
+}
+
+/* The shell row's command copy: the card's top-right corner, like a code
+   block's — the row is fit-content, so the full-width .tool anchors it
+   (absolute itself comes from .code-copy, defined earlier in this file). */
+.tool-head-copy {
+  top: 2px;
+  right: 0;
 }
 
 /* The +/- stat on file-changing rows (the original app's "+2 -0"): read
@@ -3388,6 +3398,21 @@ a.tool-pill:hover {
 
 .tool-copy.done {
   color: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+}
+
+/* The shell notice's output copy: the capture's top-right corner, like a
+   code block's and the tool row's command copy (.code-copy brings the
+   absolute base). z-index lifts it over the fold's masked pre — a mask
+   makes the pre a stacking context that paints above a positioned
+   sibling in tree order. */
+.shell-out-wrap {
+  position: relative;
+}
+
+.shell-out-copy {
+  top: 8px;
+  right: 4px;
+  z-index: 1;
 }
 
 .tool-error .tool-name {

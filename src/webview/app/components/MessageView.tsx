@@ -605,6 +605,7 @@ function ShellOutput(props: { text: string }) {
       : last;
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
+  const [copied, setCopied] = useState(false);
   const preRef = useRef<HTMLPreElement | null>(null);
   // Terminal bytes arrive settled — no async DOM swap to watch (unlike
   // the pill clamp's tokenize), so a measure per text is enough. Skipped
@@ -640,7 +641,21 @@ function ShellOutput(props: { text: string }) {
     }
   }, [text, expanded]);
   return (
-    <div>
+    <div class="shell-out-wrap">
+      <button
+        type="button"
+        class={copied ? "code-copy shell-out-copy done" : "code-copy shell-out-copy"}
+        title="Copy output"
+        aria-label="Copy output"
+        onClick={() => {
+          // The whole current frame, not the 20k-elided display text.
+          void navigator.clipboard.writeText(last).catch(() => {});
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1200);
+        }}
+      >
+        {copied ? <OcCheckIcon /> : <OcCopyIcon />}
+      </button>
       <pre
         ref={preRef}
         class={`shell-out${

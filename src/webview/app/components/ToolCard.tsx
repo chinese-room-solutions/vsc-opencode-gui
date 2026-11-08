@@ -1,4 +1,4 @@
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import hljs from "highlight.js/lib/common";
 import type { ToolPart } from "../api";
 import {
@@ -366,6 +366,8 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
   // The todo list IS the todowrite result — like the official app, that one
   // card starts open.
   const [open, setOpen] = useState(part.tool === "todowrite");
+  const [cmdCopied, setCmdCopied] = useState(false);
+  const cmdRevert = useRef<number | undefined>(undefined);
   // Elapsed-on-hover, the row's timer in place of the old "Show" title:
   // ticking while the part runs in the live turn, the total once it
   // settles. The tick only drives re-renders — the tip itself is plain
@@ -538,6 +540,32 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
             }}
           >
             <StopIcon />
+          </button>
+        )}
+        {/* The command one click away without expanding — the pill clips
+            it to one line. Corner placement mirrors a code block's copy;
+            stopPropagation keeps the click from toggling the body. */}
+        {command && (
+          <button
+            type="button"
+            class={
+              cmdCopied ? "code-copy done tool-head-copy" : "code-copy tool-head-copy"
+            }
+            title="Copy command"
+            aria-label="Copy command"
+            onClick={(e) => {
+              e.stopPropagation();
+              void navigator.clipboard.writeText(command).catch(() => {});
+              setCmdCopied(true);
+              if (cmdRevert.current !== undefined)
+                window.clearTimeout(cmdRevert.current);
+              cmdRevert.current = window.setTimeout(
+                () => setCmdCopied(false),
+                1200,
+              );
+            }}
+          >
+            {cmdCopied ? <CheckIcon /> : <CopyIcon />}
           </button>
         )}
       </div>

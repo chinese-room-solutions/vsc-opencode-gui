@@ -10,6 +10,8 @@
 import { test, expect } from "@playwright/test";
 import { startRig } from "./support/rig.mjs";
 
+test.use({ permissions: ["clipboard-read", "clipboard-write"] });
+
 test("a shell lifecycle note renders as a card with the last frame only", async ({ page }) => {
   const rig = await startRig({
     env: {
@@ -163,6 +165,40 @@ test("a long capture folds at five lines and Show more unfolds it", async ({ pag
     await expect(out).toHaveClass("shell-out clamped cut");
     await expect(toggle).toHaveText("Show more");
     expect(await clipped()).toBe(true);
+  } finally {
+    rig.stop();
+  }
+});
+
+// The copy affordance rides the capture's top-right corner and copies the
+// whole current frame — the 5-line clamp trims only the display, never the
+// clipboard.
+test("the shell card's copy button puts the full frame on the clipboard", async ({ page }) => {
+  const rig = await startRig({
+    env: {
+      OPENCODE_ROUTE: JSON.stringify({ view: "session", id: "ses_seed_1" }),
+      OPENCODE_TABS: JSON.stringify(["ses_seed_1"]),
+      OPENCODE_DIALECT: "v2",
+      OPENCODE_READY_SOUND: "0",
+      OPENCODE_PERMISSION_SOUND: "0",
+      OPENCODE_QUESTION_SOUND: "0",
+    },
+  });
+  try {
+    await page.goto(rig.url);
+    await page.waitForSelector(".msgs .turn .msg.user", { timeout: 15_000 });
+    await fetch(`${rig.api}/__control/shell-note`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ lines: 40 }),
+    });
+    const card = page.locator(".shell-notice");
+    await expect(card).toHaveCount(1);
+    await page.evaluate(() => navigator.clipboard.writeText("__none__"));
+    await card.locator(".shell-out-copy").click();
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clip).toContain("long-capture line 40");
+    expect(clip).not.toContain("__none__");
   } finally {
     rig.stop();
   }
