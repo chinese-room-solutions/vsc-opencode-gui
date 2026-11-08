@@ -309,6 +309,28 @@ export function activate(context: vscode.ExtensionContext) {
   // when a panel with a new id opens.
   for (const id of tabsStore.get()) panels.ensureSerializer(id);
 
+  // Pre-redesign chat tabs (the singleton "opencodeGui.chatPanel" viewType)
+  // carry no session in their viewType, so nothing revives them and the
+  // stray heal can't see them either. Swap one for the recorded last-active
+  // session's own tab; with no usable route it just closes.
+  context.subscriptions.push(
+    vscode.window.registerWebviewPanelSerializer("opencodeGui.chatPanel", {
+      deserializeWebviewPanel: (panel) => {
+        panel.dispose();
+        try {
+          const r = JSON.parse(routeStore.get() ?? "") as {
+            view?: string;
+            id?: string;
+          };
+          if (r.view === "session" && r.id) openSession(r.id);
+        } catch {
+          // No usable route - the stale tab just closes.
+        }
+        return Promise.resolve();
+      },
+    }),
+  );
+
   // Cross-window session deep-link: another window's "open-project" click
   // stashed this intent just before VS Code opened this folder. Consume it
   // once: open the session's own panel; a stale id bounces home in the app
