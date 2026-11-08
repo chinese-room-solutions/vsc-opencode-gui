@@ -328,12 +328,10 @@ function UserActions(props: {
   );
 }
 
-// Clicking a user pill scrolls its turn to the top — the manual version of
-// the released-sticky pin, and the way back up from a pill pinned mid-turn.
-// Measure the turn, never the pill: a stuck pill's rect already reads as
-// at-top (sticky is visual), while the turn's is its true flow position.
-// The pill is the turn's first child with no margin, so turn top == pill
-// flow top. A mouse drag ending in selected text is not a jump, and the
+// Clicking a user pill scrolls its turn to the top — the way back to a
+// turn whose pill the pin bar carries. Measure the turn, never the pill:
+// turn top == pill flow top (the pill is the turn's first child with no
+// margin). A mouse drag ending in selected text is not a jump, and the
 // clamp toggle keeps its own click.
 function jumpToTurn(e: MouseEvent) {
   const sel = window.getSelection();
@@ -355,7 +353,9 @@ function jumpToTurn(e: MouseEvent) {
 // — rides its right end on pills, floating alone when there is no line).
 // Expanding un-pins the pill; the fold line always stays in flow under the
 // text. Replies never fold — the budget and the box live in CSS
-// (.user-text clamped + expanded).
+// (.user-text clamped + expanded). `bare` is the pin bar's twin: clamped
+// display only, no toggle, no foot — the affordances live on the real
+// pill, where expanding also reads better than in a pinned header.
 function ClampedText(props: {
   text: string;
   base: string;
@@ -363,12 +363,20 @@ function ClampedText(props: {
   // highlight.js paint, host tokenize on settle).
   tokenize?: boolean;
   foot?: ComponentChildren;
+  bare?: boolean;
   // Forwarded to Markdown: inlined-image urls by part index.
   imgByIdx?: (string | undefined)[];
 }) {
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
   const boxRef = useRef<HTMLDivElement | null>(null);
+  // The async tokenize swap can flip overflow after the view came to rest:
+  // the toggle line then grows this box wherever it sits. When that lands
+  // above a reader parked at the bottom, the growth strands the tail (no
+  // scroll event fires — content grew). Captured just before the growth
+  // and consumed after: only a parked-at-bottom reader (pre ≈ 0) is put
+  // back; a reader anywhere else must not be yanked.
+  const grew = useRef<number | undefined>(undefined);
   // Scroll compensation for the toggle. Collapsing shrinks the box by
   // hundreds of px; the browser re-clamps scrollTop the moment the DOM
   // shrinks — before any effect can measure the damage — so the pre-toggle
@@ -383,12 +391,29 @@ function ClampedText(props: {
   useLayoutEffect(() => {
     const el = boxRef.current;
     if (!el) return;
-    const measure = () => setOverflows(el.scrollHeight > el.clientHeight + 1);
+    const measure = () => {
+      const over = el.scrollHeight > el.clientHeight + 1;
+      if (over && !overflows) {
+        const sc = el.closest(".msgs");
+        if (sc) grew.current = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
+      }
+      setOverflows(over);
+    };
     measure();
     const mo = new MutationObserver(measure);
     mo.observe(el, { childList: true, subtree: true, characterData: true });
     return () => mo.disconnect();
   }, []);
+  // The toggle's growth, compensated: a bottom-parked reader keeps the
+  // tail they were resting on.
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    const pre = grew.current;
+    grew.current = undefined;
+    if (pre === undefined || pre > 1 || !el) return;
+    const sc = el.closest(".msgs");
+    if (sc) sc.scrollTop = sc.scrollHeight;
+  }, [overflows]);
   useLayoutEffect(() => {
     const el = boxRef.current;
     const f = fold.current;
@@ -397,8 +422,10 @@ function ClampedText(props: {
       const scroller = el.closest(".msgs");
       if (scroller) {
         if (f.pinStart) {
-          // The expanded pill is un-pinned (CSS :has), so the row's rect is
-          // its true flow position — jump it to the scroller's top edge.
+          // Pills are flow rows — the row's rect is its true flow position.
+          // Jump it to the scroller's top edge: the reader asked for the
+          // whole text, so show it from the beginning (and the pin bar
+          // un-docks exactly there: the pill is back in view).
           const row = el.closest(".msg") ?? el;
           scroller.scrollTop +=
             row.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
@@ -426,7 +453,7 @@ function ClampedText(props: {
           }
         />
       </div>
-      {(overflows || expanded) && (
+      {!props.bare && (overflows || expanded) && (
         <div class="msg-foot" onClick={(e) => e.stopPropagation()}>
           <button
             type="button"
@@ -449,7 +476,7 @@ function ClampedText(props: {
           {props.foot}
         </div>
       )}
-      {!(overflows || expanded) && props.foot}
+      {!props.bare && !(overflows || expanded) && props.foot}
     </div>
   );
 }
@@ -464,6 +491,71 @@ function ownText(parts: Part[]): string {
     .filter((p) => !p.synthetic)
     .map((p) => p.text ?? "")
     .join("\n");
+}
+
+// The own pill's display model, shared by the flow row and the pin bar's
+// twin of it: the attachment chips that stand above the text, the
+// pillified text, and its inlined images by part index.
+function ownPillModel(parts: Part[]): {
+  files: FilePart[];
+  text: string;
+  imgs: (string | undefined)[];
+} {
+  const sid = parts[0]?.sessionID;
+  // The server can strip mention sources (images come back as inlined
+  // data: parts) — re-derive them so pills stay put in the text.
+  const view = resourcedParts(
+    parts,
+    (sessions.value.find((s) => s.id === sid)?.location?.directory ||
+      currentDir.value ||
+      "") as string,
+    agents.value
+      .filter((a) => !a.hidden && a.mode !== "primary")
+      .map((a) => a.name),
+  );
+  const files = view.filter((p): p is FilePart => {
+    if (p.type !== "file") return false;
+    const f = p as FilePart;
+    // data: = pasted attachment (unless it's a re-sourced mention pill).
+    // file:// without a source range = a "+"-picked file; file:// WITH
+    // source is an @-mention, pillified into the text instead.
+    if (f.url?.startsWith("data:")) return !f.source;
+    return !!f.url?.startsWith("file:") && !f.source;
+  });
+  return {
+    files,
+    text: pillifyOwnText(view),
+    imgs: view.map((p) =>
+      (p as FilePart).type === "file" &&
+      (p as FilePart).url?.startsWith("data:image/")
+        ? (p as FilePart).url
+        : undefined,
+    ),
+  };
+}
+
+// The pin bar's twin of a docked own pill (rendered by Session.tsx): the
+// flow row's markup, bare — clamped, no toggle, no actions. The
+// affordances stay on the real pill; the twin's click jumps there.
+export function PinMirrorBody(props: { m: ChatMessage }) {
+  const model = ownPillModel(props.m.parts);
+  return (
+    <>
+      {model.files.length > 0 && (
+        <div class="msg-files">
+          {model.files.map((p) => (
+            <AttachChip key={p.id} p={p} />
+          ))}
+        </div>
+      )}
+      <ClampedText
+        text={model.text}
+        imgByIdx={model.imgs}
+        base="markdown msg-text user-text"
+        bare
+      />
+    </>
+  );
 }
 
 // Inbound peer messages (opencode-plugin-peers): synthetic text parts
@@ -904,7 +996,7 @@ function CompactedTurnImpl(props: {
           trigger row; the fold below tells the outcome. Auto-compactions
           are the server's own doing, not a sent message. */}
       {!auto && (
-        <div class="msg user">
+        <div class="msg user" data-pin-compact="1">
           <div class="user-pill">
             <div class="markdown msg-text user-text">/compact</div>
           </div>
@@ -1219,43 +1311,19 @@ function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
       queuedTurns.value.some(
         (q) => q.id === sid && q.kind === "command" && q.echoCid === info.id,
       );
-    // The server can strip mention sources (images come back as inlined
-    // data: parts) — re-derive them so pills stay put in the text.
-    const view = resourcedParts(
-      parts,
-      (sessions.value.find((s) => s.id === sid)?.location?.directory ||
-        currentDir.value ||
-        "") as string,
-      agents.value
-        .filter((a) => !a.hidden && a.mode !== "primary")
-        .map((a) => a.name),
-    );
-    const files = view.filter((p): p is FilePart => {
-      if (p.type !== "file") return false;
-      const f = p as FilePart;
-      // data: = pasted attachment (unless it's a re-sourced mention pill).
-      // file:// without a source range = a "+"-picked file; file:// WITH
-      // source is an @-mention, pillified into the text instead.
-      if (f.url?.startsWith("data:")) return !f.source;
-      return !!f.url?.startsWith("file:") && !f.source;
-    });
+    const model = ownPillModel(parts);
     return (
-      <div class="msg user" onClick={jumpToTurn}>
-        {files.length > 0 && (
+      <div class="msg user" onClick={jumpToTurn} data-pin-mid={info.id}>
+        {model.files.length > 0 && (
           <div class="msg-files">
-            {files.map((p) => (
+            {model.files.map((p) => (
               <AttachChip key={p.id} p={p} />
             ))}
           </div>
         )}
         <ClampedText
-          text={pillifyOwnText(view)}
-          imgByIdx={view.map((p) =>
-            (p as FilePart).type === "file" &&
-            (p as FilePart).url?.startsWith("data:image/")
-              ? (p as FilePart).url
-              : undefined,
-          )}
+          text={model.text}
+          imgByIdx={model.imgs}
           base="markdown msg-text user-text"
           foot={
             sid &&

@@ -41,7 +41,7 @@ test("follows passive tail growth while at the bottom", async ({ page, rig }) =>
 
 // A short viewport makes the pin observable: the pill lands in the scroller's
 // upper region, holds while the reply is shorter than the fold, then the
-// view follows and the sticky pill rides at the top for the rest of the stream.
+// view follows and the pinned pill (the pin bar's twin) rides the top for the rest of the stream.
 test.describe("short panel", () => {
   test.use({ viewport: { width: 900, height: 400 } });
   test("prompt pin: holds until the reply passes the fold, then follows", async ({ page, rig }) => {
@@ -81,7 +81,7 @@ test.describe("short panel", () => {
   expect(Math.abs(holdB.top - holdA.top)).toBeLessThanOrEqual(3);
   expect(dist(holdB)).toBeLessThanOrEqual(3);
 
-  // Past the fold the follow resumes and the sticky pill rides the top.
+  // Past the fold the follow resumes and the pinned pill rides the top.
   await expect
     .poll(
       () =>

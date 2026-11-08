@@ -939,9 +939,9 @@ body {
      it): at rest the last line sits just above the composer, and anything
      streaming under it dissolves — no reserve would put it behind the card. */
   padding: 0 25px var(--oc-clearance, 110px);
-  /* The top gap is a scrolling spacer, not padding: a sticky prompt pins to
-     the padding-box edge, so padding would hold it 4px down with a strip
-     the slide-under content shows through. */
+  /* The top gap is a scrolling spacer, not padding: the sticky pin bar
+   pins to the padding-box edge, so padding would hold it 4px down with a
+   strip the slide-under content shows through. */
 }
 
 .msgs::before {
@@ -2578,16 +2578,16 @@ body {
   background: var(--vscode-scrollbarSlider-activeBackground, rgba(191, 191, 191, 0.4));
 }
 
-/* Claude Code pins the prompt: the user message sticks to the panel's top
-   edge while its turn is on screen — the reply slides under it, and the
-   next turn's scroll pushes the whole exchange off. The wrapper (not the
-   pill) is sticky, padded so the fill covers the box. Its height is also the push distance's floor: a released sticky
-   moves at scroll speed, so the hand-off can never be shorter than this
-   box plus the gap after the turn — and the turn footer must stay inside
-   the opaque fill while it rides out. Claude Code fades its fill over the
-   last 12px of the sticky box; here that fade hangs ::after the box
-   instead, so the 12px dissolve costs no box height and the tuned push
-   distance stays as it is. */
+/* Claude Code pins the prompt: the user message holds the panel's top edge
+   while its turn is on screen — the reply slides under it, and the next
+   turn's scroll pushes the whole exchange off. That pin lives on one bar
+   now, not the pills: a per-pill sticky is bounded by its turn's box, so
+   any turn led by a notice card (peer, sub-agent, shell) left the top slot
+   empty for its whole scroll. The bar (Session.tsx) docks the reader's
+   last own pill that scrolled past and holds it until the next own pill
+   crosses the edge — the reader's own words only; notice cards stay in
+   flow, a finished card squatting at the panel's top hides the transcript
+   under its output for the whole scroll. */
 
 .msg.user {
   margin: 0;
@@ -2597,22 +2597,43 @@ body {
   cursor: pointer;
 }
 
-/* The pin is the reader's own words alone. Notice cards ride the user role
-   from the durable fetch (peer, sub-agent, shell) but must stay in flow —
-   a finished shell card squatting at the panel's top hides the transcript
-   under its output for the whole scroll. */
+/* Own pills anchor their hover-actions chip (absolute, hung 1px below the
+   box) and keep the reply clear of the chip's lane: the reply's own 10px
+   top margin collapses with this one, leaving the chip a clear lane
+   instead of the reply's first line. */
 .msg.user:not(.peer):not(.subagent-notice):not(.shell-notice) {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  /* The hover actions chip (20px tall) hangs 1px below this box; the
-     reply's own 10px top margin collapses with this one, leaving the chip
-     a clear lane instead of the reply's first line. Margin, not padding:
-     the sticky box's height is the push-distance floor. */
+  position: relative;
   margin-bottom: 23px;
 }
 
-.msg.user:not(.peer):not(.subagent-notice):not(.shell-notice)::after {
+/* The pin bar: first child of the scroller, height 0 in flow with the
+   docked twin absolute — docking must never grow layout, or the pill being
+   taken over jumps down by its own height the frame the cover is meant to
+   be seamless. The twin reuses the pill's own markup (PinMirrorBody), so
+   the crossing frame reads as the pill simply stopping at the top; the
+   real pill keeps scrolling under the opaque twin. The 12px dissolve
+   hangs ::after the box, so it costs no box height. */
+.pin-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 0;
+}
+
+.pin-bar .pin-mirror {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  /* The pill row's own chrome (padding, panel fill, jump cursor) — restated
+     here rather than ridden via the .msg.user class: the twin is not a
+     transcript row, and row-scoped queries (.msg.user) must not see it. */
+  padding: 6px 0 2px;
+  background: var(--oc-panel);
+  cursor: pointer;
+}
+
+.pin-bar .pin-mirror::after {
   content: "";
   position: absolute;
   top: 100%;
@@ -2623,19 +2644,11 @@ body {
   pointer-events: none;
 }
 
-/* An expanded pill can out-tall the viewport, and a pin holds its top at
-   the panel's top edge — the reply would slide under it and stay there for
-   the whole turn. Reading mode un-pins; relative keeps the box as the
-   anchor for the fade and the action chip. */
-.msg.user:has(.user-text.expanded) {
-  position: relative;
-}
-
 /* Under the pill, at its right end (where the reader aims): copy + revert
    (OpenCode's own glyphs), appearing on hover. Absolutely positioned — no
-   extra line of height between messages — riding the sticky pill's box on
-   its own panel-backed chip so it stays legible over the reply. Used only
-   when there is no clamp-toggle line to host them. */
+   extra line of height between messages — riding the pill's box (relative,
+   above) on its own panel-backed chip so it stays legible over the reply.
+   Used only when there is no clamp-toggle line to host them. */
 .msg-actions {
   position: absolute;
   top: calc(100% + 1px);

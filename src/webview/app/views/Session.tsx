@@ -6,6 +6,7 @@ import { Docks } from "../components/Docks";
 import {
   CompactedTurn,
   MessageView,
+  PinMirrorBody,
   StatusStats,
   TurnFooter,
 } from "../components/MessageView";
@@ -168,9 +169,110 @@ export function Session(props: { sessionId: string; parent?: string }) {
     node?: Element;
     nodeTop?: number;
   }>();
+  // The prompt pin, generalized: pills are plain flow rows, and one bar at
+  // the scroller's top docks the reader's last own pill that scrolled past
+  // — through peer- and notice-led turns — until the next own pill crosses
+  // the edge. The old per-pill sticky was bounded by its turn's box, so any
+  // turn led by a notice card left the top slot empty; the bar holds the
+  // reader's own words only (peer cards and output notices stay in flow).
+  // The twin renders the pill's own markup (MessageView's PinMirrorBody),
+  // so the crossing frame — the twin covering the pill's last sliver —
+  // reads as the pill simply stopping at the top.
+  const [pin, setPin] = useState<{ mid: string; el: HTMLElement } | null>(null);
+  const mirrorRef = useRef<HTMLDivElement | null>(null);
+  const pinTops = useRef<{
+    h: number;
+    tops: { top: number; el: HTMLElement }[];
+  }>({ h: 0, tops: [] });
+  const evalPin = () => {
+    const el = scroller.current;
+    if (!el) return;
+    const c = pinTops.current;
+    // Growth (streaming, deferred parses, image decode, the clearance pad)
+    // moves every offset: recompute when the content height moved. Cheap
+    // otherwise — offsets cached against one scrollTop read.
+    if (c.h !== el.scrollHeight) {
+      c.h = el.scrollHeight;
+      c.tops = [
+        ...el.querySelectorAll<HTMLElement>(
+          ".turn .msg.user:not(.peer):not(.subagent-notice):not(.shell-notice)",
+        ),
+      ].map((p) => ({
+        top:
+          p.getBoundingClientRect().top -
+          el.getBoundingClientRect().top +
+          el.scrollTop,
+        el: p,
+      }));
+    }
+    let i = -1;
+    let hit: { top: number; el: HTMLElement } | undefined;
+    for (const t of c.tops) {
+      // The boundary is inclusive: a pill whose top sits exactly at the
+      // edge is pinned (the old sticky's boundary) — after a click-jump
+      // lands its turn at the top, the bar keeps carrying that pill, not
+      // its predecessor.
+      if (t.top <= el.scrollTop + 0.5) {
+        hit = t;
+        i++;
+      } else break;
+    }
+    const mid =
+      hit === undefined
+        ? undefined
+        : hit.el.dataset.pinCompact === "1"
+          ? "compact"
+          : hit.el.dataset.pinMid;
+    const next = hit !== undefined && mid !== undefined ? { mid, el: hit.el } : null;
+    setPin((prev) => (prev?.mid === next?.mid ? prev : next));
+    // The push-out: the docked twin rides up and out as the successor pill
+    // approaches the edge, its bottom edge tracking the successor's top —
+    // the next message physically pushes the pinned one out (the old
+    // sticky's hand-off). No successor (the last own pill): the ruling
+    // holds it pinned — only the reader's next own words retire it.
+    const m = mirrorRef.current;
+    if (m) {
+      const h = m.offsetHeight;
+      const nextTop = i >= 0 ? c.tops[i + 1]?.top : undefined;
+      const ride =
+        nextTop === undefined || h === 0
+          ? 0
+          : Math.max(-h, Math.min(0, nextTop - el.scrollTop - h));
+      m.style.transform = ride < -0.5 ? `translateY(${ride.toFixed(1)}px)` : "";
+    }
+  };
+  // List changes re-render pills and can grow the tail with no scroll
+  // event at all (content grows below a resting scrollTop) — re-evaluate
+  // the pin dock after every commit.
+  useLayoutEffect(() => {
+    evalPin();
+  });
+  // A freshly opened session's tail keeps settling after the mount pass:
+  // the clearance pad's RO, a clamp toggle after the deferred parse, an
+  // image decode — each grows content above the resting bottom with no
+  // scroll event, and no later list commit is guaranteed to re-assert.
+  // Hold the armed follow through the settle window — the restore
+  // settle's trail, generalized to first opens. A scrolled-up reader
+  // disarms it at the first rising event.
+  useEffect(() => {
+    let raf = 0;
+    const end = performance.now() + 2500;
+    const hold = () => {
+      const s = scroller.current;
+      if (s && stick.current && pinHold.current === undefined)
+        s.scrollTop = s.scrollHeight;
+    };
+    const tick = () => {
+      hold();
+      if (performance.now() < end) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
   const pinned = () => {
     const el = scroller.current;
     if (!el) return;
+    evalPin();
     const top = el.scrollTop;
     const rising = top < lastTop.current;
     lastTop.current = top;
@@ -579,6 +681,17 @@ export function Session(props: { sessionId: string; parent?: string }) {
     g.msgs.some((m) => m.info.id === liveId),
   );
 
+  // The docked pill's body: a compact trigger renders its literal, a real
+  // pill its mirror body. A pill the transcript no longer holds (revert
+  // folded it away, an empty step never existed) un-docks rather than
+  // pinning an empty box.
+  const pinTarget = (() => {
+    if (pin === null) return undefined;
+    if (pin.mid === "compact") return { kind: "compact" as const };
+    const m = visible?.find((msg) => msg.info.id === pin.mid);
+    return m ? { kind: "msg" as const, m } : undefined;
+  })();
+
   return (
     <div class={empty ? "chat empty" : "chat"}>
       <div class="chat-head">
@@ -604,6 +717,35 @@ export function Session(props: { sessionId: string; parent?: string }) {
           would scroll away with the content (Claude Code's .messageGradient). */}
       <div class="msgs-wrap">
         <div class="msgs" ref={setScroller} onScroll={pinned} onWheel={wheel}>
+          {pinTarget && (
+            <div class="pin-bar">
+              <div
+                class="pin-mirror"
+                ref={mirrorRef}
+                onClick={(e) => {
+                  // The twin is a jump anchor: the affordances (toggle,
+                  // actions) live on the real pill this lands on. A drag
+                  // ending in selected text is not a jump.
+                  const sel = window.getSelection();
+                  if (sel && sel.toString().length > 0) return;
+                  const sc = scroller.current;
+                  const turn = pin?.el.closest<HTMLElement>(".turn");
+                  if (!sc || !turn || !turn.isConnected) return;
+                  sc.scrollTop +=
+                    turn.getBoundingClientRect().top -
+                    sc.getBoundingClientRect().top;
+                }}
+              >
+                {pinTarget.kind === "compact" ? (
+                  <div class="user-pill">
+                    <div class="markdown msg-text user-text">/compact</div>
+                  </div>
+                ) : (
+                  <PinMirrorBody m={pinTarget.m} />
+                )}
+              </div>
+            </div>
+          )}
           {hasOlder(id) && (
             <button
               class="load-older"

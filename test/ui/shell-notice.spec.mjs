@@ -79,12 +79,24 @@ test("the shell card stays in flow — only the reader's own pill pins", async (
     const card = page.locator(".shell-notice");
     await expect(card).toHaveCount(1);
     // The card rides a user-role row (the durable fetch serves notices as
-    // user rows) — the prompt's pin rule must not come along, or the
-    // finished card squats at the panel's top over the whole scroll.
+    // user rows) and must stay in flow: pills are flow rows now, the pin
+    // is the bar's — a finished card squatting at the panel's top over the
+    // whole scroll.
     const pos = (loc) => loc.evaluate((n) => getComputedStyle(n).position);
     expect(await pos(card)).toBe("static");
-    // The seed pill is the reader's own words — it keeps the pin.
-    expect(await pos(page.locator(".turn .msg.user").first())).toBe("sticky");
+    // Own pills are flow rows that anchor their hover chip (relative),
+    // never the pin themselves.
+    expect(await pos(page.locator(".turn .msg.user").first())).toBe("relative");
+    // The session opens at the tail, where a pill already holds the pin;
+    // scrolled back to the shell card's stretch, the docked pill is the
+    // reader's own — the shell card never takes the pin.
+    const bar = page.locator(".pin-bar .pin-mirror");
+    await expect(bar).toBeVisible();
+    await page.locator(".msgs").evaluate((n) => {
+      n.scrollTop = n.scrollHeight;
+    });
+    await expect(bar).toContainText("Question");
+    await expect(bar.locator(".shell-notice")).toHaveCount(0);
   } finally {
     rig.stop();
   }

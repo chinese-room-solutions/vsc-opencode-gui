@@ -146,6 +146,8 @@ for (let i = 1; i <= SEED_TURNS; i++) {
   // durable file part) for the regular pills.
   const userText =
     `Question ${i}: ${filler(i * 3, 1)}` +
+    // Turn 2's prompt runs long: the pin bar specs fold and expand it.
+    (i === 2 ? `\n\n${filler(2, 6)}` : "") +
     (i === SEED_TURNS ? " Tune @src/retry.ts please" : "") +
     (i === SEED_TURNS - 1 ? " Browse @docs/ too" : "") +
     // Turn 9's prompt mentions an image the server inlined as a data:
