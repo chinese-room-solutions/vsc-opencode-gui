@@ -78,9 +78,9 @@ test("escape and a click outside the rows drop the picks", async ({ page }) => {
     await expect(page.locator(".pick-dock")).toHaveCount(0);
     await expect(page.locator(".sess-row.picked")).toHaveCount(0);
 
-    // A click on the Projects heading lands on no row: picks drop.
+    // A click on a day heading lands on no row: picks drop.
     await rows.nth(1).click({ modifiers: ["Control"] });
-    await page.locator(".home-h").click();
+    await page.locator(".day-label").click();
     await expect(page.locator(".pick-dock")).toHaveCount(0);
 
     // A plain click on a row keeps the picks — it posts open-session to

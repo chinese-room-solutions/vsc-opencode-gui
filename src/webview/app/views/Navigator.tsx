@@ -6,6 +6,7 @@ import { RenameInput } from "../components/RenameInput";
 import { Swatches } from "../components/Swatches";
 import {
   CheckIcon,
+  ChevronIcon,
   CloseIcon,
   CopyIcon,
   DropletIcon,
@@ -67,6 +68,19 @@ const pickedDirs = signal<Set<string>>(new Set());
 let anchorSession: string | undefined;
 let anchorDir: string | undefined;
 
+// Section collapse state and the Projects section's search — module-level
+// like the picks: leaving the view and coming back keeps them. Not
+// persisted; a reload starts both open.
+const projectsOpen = signal(true);
+const sessionsOpen = signal(true);
+const projQuery = signal("");
+// Projects section height once the user drags the split; undefined until
+// then (the section sizes to its content). Applies while expanded.
+const projH = signal<number | undefined>(undefined);
+// Live drag state; held here because pointer capture keeps the events on
+// the divider, and Preact handlers close over the module scope.
+let splitDrag: { startY: number; startH: number; maxH: number } | undefined;
+
 const isPickClick = (e: MouseEvent) =>
   e.ctrlKey || e.metaKey || e.shiftKey;
 
@@ -111,12 +125,13 @@ function dayLabel(ts: number): string {
   return d.toLocaleDateString();
 }
 
-// The sidebar's session browser: projects (a compact, scrollable
-// section) above the sessions of every project (grouped by day, filling
-// the rest). Clicking a project filters the session list to it (click
-// again for all); this window's sessions open in their own editor tab
-// via the host, and a foreign session opens its project's folder in a
-// new VS Code window, deep-linking the session — never in-app.
+// The sidebar's session browser, two collapsible sections stacked like
+// Source Control's: Projects (the picker, bounded to its own scroll)
+// above Sessions (every project's sessions, day-grouped, filling the
+// rest). Clicking a project narrows Sessions to it (click again for
+// all); this window's sessions open in their own editor tab via the
+// host, and a foreign session opens its project's folder in a new VS
+// Code window, deep-linking the session — never in-app.
 export function Navigator() {
   // The filters live in the store (homeQuery/homeFilter), so they survive
   // leaving the view — project selection and search are still set when
@@ -162,6 +177,19 @@ export function Navigator() {
   const disambig = (d: string) =>
     (nameCounts.get(baseName(d)) ?? 0) > 1 ? parentName(d) : undefined;
 
+  // The Projects section's own search: a client filter over name, parent
+  // folder, and path — the list is small, and the server has no project
+  // search route.
+  const pq = projQuery.value.trim().toLowerCase();
+  const shownDirs = pq
+    ? dirList.filter((d) => {
+        const row = projects.value.find((p) => normPath(p.worktree) === d);
+        return `${row?.name || baseName(d)} ${parentName(d)} ${d}`
+          .toLowerCase()
+          .includes(pq);
+      })
+    : dirList;
+
   // Sessions: live-filtered by title or project name, grouped by day.
   // The filter lives in the store (homeVisibleSessions): loadMoreSessions
   // pages until that list grows, so render and stop rule share one
@@ -186,7 +214,8 @@ export function Navigator() {
   const pickedSess = new Set(
     [...pickedSessions.value].filter((id) => rowIdSet.has(id)),
   );
-  const dirSet = new Set(dirList);
+  // Projects use the shown (search-filtered) rows for the same reason.
+  const dirSet = new Set(shownDirs);
   const pickedProj = new Set(
     [...pickedDirs.value].filter((d) => dirSet.has(d)),
   );
@@ -209,7 +238,7 @@ export function Navigator() {
     }
   };
   const pickProject = (dir: string, e: MouseEvent) => {
-    const r = pickToggle(dirList, pickedProj, anchorDir, dir, e.shiftKey);
+    const r = pickToggle(shownDirs, pickedProj, anchorDir, dir, e.shiftKey);
     pickedDirs.value = r.picked;
     anchorDir = r.anchor;
     if (r.picked.size > 0) {
@@ -296,7 +325,7 @@ export function Navigator() {
         // grow the list the picks live in.
         if (
           !(e.target as Element).closest(
-            ".sess-row, .proj-row, .pick-dock, .confirm-backdrop, .load-older",
+            ".sess-row, .proj-row, .pick-dock, .confirm-backdrop, .load-older, .nav-split",
           )
         )
           clearPicks();
@@ -308,97 +337,196 @@ export function Navigator() {
       {sendError.value !== undefined && sendError.value.for === undefined && (
         <div class="send-error home-error">{sendError.value.text}</div>
       )}
-      <div class="nav-top">
-        <div class="search">
-          <SearchIcon />
-          <input
-            placeholder="Search sessions"
-            value={query}
-            onInput={(e) =>
-              (homeQuery.value = (e.target as HTMLInputElement).value)
-            }
-          />
-          {query && (
-            <button
-              class="search-clear"
-              title="Clear"
-              aria-label="Clear search"
-              onClick={() => (homeQuery.value = "")}
-            >
-              <CloseIcon />
-            </button>
-          )}
-        </div>
-        <button
-          class="tb-new nav-new"
-          title="New session"
-          aria-label="New session"
-          onClick={() => void newSession()}
-        >
-          <NewSessionIcon />
-        </button>
-      </div>
-      <div class="home-left">
-        <h2 class="home-h">Projects</h2>
-        {dirList.map((dir) => (
-          <ProjectRow
-            key={dir}
-            dir={dir}
-            count={rowsByDir.get(dir)?.length ?? 0}
-            disambig={disambig(dir)}
-            selected={filter === dir}
-            picked={pickedProj.has(dir)}
-            onPick={(e) => pickProject(dir, e)}
-            onSelect={() =>
-              (homeFilter.value = filter === dir ? undefined : dir)
-            }
-          />
-        ))}
-      </div>
-      <div class="home-right">
-        {!baseLoaded.value || sessionsStalled.value ? (
-          <div class="empty">Loading sessions…</div>
-        ) : groups.length === 0 ? (
-          <div class="empty">
-            {sessionsSearching.value
-              ? "Searching…"
-              : sessionsNext.value && !q
-                ? "Loading older sessions…"
-                : q
-                  ? `No sessions match “${query.trim()}”.`
-                  : filter
-                    ? `No sessions in ${projectDisplayName(filter)} yet.`
-                    : "No sessions yet. Start one above — it shows up under this folder."}
-          </div>
-        ) : (
-          groups.map((g) => (
-            <section key={g.label}>
-              <div class="day-head">
-                <span class="day-label">{g.label}</span>
-              </div>
-              {g.rows.map((s) => (
-                <SessionRow
-                  key={s.id}
-                  s={s}
-                  picked={pickedSess.has(s.id)}
-                  onPick={(e) => pickSession(s.id, e)}
-                />
-              ))}
-            </section>
-          ))
-        )}
-        {sessionsNext.value && (
+      <section
+        class="nav-sec proj-sec"
+        style={
+          projectsOpen.value && projH.value !== undefined
+            ? { height: `${projH.value}px`, flex: "none" }
+            : undefined
+        }
+      >
+        <div class="sec-head">
           <button
-            class="load-older"
-            disabled={sessionsLoadingMore.value}
-            onClick={() => void loadMoreSessions()}
+            class={projectsOpen.value ? "sec-toggle" : "sec-toggle closed"}
+            title={projectsOpen.value ? "Collapse Projects" : "Expand Projects"}
+            onClick={() => (projectsOpen.value = !projectsOpen.value)}
           >
-            {sessionsLoadingMore.value
-              ? "Loading older sessions…"
-              : "Load older sessions"}
+            <span class="chev">
+              <ChevronIcon />
+            </span>
+            <span class="sec-title">Projects</span>
           </button>
+        </div>
+        {projectsOpen.value && (
+          <div class="sec-body proj-body">
+            <div class="search">
+              <SearchIcon />
+              <input
+                placeholder="Search projects"
+                value={projQuery.value}
+                onInput={(e) =>
+                  (projQuery.value = (e.target as HTMLInputElement).value)
+                }
+              />
+              {projQuery.value && (
+                <button
+                  class="search-clear"
+                  title="Clear"
+                  aria-label="Clear search"
+                  onClick={() => (projQuery.value = "")}
+                >
+                  <CloseIcon />
+                </button>
+              )}
+            </div>
+            {shownDirs.map((dir) => (
+              <ProjectRow
+                key={dir}
+                dir={dir}
+                count={rowsByDir.get(dir)?.length ?? 0}
+                disambig={disambig(dir)}
+                selected={filter === dir}
+                picked={pickedProj.has(dir)}
+                onPick={(e) => pickProject(dir, e)}
+                onSelect={() =>
+                  (homeFilter.value = filter === dir ? undefined : dir)
+                }
+              />
+            ))}
+            {shownDirs.length === 0 && (
+              <div class="empty">
+                {pq
+                  ? `No projects match “${projQuery.value.trim()}”.`
+                  : "No projects yet."}
+              </div>
+            )}
+          </div>
         )}
-      </div>
+      </section>
+      {projectsOpen.value && (
+        <div
+          class="nav-split"
+          role="separator"
+          aria-orientation="horizontal"
+          title="Drag to resize"
+          onPointerDown={(e) => {
+            const div = e.currentTarget as HTMLElement;
+            const home = div.closest(".home");
+            const proj = div.previousElementSibling as HTMLElement | null;
+            if (!home || !proj) return;
+            splitDrag = {
+              startY: e.clientY,
+              startH:
+                projH.value ?? proj.getBoundingClientRect().height,
+              // Keep a usable Sessions section below: header, search, a
+              // few rows.
+              maxH: Math.max(60, home.clientHeight - 160),
+            };
+            div.setPointerCapture(e.pointerId);
+          }}
+          onPointerMove={(e) => {
+            if (!splitDrag) return;
+            // The border follows the pointer: dragging up moves the split
+            // up, shrinking Projects and growing Sessions.
+            projH.value = Math.round(
+              Math.min(
+                splitDrag.maxH,
+                Math.max(40, splitDrag.startH + (e.clientY - splitDrag.startY)),
+              ),
+            );
+          }}
+          onPointerUp={() => (splitDrag = undefined)}
+          onPointerCancel={() => (splitDrag = undefined)}
+        />
+      )}
+      <section class="nav-sec sess-sec">
+        <div class="sec-head">
+          <button
+            class={sessionsOpen.value ? "sec-toggle" : "sec-toggle closed"}
+            title={sessionsOpen.value ? "Collapse Sessions" : "Expand Sessions"}
+            onClick={() => (sessionsOpen.value = !sessionsOpen.value)}
+          >
+            <span class="chev">
+              <ChevronIcon />
+            </span>
+            <span class="sec-title">Sessions</span>
+          </button>
+          <button
+            class="tb-new nav-new"
+            title="New session"
+            aria-label="New session"
+            onClick={() => void newSession()}
+          >
+            <NewSessionIcon />
+          </button>
+        </div>
+        {sessionsOpen.value && (
+          <div class="sec-body sess-body">
+            <div class="search">
+              <SearchIcon />
+              <input
+                placeholder="Search sessions"
+                value={query}
+                onInput={(e) =>
+                  (homeQuery.value = (e.target as HTMLInputElement).value)
+                }
+              />
+              {query && (
+                <button
+                  class="search-clear"
+                  title="Clear"
+                  aria-label="Clear search"
+                  onClick={() => (homeQuery.value = "")}
+                >
+                  <CloseIcon />
+                </button>
+              )}
+            </div>
+            {!baseLoaded.value || sessionsStalled.value ? (
+              <div class="empty">Loading sessions…</div>
+            ) : groups.length === 0 ? (
+              <div class="empty">
+                {sessionsSearching.value
+                  ? "Searching…"
+                  : sessionsNext.value && !q
+                    ? "Loading older sessions…"
+                    : q
+                      ? `No sessions match “${query.trim()}”.`
+                      : filter
+                        ? `No sessions in ${projectDisplayName(filter)} yet.`
+                        : "No sessions yet. Start one above — it shows up under this folder."}
+              </div>
+            ) : (
+              groups.map((g) => (
+                <section key={g.label}>
+                  <div class="day-head">
+                    <span class="day-label">{g.label}</span>
+                  </div>
+                  {g.rows.map((s) => (
+                    <SessionRow
+                      key={s.id}
+                      s={s}
+                      picked={pickedSess.has(s.id)}
+                      onPick={(e) => pickSession(s.id, e)}
+                    />
+                  ))}
+                </section>
+              ))
+            )}
+            {sessionsNext.value && (
+              <button
+                class="load-older"
+                disabled={sessionsLoadingMore.value}
+                onClick={() => void loadMoreSessions()}
+              >
+                {sessionsLoadingMore.value
+                  ? "Loading older sessions…"
+                  : "Load older sessions"}
+              </button>
+            )}
+          </div>
+        )}
+      </section>
       {(pickedSess.size > 0 || pickedProj.size > 0 || bulk !== undefined) && (
         <div class="pick-dock">
           {bulk ? (

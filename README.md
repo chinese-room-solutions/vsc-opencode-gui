@@ -19,8 +19,10 @@ and the chat UI talks to it directly.
 
 - **One editor tab per session** - like any editor: each conversation is
   its own tab, titled with the session name, revived after a reload.
-- **Sessions side panel** - every project and session in one list:
-  search, day groups, rename/recolor, fork, and bulk delete. Clicking a
+- **Sessions side panel** - two collapsible sections, Source Control
+  style, with a draggable split: Projects (own search) above
+  day-grouped sessions with whole-history search. Clicking a project narrows the sessions;
+  rename/recolor, fork, and bulk delete stay on the rows. Clicking a
   session opens its tab; another project's session deep-links its folder
   in a new window.
 - **Sub-agents are sessions** - open one from its task chip, steer it, or

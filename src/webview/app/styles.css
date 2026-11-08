@@ -29,10 +29,12 @@
    - Destructive primary: fills errorForeground, ink button-foreground
      (confirm dialog). Inline next to content, outline it instead
      (subagent-stop) — a fill there is too loud.
-   - Neutral fill: --oc-btn-bg (button-secondaryBackground). nav-new,     the dialog's Cancel.
+   - Neutral fill: --oc-btn-bg (button-secondaryBackground). The
+     dialog's Cancel.
    - Ghost, the default: transparent, --oc-text ink (--oc-text-2 when
      de-emphasized), hover list-hoverBackground. Toolbars, menus, row
-     actions, dock options, link-buttons (load-older).
+     actions, dock options, link-buttons (load-older), the navigator's
+     section headers (nav-new).
    Circles are glyph holders (search-clear, ctx-btn); pills (relay) are
    toggle chips. */
 :root {
@@ -144,7 +146,8 @@ body {
   overflow: hidden;
 }
 
-/* The navigator's "New session" (the search row's trailing button). */
+/* The navigator's "New session" (the Sessions header's trailing
+   button). */
 .tb-new {
   display: flex;
   align-items: center;
@@ -180,8 +183,9 @@ body {
   user-select: none;
 }
 
-/* --- Navigator: the sidebar's session browser (projects section above
-   the session list, stacked for a narrow panel) --- */
+/* --- Navigator: the sidebar's session browser (two collapsible
+   sections — Projects above day-grouped Sessions — stacked for a narrow
+   panel) --- */
 
 .home {
   display: flex;
@@ -190,59 +194,136 @@ body {
   min-height: 0;
 }
 
-/* Search row on top; "New session" sits at its end. */
-.nav-top {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: none;
-  padding: 8px 10px 4px;
-}
-
-.nav-top .search {
-  flex: 1;
-  min-width: 0;
-  margin-bottom: 0;
-}
-
-/* The icon-only form of the New session button. */
+/* The Sessions header's New session action: a quiet icon button in the
+   section header row, VS Code's section-header style. */
 .tb-new.nav-new {
-  justify-content: center;
   flex: none;
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   padding: 0;
-  background: var(--oc-btn-bg);
+  background: none;
 }
 
 .tb-new.nav-new:hover {
-  background: color-mix(in srgb, var(--oc-btn-bg) 88%, var(--oc-text));
+  background: var(--vscode-list-hoverBackground);
 }
 
-/* Projects: a compact section bounded to its own scroll. */
-.home-left {
+/* Collapsible sections stacked like Source Control's. */
+.nav-sec {
+  display: flex;
+  flex-direction: column;
   flex: none;
-  max-height: 32%;
-  overflow-y: auto;
+  min-height: 0;
+}
+
+/* Projects yields space first: a long list scrolls inside its own body
+   rather than pushing Sessions out. Percentage caps resolve against the
+   section's own (indefinite) height, so sizing is flex, not max-height. */
+.proj-sec {
+  flex: 0 1 auto;
+}
+
+.sess-sec {
+  flex: 1 1 0;
+}
+
+/* Section header rows: chevron + title, the toggle button fills the row
+   so its hover reads as the whole row. The first opens 8px under the
+   panel top — where the old search row's top gap sat. */
+.sec-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  height: 22px;
+  margin: 8px 0 0;
+}
+
+/* A section stacked under another keeps the tighter rhythm. */
+.sess-sec > .sec-head {
+  margin-top: 4px;
+}
+
+/* VS Code's sidebar section title: small caps, quiet ink. */
+.sec-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  color: var(--oc-text);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sec-toggle:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.sec-toggle .chev {
+  display: flex;
+  flex: none;
+  color: var(--oc-text-2);
+  transition: rotate 0.1s ease;
+}
+
+.sec-toggle.closed .chev {
+  rotate: -90deg;
+}
+
+/* The section bodies keep the flat list's side insets (0 10px) so rows
+   and searches land exactly where the old lists put them. */
+.sec-body {
+  flex: 1;
+  min-height: 0;
+  margin-top: 2px;
   padding: 0 10px;
 }
 
-/* Sessions fill the rest, scrolling on their own. */
-.home-right {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 0 10px 10px;
+.sec-body .search {
+  margin: 0 0 4px;
 }
 
-/* VS Code's sidebar section label: small caps, quiet ink. */
-.home-h {
-  margin: 2px 0 4px;
-  color: var(--oc-text-2);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
+/* Projects bounded to its own scroll; Sessions take the rest. */
+.proj-body {
+  flex: 0 1 auto;
+  overflow-y: auto;
+}
+
+.sess-body {
+  overflow-y: auto;
+  padding-bottom: 10px;
+}
+
+/* Draggable split between the sections: a thin full-width hit area with
+   a 1px line through its middle - visible at rest (the panel border
+   color), brighter while hovered or dragged. */
+.nav-split {
+  flex: none;
+  height: 5px;
+  margin: 1px 0 2px;
+  cursor: ns-resize;
+  touch-action: none;
+  background: linear-gradient(var(--oc-border), var(--oc-border)) center /
+    calc(100% - 12px) 1px no-repeat;
+}
+
+.nav-split:hover,
+.nav-split:active {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--oc-text) 45%, transparent),
+    color-mix(in srgb, var(--oc-text) 45%, transparent)
+  );
 }
 
 /* Project rows: flat, compact pitch, no carets or counts. */
