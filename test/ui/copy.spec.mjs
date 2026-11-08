@@ -65,7 +65,7 @@ test.beforeEach(async ({ page, rig }) => {
 
 test("fence copy button preserves newlines (plain, tall, list-nested)", async ({ page }) => {
   const blocks = page.locator(".code-block");
-  await expect(blocks).toHaveCount(3);
+  await expect(blocks).toHaveCount(5);
 
   await sentinel(page);
   await blocks.filter({ has: page.locator("code.language-ts") }).locator(".code-copy").click();
@@ -138,6 +138,60 @@ test("partial selection across lines keeps the inner newlines", async ({ page })
   const text = await readText(page);
   expect(text).toContain("\nconst b = 2;\n");
   expect(await readTypes(page)).toContain("text/html");
+});
+
+test("fence copy button keeps sub-fences (markdown block with inner code)", async ({ page }) => {
+  await sentinel(page);
+  await page
+    .locator(".code-block")
+    .filter({ has: page.locator("code.language-markdown") })
+    .locator(".code-copy")
+    .click();
+  expect(await readText(page)).toBe("# Doc\n\n```js\nconsole.log(1)\n```\n\ntail line");
+});
+
+test("selection copy keeps a code block nested in a list item", async ({ page }) => {
+  // Whole list selected (the ul itself is cloned).
+  await sentinel(page);
+  await page.evaluate(() => {
+    const r = document.createRange();
+    r.selectNode(document.querySelector(".msgs ul"));
+    const s = window.getSelection();
+    s.removeAllRanges();
+    s.addRange(r);
+  });
+  await page.keyboard.press("Control+c");
+  const LIST_MD = "- step one\n- run it:\n  ```sh\n  npm run compile\n  npm test\n  ```";
+  expect(await readText(page)).toBe(LIST_MD);
+
+  // Sliced across bullets (the clone carries bare <li>s, no <ul>).
+  await sentinel(page);
+  await selectAllIn(page, ".msgs ul");
+  await page.keyboard.press("Control+c");
+  expect(await readText(page)).toBe(LIST_MD);
+});
+
+test("selection copy round-trips a fence containing sub-fences", async ({ page }) => {
+  await sentinel(page);
+  await page.evaluate(() => {
+    const wrap = document.querySelector("code.language-markdown").closest(".code-block");
+    const r = document.createRange();
+    r.setStart(wrap.previousElementSibling, 0);
+    r.setEndAfter(wrap);
+    const s = window.getSelection();
+    s.removeAllRanges();
+    s.addRange(r);
+  });
+  await page.keyboard.press("Control+c");
+  expect(await readText(page)).toBe(
+    "Nested fence:\n\n````markdown\n# Doc\n\n```js\nconsole.log(1)\n```\n\ntail line\n````",
+  );
+});
+
+test("quote copy button reproduces the markdown (nested code fence)", async ({ page }) => {
+  await sentinel(page);
+  await page.locator("blockquote").filter({ has: page.locator("pre") }).locator("> .code-copy").click();
+  expect(await readText(page)).toBe("> quote intro\n>\n> ```go\n> func main() {}\n> ```");
 });
 
 test("whole-message selection pastes clean structure (no colors, no chrome)", async ({ page }) => {

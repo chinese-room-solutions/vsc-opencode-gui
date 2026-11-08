@@ -319,8 +319,10 @@ const mdLines = (s: string): string =>
     .join("\n");
 
 // A fenced block: the code element carries the language class; a body
-// containing ``` needs a longer fence.
-function mdPre(pre: Element): string {
+// containing ``` needs a longer fence. Accepts the pre itself or its
+// enhance wrapper (div.code-block, added after sanitize).
+function mdPre(el: Element): string {
+  const pre = el.tagName === "PRE" ? el : (el.querySelector("pre") ?? el);
   const codeEl = pre.querySelector("code");
   const lang = codeEl
     ? /\blanguage-([\w+#-]+)/.exec(codeEl.className)?.[1]
@@ -334,8 +336,16 @@ function mdPre(pre: Element): string {
   return `${fence}${lang ?? ""}\n${body}\n${fence}`;
 }
 
-function mdList(el: Element, depth: number): string {
-  const pad = "  ".repeat(depth);
+// A pre or one of its wrappers — both copy as a fenced block.
+const isCodeBlock = (el: Element) =>
+  el.tagName === "PRE" || !!el.querySelector(":scope > pre");
+
+// A block (fenced code, nested list) under a list item: indent every
+// line to the item's content column so the copy keeps it inside the item.
+const mdIndent = (s: string, pad: string) =>
+  s.split("\n").map((l) => (l ? pad + l : l)).join("\n");
+
+function mdList(el: Element, pad = ""): string {
   const ordered = el.tagName === "OL";
   // Mirror the browser's marker arithmetic so a copy reproduces the
   // displayed numbers: ol start seeds the counter, a li value attribute
@@ -351,6 +361,7 @@ function mdList(el: Element, depth: number): string {
         : counter + 1
       : pinned;
     const marker = ordered ? `${counter}. ` : "- ";
+    const contentPad = pad + " ".repeat(marker.length);
     const check = li.querySelector(":scope > input[type=checkbox]");
     const tick = check
       ? (check as HTMLInputElement).checked
@@ -361,7 +372,9 @@ function mdList(el: Element, depth: number): string {
     const sub: string[] = [];
     for (const c of li.childNodes) {
       if (c instanceof Element && (c.tagName === "UL" || c.tagName === "OL"))
-        sub.push(mdList(c, depth + 1));
+        sub.push(mdList(c, contentPad));
+      else if (c instanceof Element && isCodeBlock(c))
+        sub.push(mdIndent(mdPre(c), contentPad));
       else inlineNodes.push(c);
     }
     lines.push(`${pad}${marker}${tick}${mdLines(inlineNodes.map(mdInline).join("")).trim()}`);
@@ -371,19 +384,20 @@ function mdList(el: Element, depth: number): string {
 }
 
 // Elements that start a new block; everything else flows as inline text.
+// LI is here for selection clones that slice bullets out of their list.
 const BLOCK_TAGS = new Set([
-  "P", "PRE", "UL", "OL", "BLOCKQUOTE", "TABLE", "HR", "DIV",
+  "P", "PRE", "UL", "OL", "LI", "BLOCKQUOTE", "TABLE", "HR", "DIV",
   "H1", "H2", "H3", "H4", "H5", "H6",
 ]);
 
-function mdBlocks(el: Element, depth = 0): string[] {
+function mdBlocks(el: Element): string[] {
   const tag = el.tagName;
   if (tag === "PRE") return [mdPre(el)];
-  if (tag === "UL" || tag === "OL") return [mdList(el, depth)];
+  if (tag === "UL" || tag === "OL") return [mdList(el)];
   if (tag === "HR") return ["---"];
   if (tag === "BLOCKQUOTE") {
     const inner = [...el.childNodes].flatMap((c) =>
-      c instanceof Element ? mdBlocks(c, depth) : [],
+      c instanceof Element ? mdBlocks(c) : [],
     );
     return [
       inner
@@ -416,11 +430,35 @@ function mdBlocks(el: Element, depth = 0): string[] {
   // child order, folding inline runs into paragraphs at the seams.
   const out: string[] = [];
   let run = "";
-  for (const c of el.childNodes) {
-    if (c instanceof Element && BLOCK_TAGS.has(c.tagName)) {
+  const kids = [...el.childNodes];
+  for (let i = 0; i < kids.length; i++) {
+    const c = kids[i];
+    // A selection sliced across bullets clones <li>s with no <ul> around
+    // them; group the run into one list so nested blocks keep their shape.
+    if (c instanceof Element && c.tagName === "LI") {
       if (run.trim()) out.push(mdLines(run).trim());
       run = "";
-      out.push(...mdBlocks(c, depth));
+      const ul = el.ownerDocument.createElement("ul");
+      while (i < kids.length) {
+        const k = kids[i];
+        if (k instanceof Element && k.tagName === "LI") {
+          ul.appendChild(k.cloneNode(true));
+          i++;
+          continue;
+        }
+        // Inter-element whitespace separates the bullets, not blocks.
+        if (k.nodeType === Node.TEXT_NODE && !(k.textContent ?? "").trim()) {
+          i++;
+          continue;
+        }
+        break;
+      }
+      i--;
+      out.push(mdList(ul));
+    } else if (c instanceof Element && BLOCK_TAGS.has(c.tagName)) {
+      if (run.trim()) out.push(mdLines(run).trim());
+      run = "";
+      out.push(...mdBlocks(c));
     } else {
       run += mdInline(c);
     }
@@ -475,7 +513,9 @@ export function initTranscriptCopy(): void {
 // modifier+click copy anywhere in the quote.
 export function enhanceBlockquotes(root: HTMLElement): void {
   for (const bq of [...root.querySelectorAll<HTMLElement>("blockquote")]) {
-    const text = (bq.textContent ?? "").trim();
+    // The markdown reconstruction, not raw text: a quote wrapping a code
+    // block copies with its fence and language, same as selecting it.
+    const text = selectionMarkdown(bq);
     if (!text) continue;
     // :scope — a plain descendant query would remove a nested code
     // block's button (document order puts it before the quote's own).
