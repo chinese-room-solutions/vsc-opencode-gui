@@ -86,12 +86,22 @@
       {
         "command": "opencodeGui.openContextSummary",
         "title": "Open Code: Toggle Context Breakdown"
-      }
-    ],
-    "commandPalette": [
+      },
       {
-        "command": "opencodeGui.addToChat",
-        "when": "false"
+        "command": "opencodeGui.copySessionId",
+        "title": "Open Code: Copy Session ID"
+      },
+      {
+        "command": "opencodeGui.forkSession",
+        "title": "Open Code: Fork Session"
+      },
+      {
+        "command": "opencodeGui.renameSession",
+        "title": "Open Code: Rename Session"
+      },
+      {
+        "command": "opencodeGui.deleteSession",
+        "title": "Open Code: Delete Session"
       }
     ],
     "keybindings": [
@@ -123,7 +133,50 @@
       "editor/title/context": [
         {
           "command": "opencodeGui.addToChat",
+          "when": "!(activeWebviewPanelId =~ /^opencodeGui\\.session\\./)",
           "group": "navigation"
+        },
+        {
+          "command": "opencodeGui.copySessionId",
+          "when": "activeWebviewPanelId =~ /^opencodeGui\\.session\\./",
+          "group": "navigation@1"
+        },
+        {
+          "command": "opencodeGui.forkSession",
+          "when": "activeWebviewPanelId =~ /^opencodeGui\\.session\\./",
+          "group": "navigation@2"
+        },
+        {
+          "command": "opencodeGui.renameSession",
+          "when": "activeWebviewPanelId =~ /^opencodeGui\\.session\\./",
+          "group": "navigation@3"
+        },
+        {
+          "command": "opencodeGui.deleteSession",
+          "when": "activeWebviewPanelId =~ /^opencodeGui\\.session\\./",
+          "group": "navigation@4"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "opencodeGui.addToChat",
+          "when": "false"
+        },
+        {
+          "command": "opencodeGui.copySessionId",
+          "when": "activeWebviewPanelId =~ /^opencodeGui\\.session\\./"
+        },
+        {
+          "command": "opencodeGui.forkSession",
+          "when": "activeWebviewPanelId =~ /^opencodeGui\\.session\\./"
+        },
+        {
+          "command": "opencodeGui.renameSession",
+          "when": "activeWebviewPanelId =~ /^opencodeGui\\.session\\./"
+        },
+        {
+          "command": "opencodeGui.deleteSession",
+          "when": "activeWebviewPanelId =~ /^opencodeGui\\.session\\./"
         }
       ],
       "editor/context": [

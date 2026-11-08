@@ -263,6 +263,80 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
+  // The old in-app tab menu (pre-editor-tabs) lives again on the native
+  // editor tab: Copy Session ID / Fork / Rename / Delete, contributed to
+  // editor/title/context and gated on a session tab being the active
+  // editor (activeWebviewPanelId carries the panel's viewType). The
+  // context arg names the right-clicked tab's group and index, but
+  // groupId is VS Code's internal id — not a view column — so the column
+  // match is a best effort, validated against our own panels; anything
+  // that doesn't line up (and plain palette runs, which pass no arg)
+  // falls back to the active session panel.
+  const tabMenuTarget = (
+    ctx: unknown,
+  ): { id: string } | undefined => {
+    const c = ctx as { groupId?: unknown; editorIndex?: unknown } | undefined;
+    if (typeof c?.groupId === "number" && typeof c.editorIndex === "number") {
+      const tab = vscode.window.tabGroups.all.find(
+        (g) => g.viewColumn === c.groupId,
+      )?.tabs[c.editorIndex];
+      const id = tab ? sessionTabId(tab) : undefined;
+      if (id !== undefined && panels.has(id)) return { id };
+    }
+    return panels.target();
+  };
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("opencodeGui.copySessionId", (ctx?: unknown) => {
+      const target = tabMenuTarget(ctx);
+      if (target) void vscode.env.clipboard.writeText(target.id);
+    }),
+    vscode.commands.registerCommand("opencodeGui.forkSession", async (ctx?: unknown) => {
+      const target = tabMenuTarget(ctx);
+      if (!target) return;
+      const sm = ensureServer() ?? serverManager;
+      const fork = await sm?.forkSession(target.id);
+      if (fork) openSession(fork);
+      else
+        void vscode.window.showErrorMessage(
+          "Could not fork the session — an empty one has nothing to copy, or the server is not reachable. Try Open Code: Restart.",
+        );
+    }),
+    vscode.commands.registerCommand("opencodeGui.renameSession", async (ctx?: unknown) => {
+      const target = tabMenuTarget(ctx);
+      if (!target) return;
+      const sm = ensureServer() ?? serverManager;
+      // Pre-fill with the server's truth: the tab title may still be the
+      // raw id (the async label fetch never landed).
+      const current = (await sm?.sessionTitle(target.id)) ?? target.id;
+      const title = await vscode.window.showInputBox({
+        prompt: "Rename session",
+        value: current,
+      });
+      if (title === undefined || title.trim() === "") return;
+      if (await sm?.renameSession(target.id, title)) panels.setTitle(target.id, title);
+      else void vscode.window.showErrorMessage("The rename was rejected by the server.");
+    }),
+    vscode.commands.registerCommand("opencodeGui.deleteSession", async (ctx?: unknown) => {
+      const target = tabMenuTarget(ctx);
+      if (!target) return;
+      const confirm = await vscode.window.showWarningMessage(
+        "Delete this session? Its transcript is removed too.",
+        { modal: true, detail: target.id },
+        "Delete",
+      );
+      if (confirm !== "Delete") return;
+      const sm = ensureServer() ?? serverManager;
+      if (!(await sm?.deleteSession(target.id))) {
+        void vscode.window.showErrorMessage("The delete was rejected by the server.");
+        return;
+      }
+      // The webview stores reconcile over SSE (session.deleted); the tab
+      // itself is ours to close.
+      panels.get(target.id)?.dispose();
+    }),
+  );
+
   // Create a session through the server (the app's own new-session path)
   // and open its panel; undefined when the server could not.
   const createSessionPanel = async (): Promise<string | undefined> => {

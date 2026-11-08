@@ -738,6 +738,47 @@ export class ServerManager {
     return row?.data?.title || row?.title;
   }
 
+  // PATCH /session/{id} — rename (the webview's renameSession in
+  // src/webview/app/api.ts is the same call). v1 scopes by the directory
+  // query, v2 does not; v2 replies 204 with no body, so success is the
+  // status, not a parsed row.
+  async renameSession(id: string, title: string): Promise<boolean> {
+    await this.ready;
+    return this._sendOk(
+      "PATCH",
+      this._dialect === "v2"
+        ? `/api/session/${id}`
+        : `/session/${id}${this._dirQuery()}`,
+      { title },
+    );
+  }
+
+  // DELETE /session/{id} — the session and its transcript leave the server.
+  async deleteSession(id: string): Promise<boolean> {
+    await this.ready;
+    return this._sendOk(
+      "DELETE",
+      this._dialect === "v2"
+        ? `/api/session/${id}`
+        : `/session/${id}${this._dirQuery()}`,
+    );
+  }
+
+  // POST /session/{id}/fork — copy the session with its history and
+  // continue on the copy; v1 takes an empty body, v2 a JSON `{}`. Both
+  // reply the new row (v2 in a {data} envelope). Returns the fork's id.
+  async forkSession(id: string): Promise<string | undefined> {
+    await this.ready;
+    const row = await this._request<{ id?: string; data?: { id?: string } }>(
+      "POST",
+      this._dialect === "v2"
+        ? `/api/session/${id}/fork`
+        : `/session/${id}/fork${this._dirQuery()}`,
+      this._dialect === "v2" ? {} : undefined,
+    );
+    return row?.data?.id ?? row?.id;
+  }
+
   // GET /session/{id}/diff — the session's file changes as unified patches.
   async sessionDiff(id: string): Promise<SessionFileDiff[] | undefined> {
     await this.ready;
@@ -959,6 +1000,39 @@ export class ServerManager {
       return (await res.json()) as T;
     } catch {
       return undefined;
+    }
+  }
+
+  // v1's session routes scope by the directory query; the server serves
+  // the first workspace folder.
+  private _dirQuery(): string {
+    const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    return cwd ? `?directory=${encodeURIComponent(cwd)}` : "";
+  }
+
+  // _request would throw parsing an ok-but-empty reply (v2's 204s), so
+  // status-only sends report their ok flag instead.
+  private async _sendOk(
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<boolean> {
+    if (!this._apiBaseUrl) return false;
+    try {
+      const res = await fetch(`${this._apiBaseUrl}${path}`, {
+        method,
+        signal: AbortSignal.timeout(10_000),
+        headers: {
+          ...(body !== undefined
+            ? { "Content-Type": "application/json" }
+            : {}),
+          ...serverAuthHeaders(),
+        },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      });
+      return res.ok;
+    } catch {
+      return false;
     }
   }
 

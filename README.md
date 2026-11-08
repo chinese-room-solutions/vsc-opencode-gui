@@ -27,6 +27,9 @@ and the chat UI talks to it directly.
   stop it. The parent turn collects the result. While sub-agents run, a
   button left of the context ring shows how many. Click it to list them,
   so one buried under later messages stays findable.
+- **Session tab menu** - right-click a session's editor tab for Copy
+  Session ID, Fork, Rename, and Delete. The same commands sit in the
+  command palette while a session tab is active.
 - **Notifications, visual and sound** - a tab pulses yellow when a session
   waits on you, green when a turn finishes. Chimes play for finished
   turns, permissions, and questions.

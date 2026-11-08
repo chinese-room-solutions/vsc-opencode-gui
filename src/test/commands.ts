@@ -155,6 +155,30 @@ suite("opencode GUI commands", function () {
     assert.strictEqual(api.panels.ids().length, count, "reveal reuses the panel");
   });
 
+  test("tab menu commands: copy id lands on the clipboard, fork rejects an empty session cleanly", async function () {
+    await hubUrl(api);
+    const target = api.panels.target();
+    assert.ok(target, "a panel to act on");
+    // copySessionId (no tab-context arg: falls back to the active panel).
+    await vscode.commands.executeCommand("opencodeGui.copySessionId");
+    assert.strictEqual(
+      await vscode.env.clipboard.readText(),
+      target.id,
+      "the active session's id",
+    );
+    // forkSession on an empty session (no turns): the server 400s
+    // "Cannot fork empty session" — the command must settle with the
+    // panel set unchanged, not hang or throw.
+    const before = api.panels.ids().length;
+    await vscode.commands.executeCommand("opencodeGui.forkSession");
+    await new Promise((r) => setTimeout(r, 1_000));
+    assert.strictEqual(
+      api.panels.ids().length,
+      before,
+      "no panel opened for a rejected fork",
+    );
+  });
+
   test("toggleChatView hides the revealed sidebar view", async function () {
     // Focus our view first (the toggle's reveal branch depends on which
     // view the bars last showed — not ours to control headless).
