@@ -2657,6 +2657,11 @@ body {
   position: sticky;
   top: 0;
   z-index: 2;
+  /* The hover actions chip (20px tall) hangs 1px below this box; the
+     reply's own 10px top margin collapses with this one, leaving the chip
+     a clear lane instead of the reply's first line. Margin, not padding:
+     the sticky box's height is the push-distance floor. */
+  margin-bottom: 23px;
 }
 
 .msg.user:not(.peer):not(.subagent-notice):not(.shell-notice)::after {
