@@ -353,7 +353,7 @@ const visibleAgents = (list: Agent[]): Agent[] =>
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-export function AgentPicker(props: { id?: string }) {
+export function AgentPicker(props: { id: string }) {
   const sel = currentSelection(props.id);
   // Sub-agent sessions run subagent-mode agents (their name can even look
   // like a model id). The send path keeps that truth; the chip only shows
@@ -385,7 +385,7 @@ export function AgentPicker(props: { id?: string }) {
   );
 }
 
-export function VariantPicker(props: { id?: string }) {
+export function VariantPicker(props: { id: string }) {
   const sel = currentSelection(props.id);
   const variants = modelVariants(sel.model);
   if (!sel.model || variants.length === 0) return null;
@@ -431,7 +431,7 @@ export function VariantPicker(props: { id?: string }) {
 // unfolded below, and a Manage providers footer handing to the native
 // command. Picking a provider switches the composer to that provider's
 // first model — the model chip then lists only its models.
-function ProviderMenu(props: { id?: string; onClose: () => void }) {
+function ProviderMenu(props: { id: string; onClose: () => void }) {
   const sel = currentSelection(props.id);
   // Same attention-driven heal as the model menu.
   useEffect(() => {
@@ -530,7 +530,7 @@ function ProviderMenu(props: { id?: string; onClose: () => void }) {
   );
 }
 
-export function ModelPicker(props: { id?: string }) {
+export function ModelPicker(props: { id: string }) {
   const sel = currentSelection(props.id);
   const connected = providers.value?.connected ?? [];
   const all = providers.value?.all ?? [];

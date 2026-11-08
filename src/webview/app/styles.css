@@ -29,8 +29,7 @@
    - Destructive primary: fills errorForeground, ink button-foreground
      (confirm dialog). Inline next to content, outline it instead
      (subagent-stop) — a fill there is too loud.
-   - Neutral fill: --oc-btn-bg (button-secondaryBackground). tb-home,
-     tb-plus, the dialog's Cancel.
+   - Neutral fill: --oc-btn-bg (button-secondaryBackground). nav-new,     the dialog's Cancel.
    - Ghost, the default: transparent, --oc-text ink (--oc-text-2 when
      de-emphasized), hover list-hoverBackground. Toolbars, menus, row
      actions, dock options, link-buttons (load-older).
@@ -145,37 +144,7 @@ body {
   overflow: hidden;
 }
 
-/* Toolbar row above the panel (all routes): home button, open tabs
-   (divider only while tabs exist), "+". 28px row / 24px buttons — the
-   chrome hugs the panel. */
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: none;
-  height: 28px;
-  padding: 0 8px;
-}
-
-.tb-home {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 24px;
-  height: 24px;
-  background: var(--oc-btn-bg);
-  border: none;
-  border-radius: 6px;
-  color: var(--oc-text);
-  cursor: pointer;
-}
-
-.tb-home:hover {
-  background: color-mix(in srgb, var(--oc-btn-bg) 88%, var(--oc-text));
-}
-
-/* Home's "New session" (in the first day header). */
+/* The navigator's "New session" (the search row's trailing button). */
 .tb-new {
   display: flex;
   align-items: center;
@@ -195,192 +164,95 @@ body {
   background: var(--vscode-list-hoverBackground);
 }
 
-.tb-sep {
-  flex: none;
-  width: 1px;
-  height: 22px;
-  margin: 0 4px;
-  background: var(--oc-border);
-}
-
-.tb-plus {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  background: var(--oc-btn-bg);
-  border: none;
-  border-radius: 6px;
-  color: var(--oc-text);
-  cursor: pointer;
-}
-
-.tb-plus:hover {
-  background: color-mix(in srgb, var(--oc-btn-bg) 88%, var(--oc-text));
-}
-
-/* Letter tiles (tabs, projects, session rows) */
+/* Letter tiles (projects, session rows) */
 .tile {
   display: flex;
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 19px;
-  height: 19px;
+  width: 16px;
+  height: 16px;
   border-radius: 4px;
   color: #fff;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   line-height: 1;
   user-select: none;
 }
 
-/* --- Tabs --- */
-
-.tb-tabs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  overflow-x: auto;
-}
-
-.tab {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: none;
-  max-width: 280px;
-  height: 28px;
-  padding: 0 8px;
-  background: none;
-  border: none;
-  border-radius: 6px;
-  color: var(--oc-text-2);
-  font: inherit;
-  cursor: pointer;
-}
-
-.tab:hover {
-  background: var(--vscode-list-hoverBackground);
-  color: var(--oc-text);
-}
-
-.tab-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* A restored tab before its session row lands (the boot fetch, ~1s): a
-   neutral chip skeleton instead of the raw ses_* id and a hash-colored
-   tile. Dead tabs prune themselves right after (validateRestored). */
-.tab.pending .tile {
-  background: var(--oc-chip);
-}
-
-.tab.pending .tab-title {
-  width: 88px;
-  height: 9px;
-  border-radius: 4px;
-  background: var(--oc-chip);
-}
-
-/* Active tab: the same filled surface as the Home and + buttons beside it.
-   No bold — a wider title resizes the tab when switching. */
-.tab.active {
-  background: var(--oc-btn-bg);
-  color: var(--oc-text);
-}
-
-/* Dragged tab dims in place — the list re-orders live under it, so no
-   drop-gap indicator is needed. */
-.tab.dragging {
-  opacity: 0.45;
-}
-
-.tab-close {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  /* 20px box (12px glyph + 4px pad): the 4px margin is the smallest that
-     stays an integer in device px at 1 / 1.25 / 1.5 / 2 zoom — a 6px
-     margin is 7.5 device px at 1.25 and the × visibly rides high. */
-  padding: 4px;
-  background: none;
-  border: none;
-  border-radius: 4px;
-  color: var(--oc-text-2);
-  cursor: pointer;
-}
-
-.tab-close:hover {
-  background: color-mix(in srgb, var(--oc-text) 12%, transparent);
-  color: var(--oc-text);
-}
-
-/* In-tab rename: the input takes the title's place (tile + close stay) and
-   stays transparent, sized to its text — the tab keeps its normal shape and
-   color while editing. Two-class selector beats the shared .rename-input
-   field look below regardless of order. */
-.rename-input.tab-rename {
-  flex: 0 1 auto;
-  width: auto;
-  min-width: 6ch;
-  max-width: 40ch;
-  padding: 0;
-  background: none;
-  border: none;
-  field-sizing: content;
-}
-
-/* --- Home: projects column + sessions column --- */
+/* --- Navigator: the sidebar's session browser (projects section above
+   the session list, stacked for a narrow panel) --- */
 
 .home {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Search row on top; "New session" sits at its end. */
+.nav-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 8px 10px 4px;
+}
+
+.nav-top .search {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+/* The icon-only form of the New session button. */
+.tb-new.nav-new {
+  justify-content: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: var(--oc-btn-bg);
+}
+
+.tb-new.nav-new:hover {
+  background: color-mix(in srgb, var(--oc-btn-bg) 88%, var(--oc-text));
+}
+
+/* Projects: a compact section bounded to its own scroll. */
+.home-left {
+  flex: none;
+  max-height: 32%;
+  overflow-y: auto;
+  padding: 0 10px;
+}
+
+/* Sessions fill the rest, scrolling on their own. */
+.home-right {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  padding: 0 10px 10px;
 }
 
-.home-grid {
-  display: flex;
-  align-items: flex-start;
-  gap: 44px;
-  box-sizing: border-box;
-  max-width: 1276px;
-  min-height: 100%;
-  margin: 0 auto;
-  padding: 30px 36px;
-}
-
-.home-left {
-  flex: none;
-  width: 300px;
-}
-
-.home-right {
-  flex: 1;
-  min-width: 0;
-}
-
+/* VS Code's sidebar section label: small caps, quiet ink. */
 .home-h {
-  margin: 2px 0 6px;
-  color: var(--oc-text);
+  margin: 2px 0 4px;
+  color: var(--oc-text-2);
+  font-size: 11px;
   font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
 }
 
-/* Project rows: flat, 39px pitch, no carets or counts. */
+/* Project rows: flat, compact pitch, no carets or counts. */
 
 .proj-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  height: 39px;
-  padding: 0 6px;
+  gap: 8px;
+  height: 26px;
+  padding: 0 4px;
   position: relative;
 }
 
@@ -456,34 +328,34 @@ body {
   font-size: smaller;
 }
 
-/* Session rows on the right, grouped by day. */
+/* Session rows below, grouped by day. */
 
 .day-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  height: 40px;
+  height: 24px;
 }
 
 .day-label {
   color: var(--oc-text-2);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 400;
 }
 
 .sess-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  height: 50px;
-  padding: 0 6px; /* same inset as .proj-row so the columns' tiles align */
+  gap: 8px;
+  height: 28px;
+  padding: 0 4px; /* same inset as .proj-row so the tiles align */
 }
 
 .sess-open {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   flex: 1;
   min-width: 0;
   padding: 0;
@@ -522,7 +394,7 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--oc-text-2);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 /* Optically center row labels: the flex box centers the line, but Segoe
@@ -533,7 +405,7 @@ body {
   translate: 0 -1px;
 }
 
-/* Multiselect picks (Ctrl/⌘/Shift+Click on Home rows): a quiet fill the
+/* Multiselect picks (Navigator rows): a quiet fill the
    full row and the tile flips to a check. Distinct from
    .proj-row.selected — that outline is the session filter. */
 .proj-row.picked,
@@ -648,8 +520,7 @@ body {
   padding: 3px 5px;
 }
 
-.row-act.armed,
-.menu-item.armed {
+.row-act.armed {
   color: var(--vscode-charts-red, var(--vscode-errorForeground));
   font-weight: 600;
 }
@@ -664,7 +535,7 @@ body {
 .search > svg {
   position: absolute;
   top: 50%;
-  left: 13px;
+  left: 9px;
   translate: 0 -50%;
   color: var(--oc-text-2);
   pointer-events: none;
@@ -673,8 +544,8 @@ body {
 .search input {
   box-sizing: border-box;
   width: 100%;
-  height: 42px;
-  padding: 0 14px 0 40px;
+  height: 26px;
+  padding: 0 12px 0 30px;
   background: var(--oc-field);
   border: 1px solid var(--oc-input-border);
   border-radius: 6px;
@@ -786,8 +657,7 @@ body {
 }
 
 /* Dialog buttons in the app's vocabulary: the destructive primary fills
-   with the theme's error ink, Cancel is the neutral secondary fill
-   (tb-plus's). Same 6px radius, comp-send's darken-on-hover. */
+   with the theme's error ink, Cancel is the neutral secondary fill, 6px radius, comp-send's darken-on-hover. */
 .confirm-actions button {
   display: inline-flex;
   align-items: center;
@@ -814,21 +684,20 @@ body {
   background: color-mix(in srgb, var(--vscode-errorForeground, #f14c4c) 88%, #000);
 }
 
-/* Tab context menu (right-click on a session tab) */
-
-.tabmenu {
-  position: fixed;
-  z-index: 20;
-  min-width: 160px;
-  background: var(--oc-panel);
-  border: 1px solid var(--oc-border);
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgb(0 0 0 / 20%);
+/* The session panel's stale-id bounce: the panel's session is gone. */
+.notfound {
+  padding: 24px;
+  color: var(--oc-text-2);
 }
 
-.tabmenu .menu-item {
-  width: 100%;
-  border-radius: 0;
+.notfound .notfound-title {
+  margin: 0 0 4px;
+  color: var(--oc-text);
+  font-weight: 600;
+}
+
+.notfound p {
+  margin: 0;
 }
 
 .empty {

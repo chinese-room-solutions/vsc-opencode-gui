@@ -34,8 +34,9 @@ import {
   sessionTitle,
   sessions,
   stoppedPrompts,
+  releaseTranscript,
 } from "../store";
-import { navigate } from "../router";
+import { navigate, route } from "../router";
 import type { ChatMessage } from "../store";
 
 // A turn is one prompt plus everything answering it. The v2 rows are flat
@@ -81,23 +82,22 @@ function pruneScrollMemo(): void {
     if (!messagesBySession.value.has(k)) scrollMemo.delete(k);
 }
 
-// One chat view for an existing session (sessionId set) and the draft
-// (undefined): the draft only gains a session when the first prompt is sent.
-// `parent` marks a sub-agent session viewed inside its parent's tab: the
-// breadcrumb leads back up. The composer rides along — a prompt onto the
-// child's running turn steers it at the next step boundary, the same
-// mid-run steer the relaying parent agent sends.
-export function Session(props: { sessionId?: string; parent?: string }) {
+// One chat view for an existing session. `parent` marks a sub-agent
+// session viewed inside its parent's panel: the breadcrumb leads back
+// up. The composer rides along — a prompt onto the child's running turn
+// steers it at the next step boundary, the same mid-run steer the
+// relaying parent agent sends.
+export function Session(props: { sessionId: string; parent?: string }) {
   pruneScrollMemo();
   const id = props.sessionId;
-  const list = id ? messagesFor(id).value : undefined;
-  const session = id ? sessions.value.find((s) => s.id === id) : undefined;
+  const list = messagesFor(id).value;
+  const session = sessions.value.find((s) => s.id === id);
   const parentSession = props.parent
     ? sessions.value.find((s) => s.id === props.parent)
     : undefined;
 
   useEffect(() => {
-    if (id) void refreshMessages(id);
+    void refreshMessages(id);
     void refreshStatuses();
   }, [id]);
 
@@ -118,15 +118,15 @@ export function Session(props: { sessionId?: string; parent?: string }) {
   const lastTop = useRef(0);
   // Where to put the reader once this session's content first renders —
   // seeded from the memo at mount, before any scroll of this instance.
-  const restore = useRef(id ? scrollMemo.get(id) : undefined);
-  const st = id ? sessionStatus.value[id] : undefined;
+  const restore = useRef(scrollMemo.get(id));
+  const st = sessionStatus.value[id];
   const busy = st?.type === "busy";
 
   // The stuck detector's verdict for this session (marks exist only
   // while it reads busy): the earliest silenced stamp across the turn
   // and its parts clocks the Interrupt chip.
   const stuckSince = (() => {
-    const m = id ? stuckState.value[id] : undefined;
+    const m = stuckState.value[id];
     if (!m) return undefined;
     const sinces = [
       ...(m.turn ? [m.turn.since] : []),
@@ -141,7 +141,7 @@ export function Session(props: { sessionId?: string; parent?: string }) {
   // discard an un-admitted prompt echo, and the idle it lands retires a
   // stale echo; the row/ask pulls wait for the echo to be gone.
   useEffect(() => {
-    if (!id || !busy) return;
+    if (!busy) return;
     const timer = window.setInterval(() => {
       void refreshStatuses();
       const echo = messagesBySession.value
@@ -157,7 +157,7 @@ export function Session(props: { sessionId?: string; parent?: string }) {
   // The newest pending row hasn't been taken yet: a prompt or command
   // held for the running turn's end — the "Queued" caption and the
   // no-pin rule below apply to both.
-  const queuedNow = id !== undefined && hasQueued(id);
+  const queuedNow = hasQueued(id);
   // Prepend anchor: the scroller's height/offset captured when "Load older
   // messages" was clicked, so the layout effect can hold the viewport still.
   // The node is the content the reader was on; clamped user texts grow when
@@ -245,9 +245,20 @@ export function Session(props: { sessionId?: string; parent?: string }) {
   useEffect(() => {
     return () => {
       const el = kept.current;
-      if (!id || !el) return;
+      if (!el) return;
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
       scrollMemo.set(id, atBottom ? "bottom" : el.scrollTop);
+    };
+  }, [id]);
+  // Leaving the session releases its transcript cache — reopening
+  // refetches — except the parent's own drill-down swap: its view comes
+  // back when the child closes, cache and all. Any other unmount (back
+  // out of a child, the stale-id bounce) is for good.
+  useEffect(() => {
+    return () => {
+      const r = route.value;
+      if (!(r.view === "session" && r.child !== undefined && r.id === id))
+        releaseTranscript(id);
     };
   }, [id]);
   useLayoutEffect(() => {
@@ -367,7 +378,7 @@ export function Session(props: { sessionId?: string; parent?: string }) {
     !m.parts.some((p) => isTool(p) || (isText(p) && p.text)) &&
     !m.info.tokens?.total;
   const liveId =
-    id && busy && list ? liveAssistantId(id, list) : undefined;
+    busy && list ? liveAssistantId(id, list) : undefined;
   // The abort receipt: the server answers a stopped turn with an
   // error-only assistant row ("Aborted"). The stop marker tells that
   // story in the user's words — the receipt would add a red line and
@@ -518,11 +529,10 @@ export function Session(props: { sessionId?: string; parent?: string }) {
 
   // The untouched session reads as a launch screen (opencode's new session):
   // the wordmark and the composer sit mid-panel instead of docked bottom.
-  // Only a session known to be empty — the draft, or one whose messages have
-  // resolved to nothing; an unloaded list stays docked so switching to a
-  // busy session never flashes the centered view on its way in.
-  const empty =
-    !props.parent && (!id || (list !== undefined && visible?.length === 0));
+  // Only a session known to be empty — one whose messages have resolved to
+  // nothing; an unloaded list stays docked so switching to a busy session
+  // never flashes the centered view on its way in.
+  const empty = !props.parent && list !== undefined && visible?.length === 0;
 
   // Rows with two render sites. The stuck chip (opencodeGui.stuckToolSeconds,
   // default 5 minutes of silence): the turn is alive server-side but has
@@ -533,7 +543,7 @@ export function Session(props: { sessionId?: string; parent?: string }) {
   // Redo restores the folded rows until the next prompt commits it — in
   // the last group, above its meta line.
   const stuckRow =
-    id && stuckSince !== undefined ? (
+    stuckSince !== undefined ? (
       <div class="interrupted">
         <StopIcon />
         <span>
@@ -549,7 +559,7 @@ export function Session(props: { sessionId?: string; parent?: string }) {
       </div>
     ) : undefined;
   const revertRow =
-    id && session?.revert ? (
+    session?.revert ? (
       <div class="interrupted">
         <OcResetIcon />
         <span>Reverted</span>
@@ -571,32 +581,30 @@ export function Session(props: { sessionId?: string; parent?: string }) {
 
   return (
     <div class={empty ? "chat empty" : "chat"}>
-      {id && (
-        <div class="chat-head">
-          {props.parent && (
-            <nav class="crumb" aria-label="Sub-session path">
-              <button
-                class="crumb-parent"
-                title="Back to the parent session"
-                onClick={() => navigate({ view: "session", id: props.parent! })}
-              >
-                {sessionTitle(parentSession, props.parent)}
-              </button>
-              <span class="crumb-sep" aria-hidden="true">
-                /
-              </span>
-              <span class="crumb-here">{sessionTitle(session, id)}</span>
-            </nav>
-          )}
-          <SubagentMenu sessionId={id} liveId={liveId} />
-          <ContextRing sessionId={id} />
-        </div>
-      )}
+      <div class="chat-head">
+        {props.parent && (
+          <nav class="crumb" aria-label="Sub-session path">
+            <button
+              class="crumb-parent"
+              title="Back to the parent session"
+              onClick={() => navigate({ view: "session", id: props.parent! })}
+            >
+              {sessionTitle(parentSession, props.parent)}
+            </button>
+            <span class="crumb-sep" aria-hidden="true">
+              /
+            </span>
+            <span class="crumb-here">{sessionTitle(session, id)}</span>
+          </nav>
+        )}
+        <SubagentMenu sessionId={id} liveId={liveId} />
+        <ContextRing sessionId={id} />
+      </div>
       {/* The fade overlay hangs off the wrap, not the scroller: inside it
           would scroll away with the content (Claude Code's .messageGradient). */}
       <div class="msgs-wrap">
         <div class="msgs" ref={setScroller} onScroll={pinned} onWheel={wheel}>
-          {id && hasOlder(id) && (
+          {hasOlder(id) && (
             <button
               class="load-older"
               onClick={async () => {
@@ -622,7 +630,7 @@ export function Session(props: { sessionId?: string; parent?: string }) {
               Load older messages
             </button>
           )}
-          {id && list === undefined && (
+          {list === undefined && (
             <div class="empty">
               {failedMsgLoads.value.has(id)
                 ? "Couldn't load the transcript — retrying…"
@@ -641,9 +649,7 @@ export function Session(props: { sessionId?: string; parent?: string }) {
                 first.parts.some((p) => p.type === "compaction")
               ) {
                 const idx = visible.indexOf(first);
-                const freed = id
-                  ? foldFreedTokens(id, visible.slice(0, idx), g.msgs)
-                  : undefined;
+                const freed = foldFreedTokens(id, visible.slice(0, idx), g.msgs);
                 // Live while the session works the compaction turn itself:
                 // busy and nothing but queued prompts after the fold. A
                 // message sent mid-compaction must not settle the label —

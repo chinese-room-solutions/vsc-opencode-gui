@@ -476,7 +476,8 @@ const childRow = {
 };
 
 // FAKE_API_HOME_LIST=1: extra listable sessions across a second project
-// folder — Home multiselect specs need several rows in both columns.
+// folder — the navigator's multiselect specs need several rows in both
+// sections.
 // FAKE_API_PAGINATE=1 grows the list past the store's page size (50):
 // /api/session serves a full first page plus a cursor, the rest on the
 // cursor page — the "Load older sessions" path. Flat order (updated

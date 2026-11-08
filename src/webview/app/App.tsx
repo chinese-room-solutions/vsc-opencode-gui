@@ -1,14 +1,15 @@
-import { Home } from "./views/Home";
+import { Navigator } from "./views/Navigator";
 import { Session } from "./views/Session";
-import { TabsBar } from "./components/TabsBar";
 import { Lightbox } from "./components/Lightbox";
+import { hostKind } from "./host";
 import { route } from "./router";
 import { status } from "./store";
 import DOMPurify from "dompurify";
 
-// Shell: toolbar row (all routes) above the floating content panel, the
-// whole thing on the backdrop color. The server connection state has no
-// chrome — failures surface through the error view below.
+// Shell: one floating content panel on the backdrop color. A session
+// host renders its conversation; the navigator host renders the session
+// browser. The server connection state has no chrome — failures surface
+// through the error view below.
 export function App() {
   const s = status.value;
   if (s.kind === "loading") {
@@ -33,22 +34,34 @@ export function App() {
       </div>
     );
   }
-  const r = route.value;
   return (
     <div class="app">
-      <TabsBar />
       <main class="panel">
-        {r.view === "home" && <Home />}
-        {r.view === "session" && (
-          <Session
-            key={`${r.id}:${r.child ?? ""}`}
-            sessionId={r.child ?? r.id}
-            parent={r.child ? r.id : undefined}
-          />
-        )}
-        {r.view === "draft" && <Session key="draft" />}
+        {hostKind.value === "navigator" ? <Navigator /> : <SessionPanel />}
       </main>
-      <Lightbox />
+      {hostKind.value === "session" && <Lightbox />}
     </div>
+  );
+}
+
+// A session host's route: one conversation (child = sub-agent
+// drill-down). "home" only follows a stale-id bounce — the session is
+// gone, and the card says what to do next.
+function SessionPanel() {
+  const r = route.value;
+  if (r.view !== "session") {
+    return (
+      <div class="notfound">
+        <p class="notfound-title">This session is gone.</p>
+        <p>Close the tab, or pick another from the Sessions side panel.</p>
+      </div>
+    );
+  }
+  return (
+    <Session
+      key={`${r.id}:${r.child ?? ""}`}
+      sessionId={r.child ?? r.id}
+      parent={r.child ? r.id : undefined}
+    />
   );
 }

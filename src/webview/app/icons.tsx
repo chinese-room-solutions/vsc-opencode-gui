@@ -1,22 +1,5 @@
-// Small inline icons shared by the toolbar and Home. Stroke icons inherit
-// `currentColor` so they follow text tokens.
-
-export function GridIcon() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 16 16"
-      fill="currentColor"
-      aria-hidden="true"
-    >
-      <rect x="2" y="2" width="5.4" height="5.4" rx="1.5" />
-      <rect x="8.6" y="2" width="5.4" height="5.4" rx="1.5" />
-      <rect x="2" y="8.6" width="5.4" height="5.4" rx="1.5" />
-      <rect x="8.6" y="8.6" width="5.4" height="5.4" rx="1.5" />
-    </svg>
-  );
-}
+// Small inline icons shared by the navigator and the session view. Stroke
+// icons inherit `currentColor` so they follow text tokens.
 
 // The head's sub-agent roster: one large square, one small — a session and
 // the child it spawned.

@@ -18,10 +18,11 @@ and the chat UI talks to it directly.
 ## ✨ Features
 
 - **One editor tab per session** - like any editor: each conversation is
-  its own tab, titled with the session name, revived after a reload. A
-  sidebar view lists sessions too.
-- **All sessions on one screen** - grouped by project. Rename projects in
-  place. Open a session from any folder.
+  its own tab, titled with the session name, revived after a reload.
+- **Sessions side panel** - every project and session in one list:
+  search, day groups, rename/recolor, fork, and bulk delete. Clicking a
+  session opens its tab; another project's session deep-links its folder
+  in a new window.
 - **Sub-agents are sessions** - open one from its task chip, steer it, or
   stop it. The parent turn collects the result. While sub-agents run, a
   button left of the context ring shows how many. Click it to list them,

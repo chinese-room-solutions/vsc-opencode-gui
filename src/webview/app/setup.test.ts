@@ -6,7 +6,7 @@
 // This file MUST execute before any app module — unit-tests.ts imports it
 // first, and every test file re-imports it (cached) before app modules.
 import { captureApi } from "./host";
-import { openTabs, route, unreadTabs } from "./router";
+import { route } from "./router";
 import type { Session } from "./api";
 
 // Shared row fixtures.
@@ -346,6 +346,4 @@ afterEach(() => {
   ])
     localStorageStub.removeItem(k);
   route.value = { view: "home" };
-  openTabs.value = [];
-  unreadTabs.value = new Set();
 });

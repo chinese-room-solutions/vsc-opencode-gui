@@ -1,3 +1,5 @@
+import { signal } from "@preact/signals";
+
 // Bridge to the extension host. main.tsx captures acquireVsCodeApi() here so
 // any component can post without threading it through props.
 type VsCodeApi = { postMessage(message: unknown): void };
@@ -7,6 +9,22 @@ let api: VsCodeApi | undefined;
 export function captureApi(a: VsCodeApi): void {
   api = a;
 }
+
+// Which host baked this page (the opencode-host meta): "navigator" is the
+// sidebar session browser; anything else is a "session" host — one
+// conversation's editor tab. Read once at boot; writable only so tests
+// can stage the other host (the node test rig installs its document
+// stub after this module loads — there, the default stands).
+export type HostKind = "navigator" | "session";
+function bootHostKind(): HostKind {
+  if (typeof document === "undefined") return "session";
+  return document
+    .querySelector('meta[name="opencode-host"]')
+    ?.getAttribute("content") === "navigator"
+    ? "navigator"
+    : "session";
+}
+export const hostKind = signal<HostKind>(bootHostKind());
 
 export function postToHost(message: unknown): void {
   api?.postMessage(message);

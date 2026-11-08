@@ -24,7 +24,7 @@ import {
 import {
   baseLoaded,
   charsPerToken,
-  closeSessionTab,
+  releaseTranscript,
   commands,
   composerFiles,
   composerInsert,
@@ -131,7 +131,7 @@ import type {
   Session,
   ToolPart,
 } from "./api";
-import { activeTab, navigate, route, unreadTabs } from "./router";
+import { navigate, route } from "./router";
 
 function row(
   id: string,
@@ -1167,7 +1167,7 @@ describe("queued echoes stay visible and ordered", () => {
     );
   });
 
-  it("a reopened tab regains its held queue entry's echo", async () => {
+  it("a reopened view regains its held queue entry's echo", async () => {
     const sid = "qe4";
     commands.value = [{ name: "foo" }];
     sessions.value = [sessRow(sid)];
@@ -1175,9 +1175,9 @@ describe("queued echoes stay visible and ordered", () => {
     queueCommand(sid, "/foo");
     await sendPrompt(sid, "held");
     assert.equal(queuedTurns.value.length, 2);
-    // The tab closed mid-queue: the cached transcript (echo included)
-    // died with it; the reopen refetches without it.
-    closeSessionTab(sid);
+    // The view released the transcript mid-queue: the cache (echo
+    // included) died with it; the reopen refetches without it.
+    releaseTranscript(sid);
     open(sid, []);
     onApi(messageMock(sid, { data: [], cursor: {} }));
     await refreshMessages(sid);
@@ -1612,7 +1612,7 @@ describe("attachment preview bridge", () => {
 
 // 9a595b4
 describe("session-local caches release on close (9a595b4)", () => {
-  it("closeSessionTab drops transcript, cursor, truncation, and the computed view", () => {
+  it("releaseTranscript drops transcript, cursor, truncation, and the computed view", () => {
     const sid = "cl1";
     clampPartText("big1", "x".repeat(PART_TEXT_CAP + 100));
     assert.ok(isTruncatedPart("big1"));
@@ -1624,7 +1624,7 @@ describe("session-local caches release on close (9a595b4)", () => {
     ]);
     messagesCursor.value = new Map(messagesCursor.value).set(sid, "c9");
     const view1 = messagesFor(sid);
-    closeSessionTab(sid);
+    releaseTranscript(sid);
     assert.equal(isTruncatedPart("big1"), false);
     assert.equal(messagesBySession.value.has(sid), false);
     assert.equal(messagesCursor.value.has(sid), false);
@@ -3053,12 +3053,7 @@ describe("stop and interrupt", () => {
 
 // ff714f0 (store side: the trigger echo and the summarize call)
 describe("/compact (store side of ff714f0)", () => {
-  it("refuses a draft, a blank session, and a busy turn", async () => {
-    await runSlashCommand("draft", "/compact");
-    assert.equal(
-      sendError.value?.text,
-      "Nothing to compact yet — send a message first.",
-    );
+  it("refuses a blank session and a busy turn", async () => {
     const sid = "cp1";
     open(sid, [row("u1", "user", T0)]);
     await runSlashCommand(sid, "/compact");
@@ -3666,20 +3661,6 @@ describe("/init builtin", () => {
     assert.ok(text.includes("C:\\work\\repo"));
     assert.ok(!text.includes("$ARGUMENTS"));
   });
-  it("a draft creates the session and falls back to the workspace dir", async () => {
-    onApi((call) => {
-      if (call.method === "POST" && call.path === "/session")
-        return sessRow("in2");
-      return undefined;
-    });
-    currentDir.value = "D:\\ws\\proj";
-    await runSlashCommand("draft", "/init");
-    const text = ((callsFor("/session/in2/prompt_async")[0].body as {
-      parts: { text: string }[];
-    }).parts[0] as { text: string }).text;
-    assert.ok(text.includes("D:\\ws\\proj"));
-    assert.ok(text.includes("(none)"), "no args read as (none)");
-  });
   it("a server-provided /init command wins over the builtin", async () => {
     const sid = "in3";
     sessions.value = [sessRow(sid)];
@@ -3691,39 +3672,6 @@ describe("/init builtin", () => {
 });
 
 describe("sendPrompt", () => {
-  it("draft: creates the session, rides the pick, moves files, posts", async () => {
-    agents.value = [{ name: "reviewer", mode: "subagent" }];
-    setSelection(undefined, { agent: "plan" });
-    onApi((call) => {
-      if (call.method === "POST" && call.path === "/session")
-        return sessRow("d1");
-      return undefined;
-    });
-    composerFiles.value = {
-      ...composerFiles.value,
-      draft: [{ uri: "data:image/png;base64,AA", name: "p.png" }],
-    };
-    navigate({ view: "draft" });
-    const files = [{ uri: "data:image/png;base64,AA", name: "p.png" }];
-    await sendPrompt("draft", "cc @reviewer", files);
-    assert.deepEqual(route.value, { view: "session", id: "d1" });
-    assert.equal((callsFor("/session")[0].body as { agent?: string }).agent, "plan");
-    assert.deepEqual(composerFiles.value.draft, []);
-    // a successful send never seeds the session key — the draft's chips
-    // cleared at submit (the POST carries the `files` argument)
-    assert.equal(composerFiles.value["d1"], undefined);
-    const body = callsFor("/session/d1/prompt_async")[0].body as {
-      parts: { type: string; name?: string; mime?: string }[];
-    };
-    assert.equal(body.parts[0].type, "text");
-    assert.ok(
-      body.parts.some((p) => p.type === "file" && p.mime === "image/png"),
-    );
-    assert.ok(
-      body.parts.some((p) => p.type === "agent" && p.name === "reviewer"),
-    );
-    assert.ok(listOf("d1").some((m) => m.info.id.startsWith("pending:")));
-  });
   it("failure is a take-back: echo drops, composer gets text and files", async () => {
     const sid = "sp2";
     const file = { uri: "data:text/plain;base64,aGk=", name: "notes.txt" };
@@ -3964,7 +3912,8 @@ describe("newSession and blank hiding", () => {
       return undefined;
     });
     await newSession();
-    assert.deepEqual(route.value, { view: "session", id: "n1" });
+    // The session opens in its own editor tab — the host owns panels now.
+    assert.deepEqual(hostPosted.at(-1), { type: "open-session", id: "n1" });
     const created = sessions.value.find((s) => s.id === "n1");
     assert.ok(created);
     assert.ok(isEmptySession(created));
@@ -3985,12 +3934,8 @@ describe("selection", () => {
     ];
     assert.equal(defaultAgent(), "plan");
   });
-  it("currentSelection falls back through row, draft, and server default", () => {
+  it("currentSelection falls back through row and server default", () => {
     agents.value = [];
-    assert.deepEqual(currentSelection(undefined), {
-      agent: "build",
-      model: undefined,
-    });
     const sid = "sel1";
     sessions.value = [
       sessRow(sid, {
@@ -4001,6 +3946,11 @@ describe("selection", () => {
     assert.deepEqual(currentSelection(sid), {
       agent: "plan",
       model: { id: "m1", providerID: "p1" },
+    });
+    sessions.value = [];
+    assert.deepEqual(currentSelection("sel-none"), {
+      agent: "build",
+      model: undefined,
     });
   });
   it("setSelection switches agent on the server and patches the row", async () => {
@@ -4669,26 +4619,10 @@ describe("revert fold", () => {
   });
 });
 
-describe("unread tabs", () => {
-  it("an idle turn in a background tab marks it unread until opened", async () => {
-    const sid = "ur1";
-    sessions.value = [sessRow(sid)];
-    navigate({ view: "session", id: sid });
-    navigate({ view: "session", id: "ur-other" });
-    setBusy(sid);
-    await sseFlush("session.idle", { sessionID: sid });
-    assert.ok(unreadTabs.value.has(sid));
-    navigate({ view: "session", id: sid });
-    assert.equal(unreadTabs.value.has(sid), false);
-    assert.equal(activeTab.value, sid);
-  });
-});
-
 describe("hostMessage routing", () => {
-  it("insert-text routes home to the draft composer", () => {
+  it("insert-text hands text to the composer on screen", () => {
     const prev = composerInsert.value?.seq ?? 0;
     hostMessage({ type: "insert-text", text: "hello" });
-    assert.deepEqual(route.value, { view: "draft" });
     assert.deepEqual(composerInsert.value, {
       text: "hello",
       seq: prev + 1,
@@ -4720,10 +4654,13 @@ describe("hostMessage routing", () => {
       ep3: { name: "no-title", title: "" },
     });
   });
-  it("files-picked filters unsupported types and lands on the draft", () => {
-    // The draft's model (server default) is unknown to the catalog, so the
-    // legacy allowlist applies: image+text pass, exe drops.
+  it("files-picked filters unsupported types onto the session composer", () => {
+    // The session's model is unknown to the catalog, so the legacy
+    // allowlist applies: image+text pass, exe drops.
     providers.value = undefined;
+    const sid = "fp0";
+    sessions.value = [sessRow(sid)];
+    navigate({ view: "session", id: sid });
     hostMessage({
       type: "files-picked",
       files: [
@@ -4732,11 +4669,12 @@ describe("hostMessage routing", () => {
         { uri: "u3", name: "c.exe" },
       ],
     });
-    assert.equal(composerFiles.value.draft?.length, 2);
+    assert.equal(composerFiles.value[sid]?.length, 2);
     assert.equal(
       sendError.value?.text,
       "1 file not attached (unsupported type).",
     );
+    sessions.value = [];
   });
   it("files-picked drops a pdf the session model has no input for", () => {
     providers.value = {
@@ -5135,8 +5073,6 @@ describe("transcript load retry (9c1f2e7)", () => {
     onApi(messageMock("rl2", API_FAIL, API_FAIL));
     await refreshMessages("rl2");
     assert.equal(failedMsgLoads.value.has("rl2"), true);
-    // The open tab alone keeps the retry alive — close it, not just route away.
-    closeSessionTab("rl2");
     navigate({ view: "home" });
     assert.equal(fireExact(1000), 1);
     await settle();
@@ -5144,9 +5080,6 @@ describe("transcript load retry (9c1f2e7)", () => {
     assert.equal(fireExact(2000), 0);
   });
 });
-
-
-
 // e4b1c93: v2 writes the prompt's user row only at first step start and
 // delivers it by fetch, so the optimistic echo can outlive the POST reply.
 // The refresh that finally lands the durable row must retire the echo, not

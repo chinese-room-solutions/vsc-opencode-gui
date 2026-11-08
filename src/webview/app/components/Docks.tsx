@@ -370,26 +370,23 @@ function QuestionDock(props: { q: QuestionRequest }) {
   );
 }
 
-// Only the open session's requests dock above its composer; a draft has
-// none of its own. A newly docked request closes any open picker or the
-// ring's breakdown, so the buttons are never covered.
-export function Docks(props: { sessionId?: string }) {
+// Only the open session's requests dock above its composer. A newly
+// docked request closes any open picker or the ring's breakdown, so the
+// buttons are never covered.
+export function Docks(props: { sessionId: string }) {
   const id = props.sessionId;
   // Discover a question or permission ask made while this view was closed
   // or reloaded: the list endpoints are per-session, so the open view
   // fetches both on mount.
   useEffect(() => {
-    if (id) {
-      void refreshQuestions(id);
-      void refreshPermissions(id);
-    }
+    void refreshQuestions(id);
+    void refreshPermissions(id);
   }, [id]);
   useSignalEffect(() => {
     const pending =
       pendingPermissions.value.length > 0 || pendingQuestions.value.length > 0;
     if (pending && popover.value) setPopover(undefined);
   });
-  if (!id) return null;
   const perms = pendingPermissions.value.filter((p) => p.sessionID === id);
   const asks = pendingQuestions.value.filter((q) => q.sessionID === id);
   if (perms.length === 0 && asks.length === 0) return null;

@@ -125,6 +125,9 @@ const stubFor = (nonce, serverUrl) =>
   // log branch below with no reply, like the host staying silent.
   `window.postMessage({ type: "attachment-preview", path: m.path, url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" }, "*");` +
   `} else {` +
+  // Host-directed posts (open-session, open-project, …) recorded for
+  // specs to assert; the console line stays for manual rig sessions.
+  `(window.__hostPosted = window.__hostPosted || []).push(m);` +
   `console.log("[host-msg]", JSON.stringify(m));` +
   `}` +
   `},` +
@@ -156,6 +159,12 @@ const shellHtml = (serverUrl) => {
     .replaceAll("{{DIALECT}}", process.env.OPENCODE_DIALECT === "v2" ? "v2" : "")
     .replaceAll("{{ERROR_MESSAGE}}", "")
     .replaceAll("{{INSTALL_HINT}}", "")
+    // Which host the page is baked for: OPENCODE_HOST=navigator boots the
+    // sidebar view; every other value is a session panel.
+    .replaceAll(
+      "{{HOST_KIND}}",
+      process.env.OPENCODE_HOST === "navigator" ? "navigator" : "session",
+    )
     // Boot-restore metas honor env so Playwright can exercise restore
     // (same contract as AppHost: the host bakes what it stored).
     .replaceAll("{{ROUTE}}", attr(process.env.OPENCODE_ROUTE || ""))

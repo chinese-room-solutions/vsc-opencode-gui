@@ -101,10 +101,9 @@ let pasteSeq = 0;
 // larger files still attach through the + picker, which sends a file:// url
 // the server reads from disk.
 async function attachFiles(
-  sessionId: string | undefined,
+  sessionId: string,
   files: Iterable<File>,
 ): Promise<void> {
-  const key = sessionId ?? "draft";
   const input = attachInputs(sessionId);
   const added: {
     uri: string;
@@ -162,7 +161,7 @@ async function attachFiles(
     // is click-to-open from birth and the prompt carries a file:// url
     // the server reads directly (no base64 through the relay). A timeout
     // or error keeps the data URI (inert but sendable).
-    uri = (await requestAttachmentSnapshot(key, uri, name, mime)) ?? uri;
+    uri = (await requestAttachmentSnapshot(sessionId, uri, name, mime)) ?? uri;
     // The text stamp keeps a content-sniffed file classifiable once its
     // data URI is gone (chipMime at send reads name, then this).
     const chip: { uri: string; name: string; text?: boolean; thumb?: string } =
@@ -171,7 +170,7 @@ async function attachFiles(
     if (thumb) chip.thumb = thumb;
     added.push(chip);
   }
-  if (added.length) addComposerFiles(key, added);
+  if (added.length) addComposerFiles(sessionId, added);
   if (reasons.length) {
     const skipped = reasons.reduce((n, [, c]) => n + c, 0);
     setSendError(
@@ -188,10 +187,10 @@ async function attachFiles(
 // focus back to the editor group. While the turn runs the send arrow becomes
 // a stop square, and Enter instead steers: the server queues the message and
 // delivers it as the next turn the moment the current one ends.
-export function Composer(props: { sessionId?: string; status?: SessionStatus }) {
+export function Composer(props: { sessionId: string; status?: SessionStatus }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const mirrorRef = useRef<HTMLDivElement>(null);
-  const draftKey = props.sessionId ?? "draft";
+  const draftKey = props.sessionId;
   // Attachment chips are this composer's own — a global list would follow
   // you into every tab you switch to.
   const files = composerFilesFor(draftKey);
@@ -393,10 +392,8 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
   };
   // Sent prompts of this session, oldest first — the walk counts from the end.
   const sentPrompts = () =>
-    (props.sessionId
-      ? messagesBySession.value.get(props.sessionId)
-      : []
-    )
+    messagesBySession.value
+      .get(props.sessionId)
       ?.filter((m) => m.info.role === "user")
       .map((m) =>
         m.parts
@@ -452,8 +449,7 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
       : [];
 
   // Finder results for the live query, debounced; the seq drops responses
-  // overtaken by a newer query. Scoped to the session's directory (a draft
-  // searches this window's folder).
+  // overtaken by a newer query. Scoped to the session's directory.
   useEffect(() => {
     if (atQuery === undefined) return;
     // A new query must not show the old one's rows while the fetch is out.
@@ -461,10 +457,8 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
     const seq = ++atSeq.current;
     const t = window.setTimeout(() => {
       const dir =
-        (props.sessionId
-          ? sessions.value.find((s) => s.id === props.sessionId)?.location
-              ?.directory
-          : currentDir.value) || undefined;
+        sessions.value.find((s) => s.id === props.sessionId)?.location
+          ?.directory || currentDir.value || undefined;
       // A failed finder query must degrade to an empty menu, not reject
       // unhandled — that path funnels into the crash card.
       void findFiles(atQuery, dir)
@@ -506,10 +500,8 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
   // user sees materialize is exactly what the prompt will carry. Agent
   // tokens stay plain text — they mention, they don't link.
   const base =
-    (props.sessionId
-      ? sessions.value.find((s) => s.id === props.sessionId)?.location
-          ?.directory
-      : undefined) ||
+    sessions.value.find((s) => s.id === props.sessionId)?.location
+      ?.directory ||
     currentDir.value ||
     "";
   const chips = mentionTokens(
@@ -767,11 +759,11 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
     setAtQuery(undefined);
     setAtIndex(0);
     if (text.startsWith("/") && busy) {
-      queueCommand(props.sessionId ?? "draft", text);
+      queueCommand(props.sessionId, text);
     } else if (text.startsWith("/")) {
-      void runSlashCommand(props.sessionId ?? "draft", text);
+      void runSlashCommand(props.sessionId, text);
     } else {
-      void sendPrompt(props.sessionId ?? "draft", text, files);
+      void sendPrompt(props.sessionId, text, files);
     }
   };
 
@@ -868,9 +860,9 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
     const rest = el.value.replace(/^\/\S*\s*/, "").trim();
     const line = `/${name}${rest ? ` ${rest}` : ""}`;
     if (busy) {
-      queueCommand(props.sessionId ?? "draft", line);
+      queueCommand(props.sessionId, line);
     } else {
-      void runSlashCommand(props.sessionId ?? "draft", line);
+      void runSlashCommand(props.sessionId, line);
     }
     el.value = "";
     resize(el);
@@ -938,7 +930,7 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
       // Esc stops a running turn (Claude Code parity) — the zhipuai
       // endpoint's empty-step loops keep a dead turn busy with no way out
       // but the stop button. Idle, it drops focus back to the editor.
-      if (busy && props.sessionId) {
+      if (busy) {
         void stopSession(props.sessionId);
         return;
       }
@@ -1151,7 +1143,6 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
           <textarea
             ref={ref}
             rows={1}
-            autoFocus={!props.sessionId}
             spellcheck={false}
             placeholder="Ask anything, / for commands, @ for context..."
             onInput={(e) => {
@@ -1211,13 +1202,13 @@ export function Composer(props: { sessionId?: string; status?: SessionStatus }) 
           <VariantPicker id={props.sessionId} />
           <AgentPicker id={props.sessionId} />
           <span class="spacer" />
-          {busy && props.sessionId && !hasText ? (
+          {busy && !hasText ? (
             <button
               type="button"
               class="comp-send"
               title="Stop"
               aria-label="Stop"
-              onClick={() => void stopSession(props.sessionId!)}
+              onClick={() => void stopSession(props.sessionId)}
             >
               <StopIcon />
             </button>

@@ -15,7 +15,6 @@ import {
   SearchIcon,
   TrashIcon,
 } from "../icons";
-import { navigate } from "../router";
 import {
   baseLoaded,
   sessionsStalled,
@@ -53,7 +52,7 @@ import {
 import { baseName, parentName, tileFor } from "../tile";
 import { useArm } from "../useArm";
 
-// --- Home multiselect: pick many rows, delete many at once ---
+// --- Navigator multiselect: pick many rows, delete many at once ---
 // Ctrl+Click (or ⌘) toggles one row; Shift+Click works the span from
 // the anchor row, its direction read off the anchor's own state: a
 // picked anchor adds the span (adjacent blocks merge into one), an
@@ -62,7 +61,7 @@ import { useArm } from "../useArm";
 // clicks keep the row's own action (open the session / filter the
 // project) and a click landing on no row drops the picks. Picks are
 // exclusive: sessions or projects, never both. Module-level signals: a
-// trip into a session tab keeps the picks.
+// reload of this sidebar view keeps the picks.
 const pickedSessions = signal<Set<string>>(new Set());
 const pickedDirs = signal<Set<string>>(new Set());
 let anchorSession: string | undefined;
@@ -112,15 +111,16 @@ function dayLabel(ts: number): string {
   return d.toLocaleDateString();
 }
 
-// Home: every project (left) and every session of every project (right,
-// grouped by day), side by side in the panel. Clicking a project filters the
-// session list to it (click again for all); a foreign session opens its
-// project's folder in a new VS Code window, deep-linking the session —
-// never in-app.
-export function Home() {
+// The sidebar's session browser: projects (a compact, scrollable
+// section) above the sessions of every project (grouped by day, filling
+// the rest). Clicking a project filters the session list to it (click
+// again for all); this window's sessions open in their own editor tab
+// via the host, and a foreign session opens its project's folder in a
+// new VS Code window, deep-linking the session — never in-app.
+export function Navigator() {
   // The filters live in the store (homeQuery/homeFilter), so they survive
-  // leaving the view — project selection and search are still set when the
-  // user comes back from a session tab.
+  // leaving the view — project selection and search are still set when
+  // the sidebar comes back.
   const query = homeQuery.value;
   const filter = homeFilter.value;
   const dead = new Set(tombstones.value);
@@ -137,7 +137,7 @@ export function Home() {
     else rowsByDir.set(dir, [s]);
   }
 
-  // Left column: every directory that has sessions or a known project row.
+  // Projects: every directory that has sessions or a known project row.
   // The server's "global" project (worktree "/", which normalizes to "")
   // has no place here — same skip the session grouping applies.
   const dirs = new Set(rowsByDir.keys());
@@ -162,7 +162,7 @@ export function Home() {
   const disambig = (d: string) =>
     (nameCounts.get(baseName(d)) ?? 0) > 1 ? parentName(d) : undefined;
 
-  // Right column: live-filtered by title or project name, grouped by day.
+  // Sessions: live-filtered by title or project name, grouped by day.
   // The filter lives in the store (homeVisibleSessions): loadMoreSessions
   // pages until that list grows, so render and stop rule share one
   // definition.
@@ -302,100 +302,102 @@ export function Home() {
           clearPicks();
       }}
     >
-      {/* Session-scoped errors render in their session; a for-less error
-          (project purge) has no session — Home is its only surface, so a
-          failed delete never reads as a silent no-op. */}
+      {/* Session-scoped errors render in their session panel; a for-less
+          error (project purge) has no session — the navigator is its
+          only surface, so a failed delete never reads as a silent no-op. */}
       {sendError.value !== undefined && sendError.value.for === undefined && (
         <div class="send-error home-error">{sendError.value.text}</div>
       )}
-      <div class="home-grid">
-        <div class="home-left">
-          <h2 class="home-h">Projects</h2>
-          {dirList.map((dir) => (
-            <ProjectRow
-              key={dir}
-              dir={dir}
-              count={rowsByDir.get(dir)?.length ?? 0}
-              disambig={disambig(dir)}
-              selected={filter === dir}
-              picked={pickedProj.has(dir)}
-              onPick={(e) => pickProject(dir, e)}
-              onSelect={() =>
-                (homeFilter.value = filter === dir ? undefined : dir)
-              }
-            />
-           ))}
-         </div>
-        <div class="home-right">
-          <div class="search">
-            <SearchIcon />
-            <input
-              placeholder="Search sessions"
-              value={query}
-              onInput={(e) =>
-                (homeQuery.value = (e.target as HTMLInputElement).value)
-              }
-            />
-            {query && (
-              <button
-                class="search-clear"
-                title="Clear"
-                aria-label="Clear search"
-                onClick={() => (homeQuery.value = "")}
-              >
-                <CloseIcon />
-              </button>
-            )}
-          </div>
-          {!baseLoaded.value || sessionsStalled.value ? (
-            <div class="empty">Loading sessions…</div>
-          ) : groups.length === 0 ? (
-            <div class="empty">
-              {sessionsSearching.value
-                ? "Searching…"
-                : sessionsNext.value && !q
-                  ? "Loading older sessions…"
-                  : q
-                    ? `No sessions match “${query.trim()}”.`
-                    : filter
-                      ? `No sessions in ${projectDisplayName(filter)} yet.`
-                      : "No sessions yet. Start one above — it shows up under this folder."}
-            </div>
-          ) : (
-            groups.map((g, i) => (
-              <section key={g.label}>
-                <div class="day-head">
-                  <span class="day-label">{g.label}</span>
-                  {i === 0 && (
-                    <button class="tb-new" onClick={() => void newSession()}>
-                      <NewSessionIcon />
-                      New session
-                    </button>
-                  )}
-                </div>
-                {g.rows.map((s) => (
-                  <SessionRow
-                    key={s.id}
-                    s={s}
-                    picked={pickedSess.has(s.id)}
-                    onPick={(e) => pickSession(s.id, e)}
-                  />
-                ))}
-              </section>
-            ))
-          )}
-          {sessionsNext.value && (
+      <div class="nav-top">
+        <div class="search">
+          <SearchIcon />
+          <input
+            placeholder="Search sessions"
+            value={query}
+            onInput={(e) =>
+              (homeQuery.value = (e.target as HTMLInputElement).value)
+            }
+          />
+          {query && (
             <button
-              class="load-older"
-              disabled={sessionsLoadingMore.value}
-              onClick={() => void loadMoreSessions()}
+              class="search-clear"
+              title="Clear"
+              aria-label="Clear search"
+              onClick={() => (homeQuery.value = "")}
             >
-              {sessionsLoadingMore.value
-                ? "Loading older sessions…"
-                : "Load older sessions"}
+              <CloseIcon />
             </button>
           )}
         </div>
+        <button
+          class="tb-new nav-new"
+          title="New session"
+          aria-label="New session"
+          onClick={() => void newSession()}
+        >
+          <NewSessionIcon />
+        </button>
+      </div>
+      <div class="home-left">
+        <h2 class="home-h">Projects</h2>
+        {dirList.map((dir) => (
+          <ProjectRow
+            key={dir}
+            dir={dir}
+            count={rowsByDir.get(dir)?.length ?? 0}
+            disambig={disambig(dir)}
+            selected={filter === dir}
+            picked={pickedProj.has(dir)}
+            onPick={(e) => pickProject(dir, e)}
+            onSelect={() =>
+              (homeFilter.value = filter === dir ? undefined : dir)
+            }
+          />
+        ))}
+      </div>
+      <div class="home-right">
+        {!baseLoaded.value || sessionsStalled.value ? (
+          <div class="empty">Loading sessions…</div>
+        ) : groups.length === 0 ? (
+          <div class="empty">
+            {sessionsSearching.value
+              ? "Searching…"
+              : sessionsNext.value && !q
+                ? "Loading older sessions…"
+                : q
+                  ? `No sessions match “${query.trim()}”.`
+                  : filter
+                    ? `No sessions in ${projectDisplayName(filter)} yet.`
+                    : "No sessions yet. Start one above — it shows up under this folder."}
+          </div>
+        ) : (
+          groups.map((g) => (
+            <section key={g.label}>
+              <div class="day-head">
+                <span class="day-label">{g.label}</span>
+              </div>
+              {g.rows.map((s) => (
+                <SessionRow
+                  key={s.id}
+                  s={s}
+                  picked={pickedSess.has(s.id)}
+                  onPick={(e) => pickSession(s.id, e)}
+                />
+              ))}
+            </section>
+          ))
+        )}
+        {sessionsNext.value && (
+          <button
+            class="load-older"
+            disabled={sessionsLoadingMore.value}
+            onClick={() => void loadMoreSessions()}
+          >
+            {sessionsLoadingMore.value
+              ? "Loading older sessions…"
+              : "Load older sessions"}
+          </button>
+        )}
       </div>
       {(pickedSess.size > 0 || pickedProj.size > 0 || bulk !== undefined) && (
         <div class="pick-dock">
@@ -625,13 +627,14 @@ function SessionRow(props: {
   const tile = sessionTile(s, s.id);
   const st = sessionStatus.value[s.id];
 
-  // In-app for this window's sessions; a foreign session deep-links its
-  // project open instead of loading it here.
+  // This window's sessions open in their own editor tab (the host
+  // reveals or creates it); a foreign session deep-links its project
+  // open in a new window instead.
   const open = () => {
     if (foreign) {
       postToHost({ type: "open-project", path: dir, session: s.id });
     } else {
-      navigate({ view: "session", id: s.id });
+      postToHost({ type: "open-session", id: s.id });
     }
   };
 
@@ -705,7 +708,7 @@ function SessionRow(props: {
                       path: dir,
                       session: row.id,
                     });
-                  else navigate({ view: "session", id: row.id });
+                  else postToHost({ type: "open-session", id: row.id });
                 })
               }
             >

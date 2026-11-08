@@ -50,7 +50,6 @@ import { translateV2Event } from "./v2events";
 import { judgeDialect, detectDialect, awaitDialect } from "../../server/dialect";
 import {
   commands,
-  draftModel,
   init,
   messagesBySession,
   providers,
@@ -1594,7 +1593,6 @@ describe("v2 lazy command registry re-pull", () => {
       if (call.path === "/api/session/active") return {};
       return undefined;
     });
-    draftModel.value = undefined;
     resetBaseRetryForTest();
     dispatchWindowMessage({
       type: "sse-event",
@@ -1630,7 +1628,6 @@ describe("v2 lazy command registry re-pull", () => {
       if (call.path === "/api/session/active") return {};
       return undefined;
     });
-    draftModel.value = undefined;
     resetBaseRetryForTest();
     dispatchWindowMessage({
       type: "sse-event",
@@ -1735,9 +1732,8 @@ describe("v2 lazy command registry re-pull", () => {
     // below) is fully present.
     assert.equal(fireExact(1000), 1);
     await settle(8);
-    draftModel.value = { providerID: "amazon-bedrock", id: "claude" };
-    // The flip must NOT have cleared anything mid-flight: the next fire
-    // still re-pulls (zai pending)…
+    // zai is listed and rowless — armed, even though bedrock (the
+    // connected provider the picker would land on) is fully present.
     assert.equal(fireExact(2000), 1);
     await settle(8);
     zaiFilled = true;
@@ -1748,7 +1744,6 @@ describe("v2 lazy command registry re-pull", () => {
       true,
     );
     assert.equal(fireExact(8000), 0); // every listed provider landed
-    draftModel.value = undefined;
   });
 
   // A listed provider that genuinely offers no models must not spin the

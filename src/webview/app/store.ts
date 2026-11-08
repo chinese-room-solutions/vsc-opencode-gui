@@ -82,12 +82,8 @@ import { postToHost } from "./host";
 import { parseMentions } from "./mentions";
 import { setCopyModifier } from "./markdown";
 import {
-  activeTab,
-  closeTab,
   navigate,
-  openTabs,
   route,
-  unreadTabs,
 } from "./router";
 import {
   playPermissionSound,
@@ -145,7 +141,7 @@ export const sessions = signal<Session[]>([]);
 // Cursor to the next (older) page of sessions, when more exist.
 export const sessionsNext = signal<string | undefined>(undefined);
 // True while the session-list fetch keeps failing (a boot inside a server
-// restart window): Home keeps its loading copy instead of "No sessions yet."
+// restart window): the navigator keeps its loading copy instead of "No sessions yet."
 export const sessionsStalled = signal(false);
 export const sessionStatus = signal<Record<string, SessionStatus>>({});
 // Prompts the user interrupted before any step answered them: the awaiting
@@ -266,7 +262,7 @@ export const commands = signal<Command[]>([]);
 export const pendingPermissions = signal<PermissionRequest[]>([]);
 export const pendingQuestions = signal<QuestionRequest[]>([]);
 
-// Home: known projects (avatar colors), this window's folder, and the
+// Navigator: known projects (avatar colors), this window's folder, and the
 // tombstoned (deleted) project folders — baked in by AppHost from
 // globalState, mutated locally on tombstone (the host persists).
 export const projects = signal<Project[]>([]);
@@ -274,16 +270,16 @@ export const currentDir = signal<string | undefined>(undefined);
 export const tombstones = signal<string[]>(
   readStringList("opencode-tombstones").map(normPath),
 );
-// False until the first base refresh resolved — Home shows a loading line
+// False until the first base refresh resolved — the navigator shows a
 // instead of a wrong "no sessions" empty state.
 export const baseLoaded = signal(false);
-// Progress of a running project purge (Home renders it in place).
+// Progress of a running project purge (the navigator renders it in place).
 export const purgeState = signal<
   | { dir: string; done: number; total: number }
   | undefined
 >(undefined);
-// Home's working filters — the selected project and the search box. Signals,
-// not component state: resetting on every remount (Home → session tab → back)
+// The navigator's working filters — the selected project and the search box.
+// Signals, not component state: resetting on every remount
 // threw the selection away, so it could not serve as a working context.
 export const homeQuery = signal("");
 export const homeFilter = signal<string | undefined>(undefined);
@@ -351,11 +347,8 @@ function readStringList(name: string): string[] {
   }
 }
 
-// Picker selection held for the draft; applied to the session at creation.
-export const draftAgent = signal<string | undefined>(undefined);
-export const draftModel = signal<ModelSelection | undefined>(undefined);
-// The server config's default model — what a draft with no explicit pick
-// runs on (display only, so the chip never shows a bare "Model").
+// The server config's default model — what a session with no explicit
+// pick runs on (display only, so the chip never shows a bare "Model").
 export const serverDefaultModel = signal<ModelSelection | undefined>(
   undefined,
 );
@@ -392,10 +385,7 @@ function scheduleMsgRetry(id: string): void {
   const state = { timer: 0, tries: 0 };
   const fire = () => {
     state.tries++;
-    if (
-      (route.value.view === "session" && route.value.id === id) ||
-      openTabs.value.includes(id)
-    )
+    if (route.value.view === "session" && route.value.id === id)
       void refreshMessages(id).then(() => {
         const r = msgRetries.get(id);
         if (r && r === state) {
@@ -614,10 +604,10 @@ export function modelFree(model?: ModelSelection): boolean {
 }
 
 // Input modalities of the model a composer would send on — the session
-// row's model, else the draft pick or the server default (currentSelection).
-// Undefined = the catalog doesn't know the model, so attachment gating
-// keeps its legacy allowlist.
-export function attachInputs(id: string | undefined): ModelInput | undefined {
+// row's model, else the server default (currentSelection). Undefined =
+// the catalog doesn't know the model, so attachment gating keeps its
+// legacy allowlist.
+export function attachInputs(id: string): ModelInput | undefined {
   const model = currentSelection(id).model;
   return model && catalogModel(model.providerID, model.id)?.capabilities?.input;
 }
@@ -792,10 +782,10 @@ export function defaultAgent(): string {
   );
 }
 
-// What the composer footer shows for a draft (undefined id) or a session.
-// v1 picker switches on a live session land in v1Picks (its session-scoped
-// switch routes 500 on live 1.x servers — agent and model alike); the next
-// prompt carries the pick on its body, and the row converges with its turn.
+// What the composer footer shows for a session. v1 picker switches on a
+// live session land in v1Picks (its session-scoped switch routes 500 on
+// live 1.x servers — agent and model alike); the next prompt carries the
+// pick on its body, and the row converges with its turn.
 const v1Picks = new Map<string, { agent?: string; model?: ModelSelection }>();
 
 // Attention-driven catalog heal: a picker opening while a connected
@@ -820,16 +810,10 @@ export function refreshProvidersIfStale(): void {
   });
 }
 
-export function currentSelection(id: string | undefined): {
+export function currentSelection(id: string): {
   agent: string;
   model?: ModelSelection;
 } {
-  if (!id) {
-    return {
-      agent: draftAgent.value ?? defaultAgent(),
-      model: draftModel.value ?? serverDefaultModel.value,
-    };
-  }
   const s = sessions.value.find((x) => x.id === id);
   const pick = dialect() === "v1" ? v1Picks.get(id) : undefined;
   // A session never switched still runs on the server's default model.
@@ -839,19 +823,14 @@ export function currentSelection(id: string | undefined): {
   };
 }
 
-// Picker switch. On a draft it just updates the held selection; on a session
-// it hits the switch endpoints and patches the row (the SSE switched events
-// carry the same truth) — except on v1, whose switch routes 500: the pick is
-// recorded in v1Picks and the next prompt carries it.
+// Picker switch: it hits the switch endpoints and patches the row (the
+// SSE switched events carry the same truth) — except on v1, whose switch
+// routes 500: the pick is recorded in v1Picks and the next prompt
+// carries it.
 export async function setSelection(
-  id: string | undefined,
+  id: string,
   sel: { agent?: string; model?: ModelSelection },
 ): Promise<void> {
-  if (!id) {
-    if (sel.agent) draftAgent.value = sel.agent;
-    if (sel.model) draftModel.value = sel.model;
-    return;
-  }
   if (dialect() === "v1") {
     const prev = v1Picks.get(id);
     v1Picks.set(id, {
@@ -886,7 +865,7 @@ export async function setSelection(
   }
   // The picker's model/effort choice: the session row itself is corruptible
   // (see guardVariant), so the user's intent lives here too.
-  if (id && sel.model) {
+  if (sel.model) {
     modelPicks.add(id);
     saveModelPicks();
     if (sel.model.variant) pickedVariants.set(id, sel.model);
@@ -1037,8 +1016,8 @@ function patchSession(
   sessions.value = sessions.value.map((s) => (s.id === id ? fn(s) : s));
 }
 
-// Rows Home lists under its current filter and query — the audience "Load
-// older sessions" pages for. Home renders these (sorted); loadMoreSessions
+// Rows the navigator lists under its current filter and query — the
+// audience "Load older sessions" pages for. The navigator renders these
 // counts them, so the button's stop rule and the list can't diverge.
 export function homeVisibleSessions(): Session[] {
   const filter = homeFilter.value;
@@ -1097,7 +1076,7 @@ export async function loadMoreSessions(): Promise<void> {
 // Server-side title search: the list route's `search` param matches
 // titles in the server's storage, so the whole history answers, not
 // just the pages loaded so far. Rows merge into the same pool "Load
-// older sessions" fills; Home's client-side filter (title or project
+// older sessions" fills; the client-side filter (title or project
 // name) still decides what shows. The query is remembered — re-asking
 // the same one refetches nothing.
 let searchedFor: string | undefined;
@@ -1123,7 +1102,7 @@ export async function searchAllSessions(query: string): Promise<void> {
   }
 }
 
-// --- Home: rename, delete, project purge/tombstones ---
+// --- Navigator: rename, delete, project purge/tombstones ---
 
 export async function renameSession(id: string, title: string): Promise<boolean> {
   const directory = sessions.value.find((s) => s.id === id)?.location?.directory;
@@ -1204,7 +1183,7 @@ export async function renameProject(
   return true;
 }
 
-// Recolor a project's avatar (Home tile and every session tile of its
+// Recolor a project's avatar (its tile and every session tile of its
 // folders). Server-side, next to the name it shows with.
 export async function setProjectColor(
   dir: string,
@@ -1255,16 +1234,16 @@ function dropChildTranscripts(parentID: string): void {
     if (kid.parentID === parentID) dropTranscript(kid.id);
 }
 
-// Close a tab and drop its cached transcript — reopening refetches. The
-// router stays free of store imports; this is the tab-close entry point.
-export function closeSessionTab(id: string): void {
+// Release a session's transcript caches — reopening refetches. Runs when
+// a Session view unmounts for good (panels close host-side, so nothing
+// else fires it); the router stays free of store imports.
+export function releaseTranscript(id: string): void {
   dropChildTranscripts(id);
   dropTranscript(id);
-  closeTab(id);
 }
 
-// Drop a session from every local store; its tab (if any) closes, and a
-// closed active tab goes home.
+// Drop a session from every local store; deletion (host-side panel close
+// aside) is the only path here.
 function dropSessionLocal(id: string): void {
   // Every per-session store, or deletes leak state.
   cancelIdle(id);
@@ -1308,7 +1287,7 @@ function dropSessionLocal(id: string): void {
   } catch {
     // Ignore — a leaked key is harmless next to a crashing delete.
   }
-  closeSessionTab(id);
+  releaseTranscript(id);
 }
 
 export async function deleteSession(id: string): Promise<boolean> {
@@ -1421,7 +1400,7 @@ export async function resolveFileRef(path: string): Promise<string> {
 }
 
 // Project delete: purge every session of the worktree, then tombstone the
-// folder (host persists; Home filters it out immediately). Only tombstones
+// folder (host persists; the navigator filters it out immediately). Only
 // when the purge fully succeeded.
 export async function purgeProject(dir: string): Promise<boolean> {
   // The next attempt replaces the last attempt's error, success included.
@@ -1454,7 +1433,7 @@ export function tombstoneProject(dir: string): void {
   const p = normPath(dir);
   tombstones.value = [p, ...tombstones.value.filter((t) => t !== p)].slice(0, 50);
   // A purged project can be the one the session list was filtered to — drop
-  // the filter with it, or Home's right column stays empty with no row to
+  // the filter with it, or the list stays empty with no row to
   // click out of it.
   if (homeFilter.value === p) homeFilter.value = undefined;
   postToHost({ type: "project-tombstoned", path: p });
@@ -1462,7 +1441,7 @@ export function tombstoneProject(dir: string): void {
 
 // --- Messages ---
 
-// Sessions nothing ever happened in — Home hides them: a "+" never typed
+// Sessions nothing ever happened in — the navigator hides them: a "+"
 // into is not a session worth listing. Suspicion is the server never
 // touching the row (time.updated still equals created); a bare timestamp
 // would also suspect messages injected without a server touch (fixtures),
@@ -1584,7 +1563,7 @@ ID ${s.id}`;
 // the folder — the project's host-assigned color when the folder is a known
 // project, else the folder's hash — so a rename can never change it, and a
 // folder without a project row (non-git folders register none) still colors
-// its sessions like its Home project tile, which hashes the same directory.
+// its sessions like its project tile, which hashes the same directory.
 // Sessions without a directory (task-stub sub-agents) belong to this
 // window's folder — hashing the title instead would pick an arbitrary color.
 export function sessionTile(s: Session | undefined, id: string) {
@@ -1975,14 +1954,9 @@ function setIdle(sessionID: string): void {
   const s = sessions.value.find((x) => x.id === sessionID);
   if (s && isSubagentSession(s)) return;
   // A queued turn takes the session back into a turn within a beat —
-  // this idle is a seam in the queue, not readiness. The green tab and
-  // the sound land when the last one drains.
+  // this idle is a seam in the queue, not readiness. The sound lands
+  // when the last one drains.
   if (hasQueued(sessionID)) return;
-  // Turn landed in a tab the user isn't looking at — green until they
-  // open it (navigate clears).
-  if (openTabs.value.includes(sessionID) && activeTab.value !== sessionID) {
-    unreadTabs.value = new Set(unreadTabs.value).add(sessionID);
-  }
   scheduleRing(sessionID);
 }
 
@@ -2073,7 +2047,7 @@ function applyEvent(event: ServerEvent): void {
     // session made outside this window (the local send path upserts itself).
     // Normalize: the event's info carries `directory`, not `location` —
     // upserting it raw would clobber the row the create path stored and
-    // unbind the tab's project color.
+    // unbind the row's project color.
     case "session.created":
     case "session.updated":
       if (data.info) {
@@ -2238,14 +2212,14 @@ function applyEvent(event: ServerEvent): void {
       break;
     // v2 surfaces these facts as dedicated events (v1 sends full rows).
     // Renamed: the server's auto-title after a turn — patch in place or
-    // Home keeps the old title until the next full refresh.
+    // The list keeps the old title until the next full refresh.
     case "session.renamed":
       if (data.sessionID && typeof data.title === "string") {
         patchSession(data.sessionID, (s) => ({ ...s, title: data.title! }));
       }
       break;
     // Deleted elsewhere (another window, the TUI): drop every local trace
-    // of the row, the tab included.
+    // of the row.
     case "session.deleted":
       if (data.sessionID) dropSessionLocal(data.sessionID);
       break;
@@ -2363,7 +2337,7 @@ function applyEvent(event: ServerEvent): void {
       break;
   }
   // Busy/idle is derived from step boundaries for EVERY session, opened or
-  // not (there is no session.status event on /api/event): chips, Home rows
+  // not (there is no session.status event on /api/event): chips, rows
   // and the composer must pulse for background work too — a sub-agent
   // relaying into a session this window never opened, another window's
   // turn. Message projection stays gated below.
@@ -3251,11 +3225,11 @@ function pullServerTruth(): void {
   }
 }
 
-// A restored route (opencode-route meta) or tab may point at a session that
-// no longer exists. The paginated list can't judge that, so each is checked
-// directly; dead ones bounce home / drop out of the bar. A live one whose
-// row sits beyond the list's first page gets its row upserted — that row is
-// the tab's title and color, and no event will ever deliver it.
+// A session panel's baked route may point at a session that no longer
+// exists. The paginated list can't judge that, so the id is checked
+// directly; a dead one bounces home (the panel's not-found card). A live
+// one whose row sits beyond the list's first page gets its row upserted —
+// that row is the panel's title source, and no event will ever deliver it.
 let restoredCheck: Promise<void> | undefined;
 function validateRestored(): Promise<void> {
   return (restoredCheck ??= (async () => {
@@ -3269,18 +3243,13 @@ function validateRestored(): Promise<void> {
       if (row === "missing") navigate({ view: "home" });
       else if (row) upsertSession(row);
     }
-    for (const t of openTabs.value) {
-      const row = await fetchSession(t);
-      if (row === "missing") closeSessionTab(t);
-      else if (row) upsertSession(row);
-    }
   })());
 }
 
-// A new session, now (the toolbar "+", Home's button, the host command):
-// the tab is a real one from the click, like a browser's — no reserved
-// draft slot. Created untitled so the server names it and re-titles from
-// the first prompt. The flag keeps a double-click from making two.
+// A new session, now (the navigator's button, the host command): the
+// host opens the session's own editor tab — nothing routes locally.
+// Created untitled so the server names it and re-titles from the first
+// prompt. The flag keeps a double-click from making two.
 let creatingSession = false;
 export async function newSession(): Promise<void> {
   if (creatingSession) return;
@@ -3292,30 +3261,30 @@ export async function newSession(): Promise<void> {
       return;
     }
     upsertSession(session);
-    // Born blank — Home hides it until the first admitted prompt (the
-    // server's touch flips time.updated, which alone un-hides).
+    // Born blank — the navigator hides it until the first admitted
+    // prompt (the server's touch flips time.updated, which alone
+    // un-hides).
     blankSessions.value = new Set([...blankSessions.value, session.id]);
     blankChecked.add(session.id);
-    navigate({ view: "session", id: session.id });
+    postToHost({ type: "open-session", id: session.id });
   } finally {
     creatingSession = false;
   }
 }
 
-// Host→app text insertion. The seq bump makes repeated inserts of the same
-// text re-fire the composer effect; the app routes home→draft first so the
-// composer exists to receive it.
+// Host→app text insertion, targeted at the session composer on screen.
+// The seq bump makes repeated inserts of the same text re-fire the
+// composer effect.
 let insertSeq = 0;
 export const composerInsert = signal<
   { text: string; seq: number; replace?: boolean } | undefined
 >(undefined);
 
 // Files attached via the composer ("+" dialog, paste, drop), sent as file
-// parts with the next prompt. Keyed like text drafts (session id, "draft"
-// for the home composer) so attachments don't follow you into another tab;
-// kept outside the Composer so a draft's attachments survive the session
-// it becomes, and persisted to localStorage so they survive the webview
-// reloading too.
+// parts with the next prompt. Keyed like text drafts (session id) so
+// attachments don't follow you into another session; kept outside the
+// Composer so they survive the view remounting, and persisted to
+// localStorage so they survive the webview reloading too.
 interface ComposerFile {
   uri: string;
   name: string;
@@ -3328,12 +3297,11 @@ interface ComposerFile {
   thumb?: string;
 }
 
-// Composer text drafts, keyed like attachments (session id, "draft" for
-// the home composer). They survive the disruptions of panel life: the
-// session view remounting on tab switches (the module-level map) and the
-// webview itself reloading (localStorage, same-origin — a server port
-// change resets it). Lives here so a deleted session's draft can be
-// pruned with the rest of its local state.
+// Composer text drafts, keyed like attachments (session id). They survive
+// the disruptions of panel life: the session view remounting (the
+// module-level map) and the webview itself reloading (localStorage,
+// same-origin — a server port change resets it). Lives here so a deleted
+// session's draft can be pruned with the rest of its local state.
 const DRAFTS_KEY = "opencode.drafts";
 const drafts = new Map<string, string>();
 try {
@@ -3501,7 +3469,6 @@ function clearComposerFiles(key: string): void {
 // Hand text to the composer: appended to the draft by default, or swapping
 // it whole with `replace` (a revert hands the message back for editing).
 export function insertComposerText(text: string, replace = false): void {
-  if (route.value.view === "home") navigate({ view: "draft" });
   composerInsert.value = { text, seq: ++insertSeq, replace };
 }
 
@@ -3585,13 +3552,13 @@ export function hostMessage(msg: unknown) {
   // then the host's content sniff stamp (text), then the active model's
   // input modalities — and a refused pick is surfaced once rather than sent
   // as a binary blob the endpoint would "read" into the context as raw
-  // bytes. The pick lands on whichever composer is on screen (home has
-  // none, so anything but a session is the draft).
-  if (m.type === "files-picked" && Array.isArray(m.files)) {
+  // bytes. The pick lands on the session composer that asked; with no
+  // session on screen there is no composer to land on.
+  if (m.type === "files-picked" && Array.isArray(m.files) && route.value.view === "session") {
+    const target = route.value.id;
     const rows = (m.files as ComposerFile[]).filter(
       (f) => !!f && typeof f.uri === "string" && typeof f.name === "string",
     );
-    const target = route.value.view === "session" ? route.value.id : undefined;
     const input = attachInputs(target);
     let unsupported = 0;
     let notForModel = 0;
@@ -3618,7 +3585,7 @@ export function hostMessage(msg: unknown) {
             .join(", ")
         }).`,
       );
-    addComposerFiles(target ?? "draft", ok);
+    addComposerFiles(target, ok);
   }
   // The host snapshotted a pasted attachment: hand the path to the waiting
   // attach (requestAttachmentSnapshot) so the chip is born with it.
@@ -3644,8 +3611,10 @@ export function hostMessage(msg: unknown) {
   if (m.type === "toggle-context") {
     setPopover(popover.value === "ctx" ? undefined : "ctx");
   }
-  // Host navigation targets "/session/{id}"; an id the server doesn't know
-  // (when the list is loaded) falls back to Home instead of a dead view.
+  // Host navigation targets "/session/{id}"; an id the server doesn't
+  // know (when the list is loaded) falls back to home — a session
+  // panel's not-found card. The navigator host owns no route: navigate
+  // there sets a signal nobody renders and persists nothing.
   if (m.type === "navigate" && typeof m.path === "string") {
     const id = /^\/session\/(.+)$/.exec(m.path)?.[1];
     const known =
@@ -4274,39 +4243,16 @@ function restampCommandEcho(id: string, cid: string): void {
   }));
 }
 
-function titleFrom(text: string): string {
-  const flat = text.replace(/\s+/g, " ").trim();
-  return flat.length <= 40 ? flat : flat.slice(0, 40);
-}
-
-// Send a prompt. `target` "draft" creates the session first (title from the
-// prompt, picker selection riding along) and navigates to it; no draft
-// sessions pile up. Composer file attachments ride along as file parts and
+// Send a prompt. Composer file attachments ride along as file parts and
 // clear once the prompt is accepted.
 export async function sendPrompt(
-  target: string | "draft",
+  target: string,
   text: string,
   files: ComposerFile[] = [],
 ): Promise<void> {
   const body = text.trim();
   if (!body) return;
-  let id: string;
-  if (target === "draft") {
-    const { session, error } = await createSession(titleFrom(body), {
-      agent: draftAgent.value,
-      model: draftModel.value,
-    });
-    if (!session) {
-      setSendError(withReason("Could not create the session", error));
-      return;
-    }
-    id = session.id;
-    upsertSession(session);
-    draftAgent.value = undefined;
-    draftModel.value = undefined;
-  } else {
-    id = target;
-  }
+  const id = target;
   setSendError(undefined);
   // Pre-conversion truth: the release below ends the blocked turn, and the
   // branches under it must see the session as it was at submit.
@@ -4339,12 +4285,7 @@ export async function sendPrompt(
   // protects the bubble (the counter bumps in postPrompt), and an idle or
   // status adoption landing in the gap would wipe it until the POST reply.
   appendPending(id, body, files);
-  if (target === "draft") {
-    clearComposerFiles("draft");
-    navigate({ view: "session", id });
-  } else {
-    clearComposerFiles(id);
-  }
+  clearComposerFiles(id);
   // The send owns the attachments from here — the composer's chips go now
   // (a failed POST hands them back).
   await postPrompt(id, body, files);
@@ -4375,8 +4316,8 @@ async function postPrompt(
   files: ComposerFile[],
 ): Promise<void> {
   sessionStatus.value = { ...sessionStatus.value, [id]: { type: "busy" } };
-  // Mention tokens resolve against the session's directory (the server-side
-  // file host of the parts); a draft has only the workspace folder.
+  // Mention tokens resolve against the session's directory (the
+  // server-side file host of the parts).
   const base =
     sessions.value.find((s) => s.id === id)?.location?.directory ||
     currentDir.value ||
@@ -4556,14 +4497,10 @@ function waitForCompaction(target: string, stamp: number): Promise<boolean> {
 // holds busy until the done event, so the queued-turn flush can't fire
 // the next entry into a session still folding.
 async function runCompact(
-  target: string | "draft",
+  target: string,
   echoed = false,
   echoCid?: string,
 ): Promise<void> {
-  if (target === "draft") {
-    setSendError("Nothing to compact yet — send a message first.");
-    return;
-  }
   // A session with no real turn has nothing to keep, and summarizing it
   // anyway writes an all-"(none)" summary the next turns choke on — gate on
   // an actual assistant answer (compaction rows don't count).
@@ -4652,13 +4589,13 @@ async function runCompact(
   if (!byEvent) await refreshMessages(target);
 }
 
-// Run a "/name args..." composer line. A draft is created first — commands
-// need a session to run in. `echoed` marks a queued command: its durable
-// bubble was appended when it was queued and stays through the run, so
-// nothing is appended here; `echoCid` is that bubble's row id (compaction
-// retires it on completion).
+// Run a "/name args..." composer line — commands need the session they
+// were typed in. `echoed` marks a queued command: its durable bubble was
+// appended when it was queued and stays through the run, so nothing is
+// appended here; `echoCid` is that bubble's row id (compaction retires it
+// on completion).
 export async function runSlashCommand(
-  target: string | "draft",
+  target: string,
   text: string,
   echoed = false,
   echoCid?: string,
@@ -4671,9 +4608,9 @@ export async function runSlashCommand(
     return;
   }
   // /init mirrors the TUI's client-side builtin (the server's command list
-  // stays empty): the template goes out as an ordinary prompt, so draft
-  // creation, the echo, and the busy queue all apply. A server- or
-  // user-defined init command takes precedence below.
+  // stays empty): the template goes out as an ordinary prompt, so the
+  // echo and the busy queue all apply. A server- or user-defined init
+  // command takes precedence below.
   if (name === "init" && !commands.value.some((c) => c.name === "init")) {
     const dir =
       sessions.value.find((s) => s.id === target)?.location?.directory ||
@@ -4686,22 +4623,7 @@ export async function runSlashCommand(
     setSendError(`Unknown command /${name}.`);
     return;
   }
-  let id = target;
-  if (target === "draft") {
-    const { session, error } = await createSession(`/${name}`, {
-      agent: draftAgent.value,
-      model: draftModel.value,
-    });
-    if (!session) {
-      setSendError(withReason("Could not create the session", error));
-      return;
-    }
-    id = session.id;
-    upsertSession(session);
-    draftAgent.value = undefined;
-    draftModel.value = undefined;
-    navigate({ view: "session", id });
-  }
+  const id = target;
   let cid = echoCid;
   setSendError(undefined);
   // Every command shows as a sent message (Claude Code) — /compact's echo
@@ -4719,7 +4641,7 @@ export async function runSlashCommand(
     sessionStatus.value = { ...sessionStatus.value, [id]: { type: "busy" } };
   // The command must run on what the session is on — a bare command turn
   // would otherwise rewrite the row (agent back to build, effort to
-  // default). The draft just became a session carrying its preset.
+  // default).
   // Skills (v2 rows off /api/skill) run on their own route.
   const isSkill = commands.value.find((c) => c.name === name)?.skill === true;
   const sel = currentSelection(id);
@@ -4759,7 +4681,7 @@ export async function runSlashCommand(
     const map = await fetchSessionStatus();
     if (map?.[id]?.type === "busy") return;
     // The failure read idle truth — retire the optimistic busy the flush
-    // (or the draft create's) path left behind, and the echo: nothing was
+    // path left behind, and the echo: nothing was
     // written server-side, so a kept echo would read as a sent command
     // that never happened (the /start ghost pileup).
     commandRuns.delete(id);

@@ -1,15 +1,17 @@
-// Home multiselect: Ctrl+Click toggles one row; Shift+Click works the
-// span from the anchor, its direction read off the anchor's own state —
-// a picked anchor adds (adjacent blocks merge), an unpicked anchor
-// removes. Picks are sessions-or-projects, never both. One floating
-// Delete docked bottom-center runs the bulk delete through a confirm;
-// Esc or a click landing on no row drops the picks. FAKE_API_HOME_LIST
-// seeds six extra sessions across two project folders; display order is
-// seeded, then Bulk 6..1.
+// Navigator multiselect (the sidebar host): Ctrl+Click toggles one row;
+// Shift+Click works the span from the anchor, its direction read off the
+// anchor's own state — a picked anchor adds (adjacent blocks merge), an
+// unpicked anchor removes. Picks are sessions-or-projects, never both.
+// One floating Delete docked bottom-center runs the bulk delete through
+// a confirm; Esc or a click landing on no row drops the picks.
+// FAKE_API_HOME_LIST seeds six extra sessions across two project
+// folders; display order is seeded, then Bulk 6..1.
 import { test, expect } from "./support/fixture.mjs";
 import { startRig } from "./support/rig.mjs";
 
 const ENV = {
+  // The navigator sidebar: route metas are ignored, no tab bar.
+  OPENCODE_HOST: "navigator",
   OPENCODE_ROUTE: JSON.stringify({ view: "home" }),
   OPENCODE_TABS: JSON.stringify([]),
   OPENCODE_DIALECT: "v2",
@@ -81,8 +83,8 @@ test("escape and a click outside the rows drop the picks", async ({ page }) => {
     await page.locator(".home-h").click();
     await expect(page.locator(".pick-dock")).toHaveCount(0);
 
-    // A plain click on a row keeps the picks (it opens the session
-    // instead) — the picks survive the trip back.
+    // A plain click on a row keeps the picks — it posts open-session to
+    // the host and the navigator stays right where it is.
     await rows.nth(1).click({ modifiers: ["Control"] });
     await expect(page.locator(".pick-dock")).toHaveCount(1);
   } finally {
