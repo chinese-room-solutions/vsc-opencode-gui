@@ -336,7 +336,7 @@ body {
   align-items: center;
   gap: 8px;
   height: 26px;
-  padding: 0 4px;
+  padding: 0 5px;
   position: relative;
 }
 
@@ -375,7 +375,7 @@ body {
 .proj-row.selected::before {
   content: "";
   position: absolute;
-  inset: 4px 0;
+  inset: 2px 0;
   border: 1px solid
     var(--vscode-list-activeSelectionForeground, var(--oc-text));
   border-radius: 6px;
@@ -433,7 +433,7 @@ body {
   align-items: center;
   gap: 8px;
   height: 28px;
-  padding: 0 4px; /* same inset as .proj-row so the tiles align */
+  padding: 0 5px; /* same inset as .proj-row so the tiles align */
 }
 
 .sess-open {
