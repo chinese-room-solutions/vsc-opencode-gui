@@ -116,6 +116,10 @@ export interface SessionPanelsDeps {
   icons: TabIconSet;
   // Fires the server up (revival and panel opens need it eventually).
   ensureServer: () => void;
+  // True when the session is blank (created, no messages) — a restored
+  // tab for one is dropped instead of revived (the navigator's blank
+  // rule, mirrored host-side; fail-open reads false).
+  isBlankSession: (id: string) => Promise<boolean>;
   // Notified with the open panel ids on every open/close, so main.ts can
   // keep external state (opencode.panelOpen) truthful.
   onPanelsChanged?: (ids: string[]) => void;
@@ -357,8 +361,17 @@ export class SessionPanels implements vscode.Disposable {
     this._serialized.add(viewType);
     this._serializerSubs.push(
       vscode.window.registerWebviewPanelSerializer(viewType, {
-        deserializeWebviewPanel: (panel) => {
+        deserializeWebviewPanel: async (panel) => {
           this._deps.ensureServer();
+          // A session nothing ever happened in isn't worth a tab after a
+          // reload — drop the restored tab instead of swapping (and a
+          // panel the stray-heal raced in for it, if any). Fail-open: a
+          // server hiccup revives as before.
+          if (await this._deps.isBlankSession(id)) {
+            panel.dispose();
+            this._panels.get(id)?.dispose();
+            return;
+          }
           // A revived tab carries its persisted (readonly) panel options —
           // swap it: a fresh panel in the same column first (the group
           // never empties), then drop the restored one. The restored tab's
@@ -372,7 +385,6 @@ export class SessionPanels implements vscode.Disposable {
           });
           panel.dispose();
           restoreTabSpot(id, spot);
-          return Promise.resolve();
         },
       }),
     );

@@ -1443,12 +1443,15 @@ export function tombstoneProject(dir: string): void {
 // --- Messages ---
 
 // Sessions nothing ever happened in — the navigator hides them: a "+"
-// into is not a session worth listing. Suspicion is the server never
-// touching the row (time.updated still equals created); a bare timestamp
-// would also suspect messages injected without a server touch (fixtures),
-// so hiding waits for confirmation — a resolved messages fetch, or the
-// newSession path that knows its own creation is blank. A touched row is
-// always listed, so a stale flag can't bury a live session.
+// into is not a session worth listing. A row arriving as
+// session.created is marked blank on the spot: nothing can have been
+// sent between the create and the event (no fetch, no flash). Every
+// other suspect (the server never touched the row: time.updated still
+// equals created) hides only once confirmed — a resolved messages
+// fetch, or the newSession path that knows its own creation is blank —
+// and a confirmation that finds messages takes a wrong mark back off (a
+// fork can inherit rows). A touched row is always listed, so a stale
+// flag can't bury a live session.
 const blankSessions = signal<Set<string>>(new Set());
 const blankChecked = new Set<string>();
 
@@ -1456,8 +1459,9 @@ export function isEmptySession(s: Session): boolean {
   return s.time.updated === s.time.created && blankSessions.value.has(s.id);
 }
 
-// Resolve every suspect once: no message rows confirms blank. Run after a
-// base refresh — the suspect set only grows on new rows.
+// Resolve every suspect once: no message rows confirms blank, message
+// rows revoke a mark (the fork case). Run after a base refresh — the
+// suspect set only grows on new rows.
 function resolveBlankSessions(): Promise<void> {
   const suspects = sessions.value.filter(
     (s) => s.time.updated === s.time.created && !blankChecked.has(s.id),
@@ -1466,9 +1470,11 @@ function resolveBlankSessions(): Promise<void> {
     suspects.map(async (s) => {
       blankChecked.add(s.id);
       const msgs = await fetchMessages(s.id);
-      if (msgs && msgs.messages.length === 0) {
-        blankSessions.value = new Set([...blankSessions.value, s.id]);
-      }
+      if (!msgs) return;
+      const next = new Set(blankSessions.value);
+      if (msgs.messages.length === 0) next.add(s.id);
+      else next.delete(s.id);
+      blankSessions.value = next;
     }),
   ).then();
 }
@@ -2155,6 +2161,26 @@ function applyEvent(event: ServerEvent): void {
               },
             }),
           );
+        // A row landing as session.created is blank by definition —
+        // nothing can have been sent between the create and this event.
+        // Mark it now so it never lists for the beat its check would
+        // take (the create-then-delete flash); the resolve below still
+        // fetches and takes the mark back off if messages exist (a fork
+        // inheriting rows).
+        if (event.type === "session.created" && typeof info.id === "string")
+          blankSessions.value = new Set([...blankSessions.value, info.id]);
+        // A row landing by event — this window's host-side create (the
+        // palette command), another window's "+", any external client —
+        // never ran the boot page's blank check; run it or the untouched
+        // "New session" row lists until a manual reload.
+        if (
+          typeof info.id === "string" &&
+          !blankChecked.has(info.id) &&
+          sessions.value.some(
+            (s) => s.id === info.id && s.time.updated === s.time.created,
+          )
+        )
+          void resolveBlankSessions();
         // The marker leaving the row is the cut committing (or a redo in
         // another window): the folded rows go with it.
         if (

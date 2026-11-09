@@ -22,7 +22,7 @@ const execFile = promisify(execFileCb);
 interface SessionSummary {
   id: string;
   title: string;
-  time: { updated: number };
+  time: { created: number; updated: number };
 }
 
 // Row of GET /session/{id}/diff — the session's file changes as per-file
@@ -736,6 +736,32 @@ export class ServerManager {
       this._dialect === "v2" ? `/api/session/${id}` : `/session/${id}`,
     );
     return row?.data?.title || row?.title;
+  }
+
+  // A blank session — created, nothing ever sent. The app's navigator
+  // hides these (store.ts's blank rule: the row was never touched and no
+  // message rows exist); tab revival and the history picker agree. Any
+  // fetch problem reads "not blank" (fail-open: never drop a live
+  // session's tab on a server hiccup).
+  async isBlankSession(id: string): Promise<boolean> {
+    await this.ready;
+    const row = await this._request<{
+      data?: { time?: { created?: number; updated?: number } };
+      time?: { created?: number; updated?: number };
+    }>(
+      "GET",
+      this._dialect === "v2" ? `/api/session/${id}` : `/session/${id}`,
+    );
+    const time = row?.data?.time ?? row?.time;
+    if (!time || time.created !== time.updated) return false;
+    const msgs = await this._request<{ data?: unknown[] } | unknown[]>(
+      "GET",
+      this._dialect === "v2"
+        ? `/api/session/${id}/message?limit=1&order=desc`
+        : `/session/${id}/message?limit=1&order=desc`,
+    );
+    const rows = Array.isArray(msgs) ? msgs : msgs?.data;
+    return rows !== undefined && rows.length === 0;
   }
 
   // PATCH /session/{id} — rename (the webview's renameSession in

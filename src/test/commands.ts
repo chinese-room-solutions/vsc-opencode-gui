@@ -30,6 +30,7 @@ type Api = {
   panels: SessionPanels;
   serverPort: number | undefined;
   ensureServer: () => void;
+  authHeaders: () => Record<string, string>;
 };
 
 function sessionTabCount(): number {
@@ -119,6 +120,19 @@ suite("opencode GUI commands", function () {
     // from the host's at-open fetch.
     await until(() => api.panels.get(id)?.title === "New session");
     assert.strictEqual(api.panels.get(id)?.title, "New session");
+    // The blank rule revival and the history picker lean on: a fresh
+    // session (no messages, row never touched) is blank; an unknown id
+    // fails open.
+    const sm = api.ensureServer() as unknown as {
+      isBlankSession(id: string): Promise<boolean>;
+    } | undefined;
+    assert.ok(sm, "ensureServer returns the manager");
+    assert.strictEqual(await sm!.isBlankSession(id), true, "fresh session is blank");
+    assert.strictEqual(
+      await sm!.isBlankSession("ses_doesnotexist"),
+      false,
+      "unknown session fails open",
+    );
   });
 
   test("a second session opens a second panel; closing one leaves the other", async function () {
@@ -256,9 +270,26 @@ suite("opencode GUI commands", function () {
 
   test("showHistory reaches the session picker and stays pending", async function () {
     // The newSession tests above created sessions through the extension's
-    // own create path, so the picker has rows to list — no seeding fetch
-    // here (the spawn password lives inside the extension bundle's module
-    // state; a raw fetch from the test host cannot authenticate).
+    // own create path — all blank, and blank sessions are hidden from the
+    // picker now (the navigator's rule). Title one over the API (the
+    // extension's rename call) so the picker has a row to list; the
+    // spawn password lives inside the extension bundle's module state, so
+    // the direct fetch borrows activate()'s auth headers.
+    const url = await hubUrl(api);
+    const res = await fetch(`${url}/api/session`, {
+      method: "POST",
+      headers: { ...api.authHeaders(), "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.ok(res.ok, `session created (${res.status})`);
+    const sid = ((await res.json()) as { data?: { id?: string } }).data?.id;
+    assert.ok(sid, "session id in the reply");
+    const patch = await fetch(`${url}/api/session/${sid}`, {
+      method: "PATCH",
+      headers: { ...api.authHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ title: "Seeded for the picker" }),
+    });
+    assert.ok(patch.ok, `session titled (${patch.status})`);
     let settled = false;
     const picker = vscode.commands
       .executeCommand("opencodeGui.showHistory")

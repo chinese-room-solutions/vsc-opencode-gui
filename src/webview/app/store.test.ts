@@ -3999,6 +3999,57 @@ describe("newSession and blank hiding", () => {
     assert.ok(refreshed);
     assert.equal(isEmptySession(refreshed), false);
   });
+  it("a blank row landing by event resolves hidden", async () => {
+    onApi(messageMock("e1", { data: [], cursor: {} }));
+    // session.updated, not created: a row first seen through an update
+    // (a reconnect gap, an old client) has no created-mark to lean on —
+    // the resolve must confirm it.
+    await sseFlush("session.updated", { info: sessRow("e1") });
+    // The blank check is fire-and-forget; let its fetch land.
+    await flushEvents();
+    await flushEvents();
+    const landed = sessions.value.find((s) => s.id === "e1");
+    assert.ok(landed, "the event upserted the row");
+    assert.ok(
+      isEmptySession(landed),
+      "an event-landed blank row hides after the check",
+    );
+  });
+  it("a session.created row hides on arrival, before its check", async () => {
+    // The check fails outright (server hiccup): only the created-mark
+    // can be hiding the row — no create-then-delete flash.
+    onApi(messageMock("y1", API_FAIL, API_FAIL));
+    await sseFlush("session.created", { info: sessRow("y1") });
+    const young = sessions.value.find((s) => s.id === "y1");
+    assert.ok(young, "the event upserted the row");
+    assert.ok(isEmptySession(young), "hidden on arrival, check or no check");
+    await sseFlush("session.updated", {
+      info: sessRow("y1", { time: { created: T0, updated: T0 + 1 } }),
+    });
+    const touched = sessions.value.find((s) => s.id === "y1");
+    assert.ok(touched);
+    assert.equal(isEmptySession(touched), false, "a touched row lists");
+  });
+  it("a created row with messages (a fork) lists once its check lands", async () => {
+    onApi(
+      messageMock("f1", {
+        data: [
+          { id: "m1", type: "user", time: { created: T0 }, text: "inherited" },
+        ],
+        cursor: {},
+      }),
+    );
+    await sseFlush("session.created", { info: sessRow("f1") });
+    await flushEvents();
+    await flushEvents();
+    const fork = sessions.value.find((s) => s.id === "f1");
+    assert.ok(fork, "the event upserted the row");
+    assert.equal(
+      isEmptySession(fork),
+      false,
+      "the created-mark comes off when messages exist",
+    );
+  });
 });
 
 describe("selection", () => {

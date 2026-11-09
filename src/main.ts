@@ -276,6 +276,10 @@ export function activate(context: vscode.ExtensionContext) {
     hiddenProviders,
     icons,
     ensureServer: () => void ensureServer(),
+    isBlankSession: (id) => {
+      const sm = ensureServer() ?? serverManager;
+      return sm ? sm.isBlankSession(id) : Promise.resolve(false);
+    },
     // opencode.panelOpen is a compatibility surface (nothing here reads it
     // anymore); keep it truthful for external consumers.
     onPanelsChanged: (ids) =>
@@ -773,13 +777,22 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.showInformationMessage("No past sessions yet.");
         return;
       }
+      // Blank sessions (created, never messaged) aren't history — the
+      // navigator's rule. Untouched rows only: a fetch can't confirm each
+      // one, and a rename (or any touch) means the user invested
+      // something. Labels never fall back to the raw id.
       const items = sessions
+        .filter((s) => s.title || s.time.updated !== s.time.created)
         .sort((a, b) => b.time.updated - a.time.updated)
         .map((s) => ({
-          label: s.title || s.id,
+          label: sessionTabTitle(s.title),
           description: new Date(s.time.updated).toLocaleString(),
           id: s.id,
         }));
+      if (items.length === 0) {
+        vscode.window.showInformationMessage("No past sessions yet.");
+        return;
+      }
       const pick = await vscode.window.showQuickPick(items, {
         placeHolder: "Select a session to open",
       });

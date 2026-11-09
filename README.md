@@ -18,7 +18,9 @@ and the chat UI talks to it directly.
 ## ✨ Features
 
 - **One editor tab per session** - like any editor: each conversation is
-  its own tab, titled with the session name, revived after a reload.
+  its own tab, titled with the session name, revived after a reload. An
+  empty session isn't kept: its tab isn't restored and it stays out of
+  history until its first message.
 - **Sessions side panel** - two collapsible sections, Source Control
   style, with a draggable split: Projects (own search) above
   day-grouped sessions with whole-history search. Clicking a project narrows the sessions;

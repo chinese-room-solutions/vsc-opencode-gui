@@ -2525,11 +2525,13 @@ describe("v2 SSE → pipeline translation", () => {
       ],
     );
     // session.created → a facts-only partial row (defaults land on the
-    // store's upsert path, so a known row's title/cost survive).
+    // store's upsert path, so a known row's title/cost survive). The
+    // created name survives translation — the store's instant-blank mark
+    // keys on it.
     const created = translateV2Event(
       ev("session.created", { sessionID: "s2", title: "T", parentID: "s1" }),
     );
-    assert.equal(created[0].type, "session.updated");
+    assert.equal(created[0].type, "session.created");
     const info = (created[0].data as { info: Record<string, unknown> }).info;
     assert.equal(info.id, "s2");
     assert.equal(info.title, "T");

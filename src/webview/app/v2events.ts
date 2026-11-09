@@ -473,10 +473,14 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
     case "session.created":
       // {sessionID, title, slug, projectID, location...} — facts only; the
       // store's partial merge keeps what it already has and defaults the
-      // rest on the upsert path (a row we've never listed).
+      // rest on the upsert path (a row we've never listed). The synth
+      // keeps the wire's "created" name: the store marks a row arriving
+      // as created blank on the spot (nothing can have been sent yet),
+      // which is what keeps a fresh session out of the navigator without
+      // the flash its confirmation fetch would take.
       return sid
         ? [
-            synth("session.updated", {
+            synth("session.created", {
               info: {
                 id: sid,
                 ...(d.title !== undefined ? { title: d.title } : {}),
