@@ -38,6 +38,16 @@ export function sessionTabId(tab: vscode.Tab): string | undefined {
   return undefined;
 }
 
+// A session tab's label from the server's raw title — the app-side
+// sessionTitle (src/webview/app/store.ts) mirrored for the host's own
+// at-open fetch: an untitled session is "New session" (never its id),
+// v1's "New session - <ISO>" collapses, sub-agent bookkeeping drops.
+export function sessionTabTitle(raw: string | undefined): string {
+  const t =
+    raw?.replace(/\s+\(@\S+ subagent\)$/, "").trim() || "New session";
+  return /^(?:New|Child) session - /.test(t) ? t.replace(/ - .*/, "") : t;
+}
+
 // Where one session's editor tab currently sits (a session has one).
 export interface TabSpot {
   column: vscode.ViewColumn;

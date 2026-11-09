@@ -315,6 +315,20 @@ export class AppHost implements vscode.Disposable {
         if (message.type === "open-session" && typeof message.id === "string") {
           void vscode.commands.executeCommand("opencodeGui.openSession", message.id);
         }
+        // The store's session rows retitle (auto-titler after the first
+        // prompt, renames); the tab label follows. The host's command
+        // ignores sessions without an open panel.
+        if (
+          message.type === "session-titled" &&
+          typeof message.id === "string" &&
+          typeof message.title === "string"
+        ) {
+          void vscode.commands.executeCommand(
+            "opencodeGui.setSessionTitle",
+            message.id,
+            message.title,
+          );
+        }
         // Home: another project's folder opens in a new window, optionally
         // deep-linking a session (the target window consumes pendingOpen).
         if (

@@ -6,6 +6,7 @@ import {
   SessionPanels,
   restoreTabSpot,
   sessionTabId,
+  sessionTabTitle,
   tabSpot,
 } from "./webview/ChatPanel";
 import { PeerRegistry } from "./webview/Peers";
@@ -283,16 +284,17 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(panels);
 
   // Reveal or create one session's panel, titled from the server once it
-  // can name it (the tab starts as the raw id). This is also the host side
-  // of the webview's "open-session" message (Stage B's navigator).
+  // can name it (the tab starts as the raw id; a session the server
+  // hasn't titled yet reads "New session", never the id). This is also
+  // the host side of the webview's "open-session" message (Stage B's
+  // navigator).
   const openSession = (id: string) => {
     const sm = ensureServer() ?? serverManager;
     const panel = panels.open(id);
     if (sm)
       void sm.ready.then(async () => {
         if (serverManager !== sm) return;
-        const title = await sm.sessionTitle(id);
-        if (title) panels.setTitle(id, title);
+        panels.setTitle(id, sessionTabTitle(await sm.sessionTitle(id)));
       });
     return panel;
   };
@@ -300,6 +302,16 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("opencodeGui.openSession", (id?: unknown) => {
       if (typeof id === "string") openSession(id);
     }),
+    // The app's store pushes session display-title changes (auto-titler,
+    // renames) so open tabs retitle live; setTitle ignores sessions
+    // without a panel.
+    vscode.commands.registerCommand(
+      "opencodeGui.setSessionTitle",
+      (id?: unknown, title?: unknown) => {
+        if (typeof id === "string" && typeof title === "string")
+          panels.setTitle(id, title);
+      },
+    ),
   );
 
   // The old in-app tab menu (pre-editor-tabs) lives again on the native

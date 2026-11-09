@@ -1486,6 +1486,22 @@ export function sessionTitle(s: Session | undefined, id: string): string {
   return raw.replace(/\s+\(@\S+ subagent\)$/, "");
 }
 
+// The host labels a session's editor tab once, at open; titles change
+// afterward (the auto-titler fills after the first prompt, renames land
+// here too). Push every display-title change so open tabs retitle live —
+// the host's setSessionTitle ignores sessions without a panel, and
+// sessionTabTitle (src/webview/ChatPanel.ts) covers the host-side
+// fallback until this store boots.
+const tabTitlesSent = new Map<string, string>();
+effect(() => {
+  for (const s of sessions.value) {
+    const title = sessionTitle(s, s.id);
+    if (tabTitlesSent.get(s.id) === title) continue;
+    tabTitlesSent.set(s.id, title);
+    postToHost({ type: "session-titled", id: s.id, title });
+  }
+});
+
 // Sub-agent sessions: task-tool spawns carry parentID; the title suffix
 // ("… (@agent subagent)") also catches the async-era spawns without one.
 export function isSubagentSession(s: Session): boolean {

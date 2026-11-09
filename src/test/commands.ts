@@ -114,6 +114,11 @@ suite("opencode GUI commands", function () {
       "the tab's viewType embeds the session id",
     );
     assert.strictEqual(api.panels.lastActiveId, id, "opened as last-active");
+    // The tab never keeps the raw id: a session the server hasn't titled
+    // reads "New session" (the app's own label for empty titles), set
+    // from the host's at-open fetch.
+    await until(() => api.panels.get(id)?.title === "New session");
+    assert.strictEqual(api.panels.get(id)?.title, "New session");
   });
 
   test("a second session opens a second panel; closing one leaves the other", async function () {
