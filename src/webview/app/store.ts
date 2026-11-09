@@ -86,6 +86,7 @@ import {
   route,
 } from "./router";
 import {
+  grantBell,
   playPermissionSound,
   playQuestionSound,
   playReadySound,
@@ -1836,8 +1837,14 @@ function cancelRing(sessionID: string): void {
 
 function scheduleRing(sessionID: string): void {
   cancelRing(sessionID);
+  const fireAt = Date.now() + RING_GRACE_MS;
   ringTimers[sessionID] = window.setTimeout(() => {
     delete ringTimers[sessionID];
+    // Firing far past the schedule means this page was hidden — VS Code
+    // suspends hidden webviews, timers included — and slept through the
+    // moment a visible sibling already chimed for. A late chime would
+    // read as a random one on tab switch.
+    if (Date.now() - fireAt > 5_000) return;
     // Absence from the map is idle truth — a status adoption landing
     // mid-grace replaces the map wholesale with the busy-only payload
     // /session/status serves, and the just-written idle vanishes with it.
@@ -3487,6 +3494,7 @@ export function hostMessage(msg: unknown) {
     sessionId?: string;
     dialect?: string;
     url?: string;
+    kind?: string;
   };
   // The webview became visible again: events streamed while VS Code had
   // it suspended were lost — pull truth.
@@ -3546,6 +3554,14 @@ export function hostMessage(msg: unknown) {
   // The questionSound setting changed host-side.
   if (m.type === "question-sound" && typeof m.enabled === "boolean") {
     setQuestionSound(m.enabled);
+  }
+  // This page's chime claim won the host's window (every chat page
+  // claims the same event — see sound.ts); the granted page rings it.
+  if (
+    m.type === "bell-grant" &&
+    (m.kind === "ready" || m.kind === "permission" || m.kind === "question")
+  ) {
+    grantBell(m.kind);
   }
   // Composer "+" (attach): the host open dialog answered. The dialog can't
   // filter by type, so the attachment gate applies here — name/type first,

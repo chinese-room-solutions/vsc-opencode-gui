@@ -39,6 +39,7 @@ export class OpencodeViewProvider implements vscode.WebviewViewProvider {
       extensionUri,
       kind: "navigator",
       ...deps,
+      claimBell: (kind) => this._hub.claimBell(kind),
     });
     _hub.register(this._chat);
   }

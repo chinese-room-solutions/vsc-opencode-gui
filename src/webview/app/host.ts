@@ -30,6 +30,12 @@ export function postToHost(message: unknown): void {
   api?.postMessage(message);
 }
 
+// True when this page runs under the extension host (the vscode api was
+// captured). False standalone (the ui rig's plain browser tab).
+export function isHosted(): boolean {
+  return api !== undefined;
+}
+
 // Open a file (relative paths resolved host-side) at an optional 1-based
 // line range.
 export function openFile(path: string, line?: string, endLine?: string): void {

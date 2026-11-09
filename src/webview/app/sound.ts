@@ -8,6 +8,7 @@
 import readySoundUrl from "./bip-bop-01.mp3";
 import permissionSoundUrl from "./bip-bop-03.mp3";
 import questionSoundUrl from "./bip-bop-03.mp3";
+import { isHosted, postToHost } from "./host";
 
 // bip-bop-01 is two blips 200 ms apart (the "bip" then the "bop"); the
 // ready chime plays the first only — one attention glug, not a double
@@ -90,8 +91,14 @@ function buffer(url: string): Promise<AudioBuffer | undefined> {
   return cached;
 }
 
-// The sidebar and the editor tab are separate apps on one origin: the
-// localStorage gate keeps one chime per window, not one per panel. One key
+// The window's chime is claimed, not throttled, when hosted: VS Code
+// keys every webview origin by viewType, so the sidebar and each session
+// tab are all DIFFERENT origins — localStorage never crosses them, and
+// every page runs the full store and rings the same event. The
+// extension host arbitrates (ChatHub.claimBell): pages that CAN ring
+// claim, the first claim inside the window is granted it — one chime
+// per window, not one per panel. Without a host bridge (a raw served
+// bundle), the localStorage gate below is the whole throttle. One key
 // per sound — two events landing together must not silence each other.
 const THROTTLE_MS = 1500;
 
@@ -119,14 +126,52 @@ function bell(url: string, enabled: boolean, throttleKey: string): void {
   }
 }
 
+export type BellKind = "ready" | "permission" | "question";
+
+function ring(
+  url: string,
+  enabled: boolean,
+  throttleKey: string,
+  kind: BellKind,
+): void {
+  if (!enabled) return;
+  if (isHosted()) {
+    // Only a page that CAN ring claims — a suspended AudioContext must
+    // not consume another page's chime (the claim window is the gate).
+    if (context()?.state !== "running") return;
+    postToHost({ type: "bell-claim", kind });
+    return;
+  }
+  bell(url, enabled, throttleKey);
+}
+
+// The host granted this page the window's chime — its claim won.
+export function grantBell(kind: BellKind): void {
+  if (kind === "ready")
+    bell(readySoundUrl, readyEnabled, "opencode.bellAt.ready");
+  else if (kind === "permission")
+    bell(permissionSoundUrl, permissionEnabled, "opencode.bellAt.permission");
+  else bell(questionSoundUrl, questionEnabled, "opencode.bellAt.question");
+}
+
 export function playReadySound(): void {
-  bell(readySoundUrl, readyEnabled, "opencode.bellAt.ready");
+  ring(readySoundUrl, readyEnabled, "opencode.bellAt.ready", "ready");
 }
 
 export function playPermissionSound(): void {
-  bell(permissionSoundUrl, permissionEnabled, "opencode.bellAt.permission");
+  ring(
+    permissionSoundUrl,
+    permissionEnabled,
+    "opencode.bellAt.permission",
+    "permission",
+  );
 }
 
 export function playQuestionSound(): void {
-  bell(questionSoundUrl, questionEnabled, "opencode.bellAt.question");
+  ring(
+    questionSoundUrl,
+    questionEnabled,
+    "opencode.bellAt.question",
+    "question",
+  );
 }

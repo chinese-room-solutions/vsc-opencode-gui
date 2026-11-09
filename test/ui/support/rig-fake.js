@@ -124,6 +124,11 @@ const stubFor = (nonce, serverUrl) =>
   // preview (a tiny decodable PNG); anything else falls through to the
   // log branch below with no reply, like the host staying silent.
   `window.postMessage({ type: "attachment-preview", path: m.path, url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" }, "*");` +
+  `} else if (m && m.type === "bell-claim") {` +
+  // Like ChatHub.claimBell: the rig's single page always wins the
+  // window, so the grant comes straight back.
+  `(window.__hostPosted = window.__hostPosted || []).push(m);` +
+  `window.postMessage({ type: "bell-grant", kind: m.kind }, "*");` +
   `} else {` +
   // Host-directed posts (open-session, open-project, …) recorded for
   // specs to assert; the console line stays for manual rig sessions.

@@ -62,6 +62,10 @@ export interface HiddenProviders {
 // a "navigator" host is the sidebar view. Stage B splits the app on it.
 export type HostKind = "navigator" | "session";
 
+// The three attention chimes (the app's sound.ts owns playback; the kinds
+// cross the seam so the host can arbitrate who rings).
+export type BellKind = "ready" | "permission" | "question";
+
 export interface AppHostOptions {
   extensionUri: vscode.Uri;
   kind: HostKind;
@@ -74,6 +78,11 @@ export interface AppHostOptions {
   openProject: OpenProjectHandler;
   hiddenModels: HiddenModels;
   hiddenProviders: HiddenProviders;
+  // Window-wide chime arbiter (ChatHub): true when this page's claim won
+  // the window and the grant should be posted back. Every chat page rings
+  // the same event, and webview origins don't cross (VS Code keys them by
+  // viewType), so nothing browser-side can gate them.
+  claimBell?: (kind: BellKind) => boolean;
 }
 
 // The app pings at boot, then every 15 s. Silence past three cadences
@@ -136,6 +145,7 @@ export class AppHost implements vscode.Disposable {
   private readonly _openProject: OpenProjectHandler;
   private readonly _hiddenModels: HiddenModels;
   private readonly _hiddenProviders: HiddenProviders;
+  private readonly _claimBell: ((kind: BellKind) => boolean) | undefined;
 
   constructor(options: AppHostOptions) {
     this._extensionUri = options.extensionUri;
@@ -147,6 +157,7 @@ export class AppHost implements vscode.Disposable {
     this._openProject = options.openProject;
     this._hiddenModels = options.hiddenModels;
     this._hiddenProviders = options.hiddenProviders;
+    this._claimBell = options.claimBell;
   }
 
   private _webview?: vscode.Webview;
@@ -205,6 +216,17 @@ export class AppHost implements vscode.Disposable {
         // parsed reply back. Always answers, on failure too.
         if (message.type === "api-request") {
           void this._relayApi(message);
+        }
+        // The page asks to ring the window's chime (sound.ts's claim):
+        // grant it only when the arbiter says this page won the window.
+        if (
+          message.type === "bell-claim" &&
+          (message.kind === "ready" ||
+            message.kind === "permission" ||
+            message.kind === "question") &&
+          this._claimBell?.(message.kind)
+        ) {
+          this._post({ type: "bell-grant", kind: message.kind });
         }
         // Editor-true code blocks: tokenize a fenced block with the real
         // grammar and theme (src/tokenizer.ts) and hand back the token runs.

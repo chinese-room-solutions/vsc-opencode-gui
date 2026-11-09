@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { serverAuthHeaders } from "../server/serverAuth";
 import type { Dialect } from "../server/dialect";
-import { AppHost, type ServerEvent, type SseState } from "./AppHost";
+import { AppHost, type BellKind, type ServerEvent, type SseState } from "./AppHost";
 import type { PeerInfo } from "./Peers";
 
 type State =
@@ -15,6 +15,8 @@ const MAX_BACKOFF_MS = 15_000;
 // stream silent for this long is dead-but-open (standby, network switch) —
 // `read()` would pend forever without this, wedging the app mid-turn.
 const NO_FRAME_MS = 30_000;
+// One granted chime per sound inside this window (see claimBell).
+const BELL_WINDOW_MS = 1_500;
 
 // Owns the last loading/error/url state and the server event-stream pumps,
 // fanning both out to every chat webview (sidebar + one editor tab per
@@ -41,6 +43,20 @@ export class ChatHub implements vscode.Disposable {
   // Current loading/error/url state (test surface).
   get state(): State {
     return this._state;
+  }
+
+  // The chime arbiter: every chat page (sidebar + one tab per session)
+  // runs the full store and rings the same event, and their webview
+  // origins differ, so the claim lands here — the first claim inside
+  // the window is granted the ring: one chime per window per sound.
+  // Mirrors THROTTLE_MS in the app's sound.ts.
+  private readonly _bellAt = new Map<BellKind, number>();
+
+  claimBell(kind: BellKind): boolean {
+    const now = Date.now();
+    if (now - (this._bellAt.get(kind) ?? 0) < BELL_WINDOW_MS) return false;
+    this._bellAt.set(kind, now);
+    return true;
   }
 
   register(chat: AppHost) {

@@ -205,7 +205,7 @@ function defaultResponder({ method, path }: ApiCall): unknown {
 
 captureApi({
   postMessage(message: unknown): void {
-    const m = message as ApiCall & { type: string; id: number };
+    const m = message as ApiCall & { type: string; id: number; kind?: string };
     if (m && m.type === "api-request") {
       const call = { method: m.method, path: m.path, body: m.body };
       apiLog.push(call);
@@ -235,6 +235,18 @@ captureApi({
           json: failed ? undefined : result,
           ...(error ? { error } : {}),
         }),
+      );
+      return;
+    }
+    // The chime claim: the host's arbiter grants the first claim (the
+    // common case — one hosted page, or the window's winner). The grant
+    // rides hostMessage like any host-driven message; the dynamic import
+    // keeps store.ts out of this module's import phase (globals install
+    // first — sound.ts reads the document stub at import).
+    if (m && m.type === "bell-claim") {
+      hostPosted.push(message);
+      void import("./store").then(({ hostMessage }) =>
+        hostMessage({ type: "bell-grant", kind: m.kind }),
       );
       return;
     }

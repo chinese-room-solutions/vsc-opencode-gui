@@ -186,6 +186,11 @@ const stubFor = (nonce, serverUrl) => {
   `window.postMessage({ type: "api-result", id: m.id, ok: false, error: e && e.name === "TimeoutError" ? "request timed out" : "fetch failed" }, "*");` +
   `}` +
   `})();` +
+  `} else if (m && m.type === "bell-claim") {` +
+  // Like ChatHub.claimBell: the rig's single page always wins the
+  // window, so the grant comes straight back.
+  `(window.__hostPosted = window.__hostPosted || []).push(m);` +
+  `window.postMessage({ type: "bell-grant", kind: m.kind }, "*");` +
   `} else {` +
   // Host-directed posts (open-session, open-project, …) recorded for
   // specs to assert; the console line stays for manual rig sessions.

@@ -275,6 +275,79 @@ suite("opencode GUI lifecycle", function () {
     }
   });
 
+  test("one chime claim wins per window (bell arbitration)", async function () {
+    // Every chat page (sidebar + one tab per session) rings the same
+    // event, and webview origins don't cross — the hub arbitrates the
+    // claims so the window hears one chime, not one per panel.
+    const { AppHost } = await import("../webview/AppHost");
+    const { ChatHub } = await import("../webview/ChatHub");
+    const extUri = vscode.extensions.getExtension(
+      "chinese-room-solutions.vsc-opencode-gui",
+    )!.extensionUri;
+    const hub = new ChatHub();
+    const noopStore = { get: () => undefined, set: () => {} };
+    const mk = (n: number) => {
+      const posted: { type?: string; kind?: string }[] = [];
+      let onMessage: ((m: unknown) => void) | undefined;
+      const host = new AppHost({
+        extensionUri: extUri,
+        kind: "session",
+        sessionId: `ses-bell-${n}`,
+        routeStore: noopStore as never,
+        tabsStore: { get: () => [] } as never,
+        projectStore: {
+          list: () => [],
+          tombstoned: () => false,
+          tombstone: () => {},
+        } as never,
+        openProject: () => Promise.resolve(),
+        hiddenModels: { get: () => [] },
+        hiddenProviders: { get: () => [] },
+        claimBell: (kind) => hub.claimBell(kind),
+      });
+      host.attach({
+        options: undefined,
+        onDidReceiveMessage: (cb: (m: unknown) => void) => {
+          onMessage = cb;
+          return { dispose: () => {} };
+        },
+        postMessage: (m: unknown) => {
+          posted.push(m as never);
+          return Promise.resolve(true);
+        },
+        asWebviewUri: (u: vscode.Uri) => u,
+        cspSource: "https://test",
+      } as never);
+      return {
+        claim: (kind: string) => onMessage?.({ type: "bell-claim", kind }),
+        get grants() {
+          return posted.filter((m) => m.type === "bell-grant");
+        },
+        host,
+      };
+    };
+    const a = mk(1);
+    const b = mk(2);
+    try {
+      a.claim("ready");
+      b.claim("ready"); // inside the same window: denied
+      assert.strictEqual(a.grants.length, 1, "first claim granted");
+      assert.strictEqual(b.grants.length, 0, "second claim denied in the window");
+      b.claim("permission"); // a different sound owns its own window
+      assert.strictEqual(b.grants.length, 1, "other sound's window is separate");
+      assert.strictEqual(b.grants[0]?.kind, "permission", "grant carries the kind");
+      // The window frees after the interval (BELL_WINDOW_MS = 1.5 s).
+      await new Promise((r) => setTimeout(r, 1600));
+      b.claim("ready");
+      assert.strictEqual(b.grants.length, 2, "window reopened after the interval");
+      assert.strictEqual(b.grants[1]?.kind, "ready");
+    } finally {
+      a.host.dispose();
+      b.host.dispose();
+      hub.dispose();
+    }
+  });
+
   suiteTeardown(function () {
     assert.deepStrictEqual(
       uncaught,
