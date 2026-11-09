@@ -191,6 +191,13 @@ body {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  /* Rows are actions, not text: a drag or a shift-click must not sweep
+     the labels into a selection (the panel's inputs stay selectable). */
+  user-select: none;
+}
+
+.home input {
+  user-select: text;
 }
 
 /* The Sessions header's New session action: a quiet icon button in the
