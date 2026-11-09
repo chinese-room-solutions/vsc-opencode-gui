@@ -1328,9 +1328,11 @@ body {
 
 /* The compaction fold (Claude Code): collapsed "Compacted chat · manual ·
    Nk tokens freed" header, expanding to the summary. Collapsed by default;
-   forced open while the summary streams. */
+   forced open while the summary streams. Bottom margin mirrors the pill's
+   own 23px lane — the fold closes the exchange the /compact pill opened,
+   and the next pill must clear it by the same air. */
 .compacted {
-  margin: 10px 0 2px;
+  margin: 10px 0 23px;
 }
 
 .compacted-summary {
