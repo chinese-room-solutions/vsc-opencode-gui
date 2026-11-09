@@ -191,7 +191,7 @@
       "activitybar": [
         {
           "id": "opencodegui-sidebar",
-          "title": "opencode GUI",
+          "title": "OpenCode GUI",
           "icon": "icon.svg"
         }
       ]
@@ -201,7 +201,7 @@
         {
           "type": "webview",
           "id": "opencodeGui.chatView",
-          "name": "Sessions"
+          "name": "OpenCode GUI"
         }
       ]
     },
