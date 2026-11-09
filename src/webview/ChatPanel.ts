@@ -10,6 +10,7 @@ import {
 } from "./AppHost";
 import { ChatHub } from "./ChatHub";
 import { TabIconSet, TabSignal } from "./TabSignal";
+import { log } from "../log";
 
 // One editor tab per session (the Claude Code model). The viewType embeds
 // the session id: WebviewPanelSerializer's state argument is always
@@ -35,6 +36,61 @@ export function sessionTabId(tab: vscode.Tab): string | undefined {
     if (viewType.startsWith(prefix)) return viewType.slice(prefix.length);
   }
   return undefined;
+}
+
+// Where one session's editor tab currently sits (a session has one).
+export interface TabSpot {
+  column: vscode.ViewColumn;
+  index: number;
+}
+
+export function tabSpot(id: string): TabSpot | undefined {
+  for (const g of vscode.window.tabGroups.all) {
+    const index = g.tabs.findIndex((t) => sessionTabId(t) === id);
+    if (index !== -1) return { column: g.viewColumn, index };
+  }
+  return undefined;
+}
+
+// Swapping a tab (revive, dead-webview rebuild) closes it and opens a
+// fresh one, which VS Code appends to the strip's end — every swap would
+// shuffle the user's tab order. The stable Tabs API cannot move a tab, so
+// drive the workbench's own move command ("Move Editor Left/Right" wrap
+// it): it moves the ACTIVE group's active editor to an exact 1-based
+// index. The swap just showed the fresh tab, so it is that editor; if the
+// user has already switched away, the tab stays where VS Code put it.
+export function restoreTabSpot(id: string, spot: TabSpot | undefined): void {
+  if (!spot) return;
+  void (async () => {
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      const group = vscode.window.tabGroups.all.find((g) =>
+        g.tabs.some((t) => sessionTabId(t) === id),
+      );
+      const tab = group?.tabs.find((t) => sessionTabId(t) === id);
+      if (
+        group &&
+        tab &&
+        tab.isActive &&
+        vscode.window.tabGroups.activeTabGroup.viewColumn === group.viewColumn
+      ) {
+        if (
+          group.viewColumn === spot.column &&
+          group.tabs.indexOf(tab) !== spot.index
+        ) {
+          await vscode.commands.executeCommand("moveActiveEditor", {
+            to: "position",
+            by: "tab",
+            value: spot.index + 1,
+          });
+        }
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  })().catch((err: unknown) =>
+    log.error("restoring a session tab's position failed:", err),
+  );
 }
 
 export interface SessionPanelsDeps {
@@ -272,10 +328,14 @@ export class SessionPanels implements vscode.Disposable {
   }
 
   // Throw one session's panel away and build a fresh one (dead-webview
-  // recovery: only a fresh webview revives a dead renderer).
+  // recovery: only a fresh webview revives a dead renderer), keeping the
+  // tab's place in the strip.
   recreate(id: string): SessionPanel {
+    const spot = tabSpot(id);
     this._panels.get(id)?.dispose();
-    return this.open(id);
+    const panel = this.open(id);
+    restoreTabSpot(id, spot);
+    return panel;
   }
 
   // Register this window's revival serializer for one session viewType.
@@ -292,12 +352,16 @@ export class SessionPanels implements vscode.Disposable {
           // A revived tab carries its persisted (readonly) panel options —
           // swap it: a fresh panel in the same column first (the group
           // never empties), then drop the restored one. The restored tab's
-          // label keeps the session title without a server round-trip.
+          // label keeps the session title without a server round-trip,
+          // and its slot in the strip is kept (a fresh tab would land at
+          // the end, reordering the user's tabs).
+          const spot = tabSpot(id);
           this.open(id, {
             column: panel.viewColumn ?? vscode.ViewColumn.Active,
             title: panel.title,
           });
           panel.dispose();
+          restoreTabSpot(id, spot);
           return Promise.resolve();
         },
       }),

@@ -4,7 +4,9 @@ import { OpencodeViewProvider } from "./webview/OpencodeViewProvider";
 import { ChatHub } from "./webview/ChatHub";
 import {
   SessionPanels,
+  restoreTabSpot,
   sessionTabId,
+  tabSpot,
 } from "./webview/ChatPanel";
 import { PeerRegistry } from "./webview/Peers";
 import { TabIconSet } from "./webview/TabSignal";
@@ -484,8 +486,12 @@ export function activate(context: vscode.ExtensionContext) {
     healTimer = setTimeout(() => {
       healTimer = undefined;
       for (const { tab, id } of activeStrays()) {
+        const spot = tabSpot(id);
         void vscode.window.tabGroups.close(tab).then(
-          () => openSession(id),
+          () => {
+            openSession(id);
+            restoreTabSpot(id, spot);
+          },
           (err) => log.error("heal: closing a stray session tab failed:", err),
         );
       }

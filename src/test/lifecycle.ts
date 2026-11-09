@@ -24,6 +24,7 @@ type Api = {
   panels: {
     open(id: string): SessionPanelLike;
     has(id: string): boolean;
+    recreate(id: string): SessionPanelLike;
   };
   serverPort: number | undefined;
   ensureServer: () => void;
@@ -233,6 +234,90 @@ suite("opencode GUI lifecycle", function () {
         for (const tab of g.tabs) {
           if (sessionTabId(tab) === sid) void vscode.window.tabGroups.close(tab);
         }
+      }
+    }
+  });
+
+  test("rebuilding a session panel keeps its place in the tab strip", async function () {
+    // Every tab swap (reload revive, dead-webview recreate, stray heal)
+    // closes the old tab and opens a fresh one, which VS Code places at
+    // the strip's end — without a spot restore every reload shuffles the
+    // user's session tabs. recreate() is the same swap the serializer
+    // performs on revival, so it pins the shared mechanism.
+    const mk = async () => {
+      const res = await fetch(`${await waitForUrl(api)}/api/session`, {
+        method: "POST",
+        headers: { ...api.authHeaders(), "content-type": "application/json" },
+        body: "{}",
+      });
+      assert.ok(res.ok, `session created (${res.status})`);
+      const j = (await res.json()) as { data?: { id?: string }; id?: string };
+      const id = j.data?.id ?? j.id;
+      assert.ok(id, "session id in the reply");
+      return id as string;
+    };
+    const sid1 = await mk();
+    const sid2 = await mk();
+    api.panels.open(sid1);
+    api.panels.open(sid2);
+    const order = () => {
+      const g = vscode.window.tabGroups.all.find((gr) =>
+        gr.tabs.some((t) => sessionTabId(t) === sid1),
+      );
+      return g ? g.tabs.map((t) => sessionTabId(t)) : [];
+    };
+    try {
+      // The ext host's tab view lags createWebviewPanel; settle first.
+      // Earlier runs' tabs can linger in the harness window, so the
+      // assertions are about THIS pair's indexes, not the whole strip.
+      const settle = Date.now() + 10_000;
+      while (
+        Date.now() < settle &&
+        !(order().includes(sid1) && order().includes(sid2))
+      )
+        await new Promise((r) => setTimeout(r, 200));
+      const before = order();
+      assert.ok(
+        before.indexOf(sid1) !== -1 && before.indexOf(sid2) !== -1,
+        `both session tabs are open (${before.join(", ")})`,
+      );
+      assert.ok(
+        before.indexOf(sid1) < before.indexOf(sid2),
+        "the two tabs opened in order",
+      );
+      const spot1 = before.indexOf(sid1);
+      const spot2 = before.indexOf(sid2);
+      api.panels.recreate(sid1);
+      // The spot restore fires an async move; poll until it lands.
+      const deadline = Date.now() + 10_000;
+      let after: (string | undefined)[] = [];
+      while (Date.now() < deadline) {
+        after = order();
+        if (after.indexOf(sid1) === spot1) break;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      assert.strictEqual(
+        after.indexOf(sid1),
+        spot1,
+        `the rebuilt tab kept its index (strip: ${after.join(", ")})`,
+      );
+      assert.strictEqual(
+        after.indexOf(sid2),
+        spot2,
+        `the neighbor kept its index (strip: ${after.join(", ")})`,
+      );
+    } finally {
+      // Close every session tab (not just this test's): leftover tabs
+      // persist into later runs' harness windows and muddy the strip.
+      const gone = Date.now() + 5_000;
+      while (Date.now() < gone) {
+        const tabs = vscode.window.tabGroups.all.flatMap((g) => g.tabs);
+        if (!tabs.some((t) => sessionTabId(t) !== undefined)) break;
+        for (const tab of tabs) {
+          if (sessionTabId(tab) !== undefined)
+            void vscode.window.tabGroups.close(tab);
+        }
+        await new Promise((r) => setTimeout(r, 300));
       }
     }
   });
