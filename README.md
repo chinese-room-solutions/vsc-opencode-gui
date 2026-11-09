@@ -22,7 +22,8 @@ and the chat UI talks to it directly.
   empty session isn't kept: its tab isn't restored and it stays out of
   history until its first message.
 - **Sessions side panel** - two collapsible sections, Source Control
-  style, with a draggable split: Projects (own search) above
+  style, with a draggable split (default half, remembered across
+  reloads) that pins the border: Projects (own search) above
   day-grouped sessions that load older rows as you scroll, with
   whole-history search. Clicking a project narrows the sessions;
   rename/recolor, fork, and bulk delete stay on the rows. Clicking a

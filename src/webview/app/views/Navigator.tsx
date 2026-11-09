@@ -74,13 +74,29 @@ let anchorDir: string | undefined;
 const projectsOpen = signal(true);
 const sessionsOpen = signal(true);
 const projQuery = signal("");
-// Projects section height once the user drags the split; undefined until
-// then (the section sizes to its content). Applies while expanded.
-const projH = signal<number | undefined>(undefined);
+// The Projects/Sessions split: a fraction of the column's height — 50/50
+// by default, remembered in localStorage so a reload keeps the user's
+// proportion. A fixed height (flex: none, derived from the fraction)
+// also pins the border: content changes in either section can't move it.
+const SPLIT_KEY = "opencode-nav-split";
+const splitFrac = signal<number>((() => {
+  const v = Number(localStorage.getItem(SPLIT_KEY));
+  return Number.isFinite(v) && v > 0 && v < 1 ? v : 0.5;
+})());
+// The column's measured height; 0 until the ResizeObserver's first tick.
+const homeH = signal(0);
+const splitPx = (): number => {
+  const h = homeH.value;
+  return Math.min(
+    Math.max(Math.round(splitFrac.value * h), 40),
+    Math.max(60, h - 160),
+  );
+};
 // Live drag state; held here because pointer capture keeps the events on
 // the divider, and Preact handlers close over the module scope.
-let splitDrag: { startY: number; startH: number; maxH: number } | undefined;
-
+let splitDrag:
+  | { startY: number; startH: number; maxH: number; baseH: number }
+  | undefined;
 const isPickClick = (e: MouseEvent) =>
   e.ctrlKey || e.metaKey || e.shiftKey;
 
@@ -348,9 +364,18 @@ export function Navigator() {
     return () => clearTimeout(t);
   }, [query]);
 
+  const homeEl = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = homeEl.current;
+    if (!el) return;
+    homeH.value = el.clientHeight;
+    const ro = new ResizeObserver(() => (homeH.value = el.clientHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   return (
-    <div
-      class="home"
+    <div ref={homeEl} class="home"
       onClick={(e) => {
         // A click landing on no row, dock, or dialog drops the picks —
         // except the list's own controls (Load older sessions), which
@@ -372,8 +397,8 @@ export function Navigator() {
       <section
         class="nav-sec proj-sec"
         style={
-          projectsOpen.value && projH.value !== undefined
-            ? { height: `${projH.value}px`, flex: "none" }
+          projectsOpen.value && homeH.value > 0
+            ? { height: `${splitPx()}px`, flex: "none" }
             : undefined
         }
       >
@@ -448,26 +473,30 @@ export function Navigator() {
             if (!home || !proj) return;
             splitDrag = {
               startY: e.clientY,
-              startH:
-                projH.value ?? proj.getBoundingClientRect().height,
+              startH: splitPx(),
               // Keep a usable Sessions section below: header, search, a
               // few rows.
-              maxH: Math.max(60, home.clientHeight - 160),
+              maxH: Math.max(60, homeH.value - 160),
+              baseH: Math.max(1, homeH.value),
             };
             div.setPointerCapture(e.pointerId);
           }}
           onPointerMove={(e) => {
             if (!splitDrag) return;
             // The border follows the pointer: dragging up moves the split
-            // up, shrinking Projects and growing Sessions.
-            projH.value = Math.round(
-              Math.min(
-                splitDrag.maxH,
-                Math.max(40, splitDrag.startH + (e.clientY - splitDrag.startY)),
-              ),
+            // up, shrinking Projects and growing Sessions. The fraction is
+            // what's kept, so a later resize keeps the proportion.
+            const h = Math.min(
+              splitDrag.maxH,
+              Math.max(40, splitDrag.startH + (e.clientY - splitDrag.startY)),
             );
+            splitFrac.value = h / splitDrag.baseH;
           }}
-          onPointerUp={() => (splitDrag = undefined)}
+          onPointerUp={() => {
+            if (splitDrag)
+              localStorage.setItem(SPLIT_KEY, String(splitFrac.value));
+            splitDrag = undefined;
+          }}
           onPointerCancel={() => (splitDrag = undefined)}
         />
       )}

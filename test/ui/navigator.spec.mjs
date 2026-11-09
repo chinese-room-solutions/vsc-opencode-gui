@@ -215,3 +215,38 @@ test("dragging the split resizes Projects against Sessions", async ({ page }) =>
     rig.stop();
   }
 });
+
+test("the split defaults to half and survives a reload", async ({ page }) => {
+  const rig = await startRig({ env: ENV });
+  try {
+    await page.goto(rig.url);
+    await expect(page.locator(".sess-row").first()).toBeVisible({ timeout: 15_000 });
+    const height = (sel) =>
+      page.locator(sel).evaluate((el) => el.getBoundingClientRect().height);
+    const homeH = await page.locator(".home").evaluate((el) => el.clientHeight);
+
+    // Fresh boot, nothing stored: half and half.
+    await expect.poll(() => height(".proj-sec")).toBeCloseTo(homeH / 2, -1);
+
+    // Drag 100px down, then reload: the proportion comes back (same
+    // viewport, same pixels).
+    const split = page.locator(".nav-split");
+    const box = await split.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(
+      box.x + box.width / 2,
+      box.y + box.height / 2 + 100,
+      { steps: 4 },
+    );
+    await page.mouse.up();
+    const dragged = await height(".proj-sec");
+    await expect.poll(() => height(".proj-sec")).toBeCloseTo(homeH / 2 + 100, -1);
+
+    await page.reload();
+    await expect(page.locator(".sess-row").first()).toBeVisible({ timeout: 15_000 });
+    await expect.poll(() => height(".proj-sec")).toBeCloseTo(dragged, 0);
+  } finally {
+    rig.stop();
+  }
+});
