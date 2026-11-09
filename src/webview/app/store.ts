@@ -78,7 +78,7 @@ import {
 } from "./api";
 import { connectEvents, type ServerEvent } from "./events";
 import { translateV2Event, v2RowID } from "./v2events";
-import { postToHost } from "./host";
+import { hostSessionId, postToHost } from "./host";
 import { parseMentions } from "./mentions";
 import { setCopyModifier } from "./markdown";
 import {
@@ -1946,6 +1946,34 @@ function verifiedIdle(sessionID: string, land: () => void): void {
     });
 }
 
+// The tab-prefix facts for one session's editor tab (the old in-app
+// TabsBar prefix, now reported to the host): the spinner ran on a
+// strict "busy" (retry never spun), and a pending ask painted the tab of
+// the asking session's parent-chain ROOT yellow — a locked sub-agent
+// thread marked its parent's tab. Exported for the App-level poster and
+// its tests.
+export function tabFacts(root: string): { busy: boolean; attention: boolean } {
+  const busy = sessionStatus.value[root]?.type === "busy";
+  let attention = false;
+  for (const a of [...pendingPermissions.value, ...pendingQuestions.value]) {
+    // Walk up the parent chain; a malformed cycle must not spin forever.
+    let sid: string | undefined = a.sessionID;
+    const seen = new Set<string>();
+    while (sid !== undefined && !seen.has(sid)) {
+      seen.add(sid);
+      const row = sessions.value.find((s) => s.id === sid);
+      if (!row) break;
+      if (!row.parentID) {
+        if (row.id === root) attention = true;
+        break;
+      }
+      sid = row.parentID;
+    }
+    if (attention) break;
+  }
+  return { busy, attention };
+}
+
 function setIdle(sessionID: string): void {
   const tail = [...(messagesBySession.value.get(sessionID) ?? [])]
     .reverse()
@@ -1964,6 +1992,11 @@ function setIdle(sessionID: string): void {
   // this idle is a seam in the queue, not readiness. The sound lands
   // when the last one drains.
   if (hasQueued(sessionID)) return;
+  // A turn ended while its tab sat in the background: the green mark's
+  // moment (the panel clears it on activation — App.tsx's poster pairs
+  // this with the busy/attention facts).
+  if (hostSessionId() === sessionID)
+    postToHost({ type: "tab-signal", turnEnded: true });
   scheduleRing(sessionID);
 }
 

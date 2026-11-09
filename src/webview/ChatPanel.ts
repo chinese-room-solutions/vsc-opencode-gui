@@ -9,6 +9,7 @@ import {
   type TabsStore,
 } from "./AppHost";
 import { ChatHub } from "./ChatHub";
+import { TabIconSet, TabSignal } from "./TabSignal";
 
 // One editor tab per session (the Claude Code model). The viewType embeds
 // the session id: WebviewPanelSerializer's state argument is always
@@ -45,6 +46,8 @@ export interface SessionPanelsDeps {
   openProject: OpenProjectHandler;
   hiddenModels: HiddenModels;
   hiddenProviders: HiddenProviders;
+  // Generated tab icons (the status prefix's animated spinner/marks).
+  icons: TabIconSet;
   // Fires the server up (revival and panel opens need it eventually).
   ensureServer: () => void;
   // Notified with the open panel ids on every open/close, so main.ts can
@@ -64,6 +67,7 @@ class SessionPanel implements vscode.Disposable {
   private readonly _panel: vscode.WebviewPanel;
   private readonly _chat: AppHost;
   private readonly _stateSub: vscode.Disposable;
+  private readonly _signal: TabSignal<vscode.Uri | { light: vscode.Uri; dark: vscode.Uri }>;
   private readonly _onClose: () => void;
   // Set when teardown starts from dispose(); the panel's onDidDispose only
   // reports a user close (and runs _onClose) when it fires on its own.
@@ -90,6 +94,7 @@ class SessionPanel implements vscode.Disposable {
       hiddenModels: deps.hiddenModels,
       hiddenProviders: deps.hiddenProviders,
       claimBell: (kind) => deps.hub.claimBell(kind),
+      onTabSignal: (facts) => this._signal?.apply(facts, this._panel.active),
     });
     this._panel = vscode.window.createWebviewPanel(
       sessionViewType(_sessionId),
@@ -99,8 +104,31 @@ class SessionPanel implements vscode.Disposable {
         : opts.column ?? vscode.ViewColumn.Active,
       { enableScripts: true, retainContextWhenHidden: true, enableFindWidget: true },
     );
-    // Tab icon; panel tab icons don't support SVG, so PNG.
-    this._panel.iconPath = vscode.Uri.joinPath(deps.extensionUri, "icon.png");
+    // Tab icon: the idle base is the extension mark; the status prefix
+    // (spinner / yellow ask / green turn-ended) swaps in a
+    // self-animating APNG per state — the old in-app tab prefix,
+    // host-driven.
+    const idleIcon = vscode.Uri.joinPath(deps.extensionUri, "icon.png");
+    this._panel.iconPath = idleIcon;
+    this._signal = new TabSignal(
+      {
+        frame: (state) => {
+          if (state !== "busy")
+            return deps.icons.mark(
+              state === "attention" ? "attention" : "ready",
+            );
+          const light = deps.icons.spinner("light");
+          const dark = deps.icons.spinner("dark");
+          return light !== undefined && dark !== undefined
+            ? { light, dark }
+            : undefined;
+        },
+        idle: idleIcon,
+      },
+      (icon) => {
+        if (!this._disposed) this._panel.iconPath = icon;
+      },
+    );
     this._panel.onDidDispose(() => {
       // A close VS Code reported on its own (the user closed the tab):
       // run the full teardown including the manager's bookkeeping.
@@ -114,9 +142,11 @@ class SessionPanel implements vscode.Disposable {
     this._chat.attach(this._panel.webview);
     deps.hub.noteAttached(this._chat);
     // Events posted while VS Code had this panel hidden can be dropped;
-    // resync on activation, and record the session as last-active.
+    // resync on activation, and record the session as last-active. The
+    // activation also reads the tab: the green turn-ended mark clears.
     this._stateSub = this._panel.onDidChangeViewState((e) => {
       if (!e.webviewPanel.active) return;
+      this._signal.activated();
       this._chat.noteVisible();
       onActive(_sessionId);
     });
@@ -132,6 +162,11 @@ class SessionPanel implements vscode.Disposable {
 
   set title(value: string) {
     if (!this._disposed) this._panel.title = value;
+  }
+
+  // The tab's current icon (the status prefix's frame) — test surface.
+  get icon(): unknown {
+    return this._panel.iconPath;
   }
 
   get isActive(): boolean {

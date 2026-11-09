@@ -32,9 +32,9 @@ and the chat UI talks to it directly.
 - **Session tab menu** - right-click a session's editor tab for Copy
   Session ID, Fork, Rename, and Delete. The same commands sit in the
   command palette while a session tab is active.
-- **Notifications, visual and sound** - a tab pulses yellow when a session
-  waits on you, green when a turn finishes. Chimes play for finished
-  turns, permissions, and questions.
+- **Notifications, visual and sound** - a tab's icon spins while a session
+  works, pulses yellow when a session waits on you, green when a turn
+  finishes. Chimes play for finished turns, permissions, and questions.
 - **Steer mid-turn** - a prompt or command sent while the agent works runs
   after the current step. Hover one for **Revert**. A queued message
   returns to the input box, unsent. A sent prompt rewinds the session: it

@@ -66,6 +66,11 @@ export type HostKind = "navigator" | "session";
 // cross the seam so the host can arbitrate who rings).
 export type BellKind = "ready" | "permission" | "question";
 
+// The tab-status facts a session page reports (store.ts/App.tsx →
+// AppHost → SessionPanel's TabSignal). All optional: the busy/attention
+// poster and setIdle's turnEnded post are independent reporters.
+export type TabSignalFacts = import("./TabSignal").TabSignalFacts;
+
 export interface AppHostOptions {
   extensionUri: vscode.Uri;
   kind: HostKind;
@@ -83,6 +88,8 @@ export interface AppHostOptions {
   // the same event, and webview origins don't cross (VS Code keys them by
   // viewType), so nothing browser-side can gate them.
   claimBell?: (kind: BellKind) => boolean;
+  // The page's tab-status facts landed (a session host's TabSignal).
+  onTabSignal?: (facts: TabSignalFacts) => void;
 }
 
 // The app pings at boot, then every 15 s. Silence past three cadences
@@ -146,6 +153,7 @@ export class AppHost implements vscode.Disposable {
   private readonly _hiddenModels: HiddenModels;
   private readonly _hiddenProviders: HiddenProviders;
   private readonly _claimBell: ((kind: BellKind) => boolean) | undefined;
+  private readonly _onTabSignal: ((facts: TabSignalFacts) => void) | undefined;
 
   constructor(options: AppHostOptions) {
     this._extensionUri = options.extensionUri;
@@ -158,6 +166,7 @@ export class AppHost implements vscode.Disposable {
     this._hiddenModels = options.hiddenModels;
     this._hiddenProviders = options.hiddenProviders;
     this._claimBell = options.claimBell;
+    this._onTabSignal = options.onTabSignal;
   }
 
   private _webview?: vscode.Webview;
@@ -227,6 +236,19 @@ export class AppHost implements vscode.Disposable {
           this._claimBell?.(message.kind)
         ) {
           this._post({ type: "bell-grant", kind: message.kind });
+        }
+        // The session page's tab-status facts (busy/attention poster and
+        // setIdle's turnEnded post): coerce and hand to the panel's
+        // TabSignal; absent fields stay untouched.
+        if (message.type === "tab-signal" && this._onTabSignal) {
+          const m = message as { busy?: unknown; attention?: unknown; turnEnded?: unknown };
+          this._onTabSignal({
+            ...(typeof m.busy === "boolean" ? { busy: m.busy } : {}),
+            ...(typeof m.attention === "boolean"
+              ? { attention: m.attention }
+              : {}),
+            ...(m.turnEnded === true ? { turnEnded: true } : {}),
+          });
         }
         // Editor-true code blocks: tokenize a fenced block with the real
         // grammar and theme (src/tokenizer.ts) and hand back the token runs.
@@ -770,6 +792,9 @@ export class AppHost implements vscode.Disposable {
       .replaceAll("{{INSTALL_HINT}}", error?.showInstallHint ? "1" : "")
       // Which host this page is for (Stage B splits the app on it).
       .replaceAll("{{HOST_KIND}}", this._kind)
+      // The pinned session of a "session" host — the tab-signal poster
+      // gates on it (only the tab's own page reports its facts).
+      .replaceAll("{{SESSION_ID}}", this._sessionId ?? "")
       // The boot route: a session panel opens straight into its session;
       // the navigator starts home.
       .replaceAll(

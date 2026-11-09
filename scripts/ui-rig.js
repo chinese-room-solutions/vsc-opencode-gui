@@ -209,6 +209,15 @@ const shellHtml = (serverUrl) => {
   // meta attributes, and the JSON ones carry double quotes.
   const attr = (s) =>
     s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;");
+  // The session id behind a session-route boot ("" for any other route).
+  const routeSessionId = () => {
+    try {
+      const r = JSON.parse(process.env.OPENCODE_ROUTE || "");
+      return r && r.view === "session" && typeof r.id === "string" ? r.id : "";
+    } catch {
+      return "";
+    }
+  };
   return fs
     .readFileSync(template, "utf-8")
     // The theme style carries its own {{NONCE}} placeholder, so it goes
@@ -234,6 +243,9 @@ const shellHtml = (serverUrl) => {
       "{{HOST_KIND}}",
       process.env.OPENCODE_HOST === "navigator" ? "navigator" : "session",
     )
+    // The session a session panel is pinned to (AppHost bakes the same
+    // from its options) — derived from the boot route.
+    .replaceAll("{{SESSION_ID}}", attr(routeSessionId()))
     // Boot-restore metas honor env so Playwright can exercise restore
     // (same contract as AppHost: the host bakes what it stored).
     .replaceAll("{{ROUTE}}", attr(process.env.OPENCODE_ROUTE || ""))

@@ -1,9 +1,10 @@
 import { Navigator } from "./views/Navigator";
 import { Session } from "./views/Session";
 import { Lightbox } from "./components/Lightbox";
-import { hostKind } from "./host";
+import { useEffect } from "preact/hooks";
+import { hostKind, hostSessionId, postToHost } from "./host";
 import { route } from "./router";
-import { status } from "./store";
+import { status, tabFacts } from "./store";
 import DOMPurify from "dompurify";
 
 // Shell: one content panel filling the host. A session
@@ -58,10 +59,28 @@ function SessionPanel() {
     );
   }
   return (
-    <Session
-      key={`${r.id}:${r.child ?? ""}`}
-      sessionId={r.child ?? r.id}
-      parent={r.child ? r.id : undefined}
-    />
+    <>
+      {/* The tab's status prefix (spinner / yellow / green) is host-side
+          (panel.iconPath): this poster reports the ROOT session's facts —
+          the tab stays the root's even while drilled into a child. */}
+      <TabSignalPoster root={r.id} />
+      <Session
+        key={`${r.id}:${r.child ?? ""}`}
+        sessionId={r.child ?? r.id}
+        parent={r.child ? r.id : undefined}
+      />
+    </>
   );
+}
+
+// Reports the root session's busy/attention to the host whenever they
+// change (turnEnded posts separately from the store's setIdle). The
+// meta gate keeps the navigator and mis-pinned pages silent.
+function TabSignalPoster(props: { root: string }) {
+  const facts = tabFacts(props.root);
+  useEffect(() => {
+    if (hostSessionId() !== props.root) return;
+    postToHost({ type: "tab-signal", ...facts });
+  }, [props.root, facts.busy, facts.attention]);
+  return null;
 }

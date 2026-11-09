@@ -11,6 +11,7 @@ import {
   flushEvents,
   hostPosted,
   localStorageStub,
+  metas,
   messageMock,
   onApi,
   API_FAIL,
@@ -67,6 +68,7 @@ import {
   providers,
   purgeProject,
   purgeState,
+  tabFacts,
   putDraft,
   queueCommand,
   queuedTurns,
@@ -357,6 +359,79 @@ describe("completion chime (ff679c9, 286784b)", () => {
     setBusy(sid);
     await sseFlush("session.idle", { sessionID: sid });
     assert.equal(pendingTimers(), 0);
+  });
+});
+
+// The editor tab's status prefix (the old in-app TabsBar prefix): the
+// page reports turnEnded at the idle that would have marked the tab
+// unread, and tabFacts feeds the busy/attention poster.
+describe("tab signal prefix", () => {
+  afterEach(() => {
+    metas.delete("opencode-session-id");
+  });
+  const signals = () =>
+    hostPosted.filter((m) => (m as { type?: string }).type === "tab-signal");
+
+  it("posts turnEnded when the pinned session's turn ends", async () => {
+    metas.set("opencode-session-id", "ts1");
+    sessions.value = [sessRow("ts1")];
+    hostPosted.length = 0;
+    setBusy("ts1");
+    await sseFlush("session.idle", { sessionID: "ts1" });
+    assert.deepEqual(signals(), [{ type: "tab-signal", turnEnded: true }]);
+  });
+
+  it("posts nothing for a session the page isn't pinned to", async () => {
+    metas.set("opencode-session-id", "ts-other");
+    sessions.value = [sessRow("ts2")];
+    hostPosted.length = 0;
+    setBusy("ts2");
+    await sseFlush("session.idle", { sessionID: "ts2" });
+    assert.deepEqual(signals(), []);
+  });
+
+  it("a sub-agent child's idle posts nothing (the parent's tab reports)", async () => {
+    metas.set("opencode-session-id", "ts3");
+    sessions.value = [sessRow("ts3", { parentID: "ts-root" })];
+    hostPosted.length = 0;
+    setBusy("ts3");
+    await sseFlush("session.idle", { sessionID: "ts3" });
+    assert.deepEqual(signals(), []);
+  });
+
+  it("tabFacts: strict busy spins, a child's ask marks the root tab", () => {
+    sessions.value = [sessRow("root"), sessRow("kid", { parentID: "root" })];
+    setBusy("root");
+    pendingPermissions.value = [
+      { id: "p1", sessionID: "kid", action: "bash", resources: [], save: [] },
+    ];
+    assert.deepEqual(tabFacts("root"), { busy: true, attention: true });
+    // Retry never spun the old prefix either.
+    sessionStatus.value = {
+      ...sessionStatus.value,
+      root: { type: "retry", attempt: 1, message: "m", next: 0 },
+    };
+    assert.deepEqual(tabFacts("root"), { busy: false, attention: true });
+  });
+
+  it("tabFacts: another root's ask and an orphan ask mark nothing", () => {
+    sessions.value = [
+      sessRow("root"),
+      sessRow("other-root"),
+      sessRow("other-kid", { parentID: "other-root" }),
+    ];
+    pendingPermissions.value = [
+      {
+        id: "p1",
+        sessionID: "other-kid",
+        action: "bash",
+        resources: [],
+        save: [],
+      },
+      // No session row: the walk stops cold, nothing marked.
+      { id: "p2", sessionID: "gone", action: "bash", resources: [], save: [] },
+    ];
+    assert.deepEqual(tabFacts("root"), { busy: false, attention: false });
   });
 });
 

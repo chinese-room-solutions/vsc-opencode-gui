@@ -14,3 +14,6 @@ out/
 # Playwright (test:ui) output
 test-results/
 .raein/
+
+# Runtime-generated tab-icon frames (EDH writes into the repo)
+/tabicons-v5/

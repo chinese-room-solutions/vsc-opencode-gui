@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import * as fs from "fs";
 import { OpencodeViewProvider } from "./webview/OpencodeViewProvider";
 import { ChatHub } from "./webview/ChatHub";
 import {
@@ -6,6 +7,7 @@ import {
   sessionTabId,
 } from "./webview/ChatPanel";
 import { PeerRegistry } from "./webview/Peers";
+import { TabIconSet } from "./webview/TabSignal";
 import type {
   HiddenModels,
   HiddenProviders,
@@ -13,6 +15,7 @@ import type {
   ProjectStore,
 } from "./webview/AppHost";
 import { ServerManager, normWorktree, randomPort } from "./server/ServerManager";
+import { serverAuthHeaders } from "./server/serverAuth";
 import { invalidateThemeTokens } from "./theme";
 import { initLog, log } from "./log";
 
@@ -226,6 +229,39 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Open session panels (one editor tab per session) — created on demand,
   // revived by per-viewType serializers after a reload.
+  // Status-prefix icons (animated APNGs: spinner / ask / turn-ended
+  // marks) generated into the extension install dir: tab icons load only
+  // from there (or the workspace), never globalStorage. The dir name is
+  // versioned because the install dir is stable within one package
+  // version — bump the suffix on art changes; each update installs into
+  // a fresh versioned dir, so stale icons self-invalidate.
+  const icons = new TabIconSet(
+    vscode.Uri.joinPath(context.extensionUri, "tabicons-v5"),
+  );
+  // Dead caches: the globalStorage-era frame dirs (their URIs never
+  // rendered) and older versioned dirs inside the install dir, which
+  // same-version reinstalls share — they would otherwise linger beside
+  // the current one. Best-effort removal.
+  for (const dead of ["tabicons", "tabicons-v2"]) {
+    try {
+      fs.rmSync(vscode.Uri.joinPath(context.globalStorageUri, dead).fsPath, {
+        recursive: true,
+        force: true,
+      });
+    } catch {
+      // Locked-down storage: the leftover dirs are inert.
+    }
+  }
+  for (const dead of ["tabicons-v3", "tabicons-v4"]) {
+    try {
+      fs.rmSync(vscode.Uri.joinPath(context.extensionUri, dead).fsPath, {
+        recursive: true,
+        force: true,
+      });
+    } catch {
+      // Read-only install dir: the leftover dir is inert.
+    }
+  }
   const panels = new SessionPanels({
     hub,
     extensionUri: context.extensionUri,
@@ -235,6 +271,7 @@ export function activate(context: vscode.ExtensionContext) {
     openProject,
     hiddenModels,
     hiddenProviders,
+    icons,
     ensureServer: () => void ensureServer(),
     // opencode.panelOpen is a compatibility surface (nothing here reads it
     // anymore); keep it truthful for external consumers.
@@ -1166,13 +1203,16 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   // serverPort is a test surface (the harness's orphan check needs the
-  // opencode port, not the proxied URL's).
+  // opencode port, not the proxied URL's). authHeaders serves the same
+  // purpose: tests driving the real server's API must share the host's
+  // auth module instance (the shipped bundle inlines its own copy).
   return {
     hub,
     provider,
     panels,
     get serverPort() { return serverManager?.serverPort; },
     ensureServer,
+    authHeaders: serverAuthHeaders,
   };
 }
 

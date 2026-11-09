@@ -26,6 +26,18 @@ function bootHostKind(): HostKind {
 }
 export const hostKind = signal<HostKind>(bootHostKind());
 
+// The session a "session" host's tab belongs to (the opencode-session-id
+// meta; empty on the navigator and standalone rigs). Read per call — the
+// node test rig installs its document stub after this module loads.
+export function hostSessionId(): string {
+  if (typeof document === "undefined") return "";
+  return (
+    document
+      .querySelector('meta[name="opencode-session-id"]')
+      ?.getAttribute("content") ?? ""
+  );
+}
+
 export function postToHost(message: unknown): void {
   api?.postMessage(message);
 }
