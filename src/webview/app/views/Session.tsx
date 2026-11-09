@@ -10,13 +10,19 @@ import {
   StatusStats,
   TurnFooter,
 } from "../components/MessageView";
+import { RenameInput } from "../components/RenameInput";
+import { RowMenu } from "../components/RowMenu";
+import { SessionMenuItems } from "../components/SessionMenuItems";
 import { SubagentMenu } from "../components/SubagentMenu";
 import { StopIcon, WordmarkIcon, OcResetIcon } from "../icons";
 import { isText, isTool } from "../api";
+import { postToHost } from "../host";
 import { modelWaitAnchor } from "../components/ToolCard";
 import { interruptStuckNow, stuckState } from "../stuck";
 import {
+  deleteSession,
   failedMsgLoads,
+  forkSession,
   interruptedPrompts,
   loadOlderMessages,
   hasOlder,
@@ -30,6 +36,7 @@ import {
   refreshPermissions,
   refreshQuestions,
   refreshStatuses,
+  renameSession,
   sendError,
   sessionStatus,
   sessionTitle,
@@ -122,6 +129,17 @@ export function Session(props: { sessionId: string; parent?: string }) {
   const restore = useRef(scrollMemo.get(id));
   const st = sessionStatus.value[id];
   const busy = st?.type === "busy";
+  // The view's right-click menu (the session row's commands), its inline
+  // rename field, and the delete confirm.
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | undefined>(
+    undefined,
+  );
+  const [renaming, setRenaming] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  // Chromium collapses a text selection as the default action of a
+  // right-button mousedown — before contextmenu fires. Remember whether
+  // one existed so the menu can yield to the browser's Copy.
+  const rmbSelection = useRef(false);
 
   // The stuck detector's verdict for this session (marks exist only
   // while it reads busy): the earliest silenced stamp across the turn
@@ -693,8 +711,41 @@ export function Session(props: { sessionId: string; parent?: string }) {
   })();
 
   return (
-    <div class={empty ? "chat empty" : "chat"}>
+    <div
+      class={empty ? "chat empty" : "chat"}
+      onMouseDown={(e) => {
+        if (e.button === 2)
+          rmbSelection.current = Boolean(window.getSelection()?.toString());
+      }}
+      onContextMenu={(e) => {
+        // Editables (the composer, rename) and a text selection keep the
+        // browser's clipboard menu; the empty state (deleted elsewhere)
+        // has nothing to act on. Code blocks' modifier right-click copies
+        // and stops there (markdown.ts); the zoomed image's right-click
+        // zooms out and stops there (Lightbox) — plain right-clicks reach us.
+        const t = e.target as HTMLElement;
+        if (
+          t.closest("textarea, input") ||
+          rmbSelection.current ||
+          !session
+        )
+          return;
+        e.preventDefault();
+        setCtxMenu({ x: e.clientX, y: e.clientY });
+      }}
+    >
       <div class="chat-head">
+        {renaming && (
+          <RenameInput
+            class="rename-input"
+            title={session?.title ?? ""}
+            onCommit={(title) => {
+              setRenaming(false);
+              void renameSession(id, title);
+            }}
+            onCancel={() => setRenaming(false)}
+          />
+        )}
         {props.parent && (
           <nav class="crumb" aria-label="Sub-session path">
             <button
@@ -933,6 +984,43 @@ export function Session(props: { sessionId: string; parent?: string }) {
         )}
         <Composer sessionId={id} status={st} />
       </div>
+      {confirming && (
+        <div class="confirm-backdrop" onClick={() => setConfirming(false)}>
+          <div class="confirm" role="dialog" onClick={(e) => e.stopPropagation()}>
+            <div class="confirm-text">
+              Delete session “{sessionTitle(session, id)}”? This cannot be
+              recovered.
+            </div>
+            <div class="confirm-actions">
+              <button
+                class="confirm-danger"
+                onClick={() => {
+                  setConfirming(false);
+                  void deleteSession(id);
+                }}
+              >
+                Delete session
+              </button>
+              <button onClick={() => setConfirming(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {ctxMenu && (
+        <RowMenu x={ctxMenu.x} y={ctxMenu.y} onClose={() => setCtxMenu(undefined)}>
+          <SessionMenuItems
+            id={id}
+            onClose={() => setCtxMenu(undefined)}
+            onFork={() =>
+              void forkSession(id).then((row) => {
+                if (row) postToHost({ type: "open-session", id: row.id });
+              })
+            }
+            onRename={() => setRenaming(true)}
+            onDelete={() => setConfirming(true)}
+          />
+        </RowMenu>
+      )}
     </div>
   );
 }

@@ -28,8 +28,10 @@ and the chat UI talks to it directly.
   whole-history search. Clicking a project narrows the sessions;
   rename/recolor, fork, and bulk delete stay on the rows, and
   right-clicking a project row opens a menu with rename, change color,
-  copy path, and delete. Clicking a session opens its tab; another
-  project's session deep-links its folder in a new window.
+  copy path, and delete; a session row or the chat itself answers
+  right-click with Copy Session ID, Fork, Rename, and Delete. Clicking a
+  session opens its tab; another project's session deep-links its folder
+  in a new window.
 - **Sub-agents are sessions** - open one from its task chip, steer it, or
   stop it. The parent turn collects the result. While sub-agents run, a
   button left of the context ring shows how many. Click it to list them,

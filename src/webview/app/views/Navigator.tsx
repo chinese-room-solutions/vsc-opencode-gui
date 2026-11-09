@@ -1,13 +1,14 @@
 import { signal } from "@preact/signals";
 import {
   useEffect,
-  useLayoutEffect,
   useRef,
   useState,
 } from "preact/hooks";
 import type { Session } from "../api";
 import { postToHost } from "../host";
 import { RenameInput } from "../components/RenameInput";
+import { RowMenu } from "../components/RowMenu";
+import { SessionMenuItems } from "../components/SessionMenuItems";
 import { Swatches } from "../components/Swatches";
 import {
   CheckIcon,
@@ -884,82 +885,16 @@ function ProjectRow(props: {
   );
 }
 
-// The row's right-click menu: a .menu at fixed viewport coords (the
-// pointer), pulled inside the viewport after first paint. Any click,
-// Escape, scroll, resize, or window blur closes it.
-function RowMenu(props: {
-  x: number;
-  y: number;
-  onClose: () => void;
-  children?: preact.ComponentChildren;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState({ x: props.x, y: props.y });
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    setPos({
-      x: Math.max(4, Math.min(props.x, window.innerWidth - r.width - 4)),
-      y: Math.max(4, Math.min(props.y, window.innerHeight - r.height - 4)),
-    });
-    // Per mount; the menu unmounts between opens.
-  }, []);
-  useEffect(() => {
-    const close = () => props.onClose();
-    const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") props.onClose();
-    };
-    window.addEventListener("blur", close);
-    window.addEventListener("resize", close);
-    // Scroll doesn't bubble; capture catches the lists' scrollers.
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("keydown", key);
-    return () => {
-      window.removeEventListener("blur", close);
-      window.removeEventListener("resize", close);
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("keydown", key);
-    };
-  }, []);
-  return (
-    <>
-      <div
-        class="backdrop"
-        onClick={props.onClose}
-        onContextMenu={(e) => {
-          // A right-click elsewhere closes ours and stays closed:
-          // stopPropagation keeps the row's own handler (which re-opens
-          // at the pointer) out of the bubble path.
-          e.preventDefault();
-          e.stopPropagation();
-          props.onClose();
-        }}
-      />
-      <div
-        ref={ref}
-        class="menu row-menu"
-        role="menu"
-        style={{ left: pos.x, top: pos.y }}
-        onContextMenu={(e) => {
-          // Right-click on the open menu itself: no native menu, no
-          // re-open - it just stays.
-          e.preventDefault();
-          e.stopPropagation();
-        }}
-      >
-        {props.children}
-      </div>
-    </>
-  );
-}
-
 function SessionRow(props: {
   s: Session;
   picked?: boolean;
   onPick?: (e: MouseEvent) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [menu, setMenu] = useState<{ x: number; y: number } | undefined>(
+    undefined,
+  );
   const [armed, arm, disarm] = useArm();
   // Copy feedback: the glyph flips to a green check for a beat (the
   // code-block copy control's pattern, markdown.ts copyButton).
@@ -988,13 +923,43 @@ function SessionRow(props: {
     }
   };
 
+  // The fork replaces the view with its own tab — another project's
+  // deep-links its window.
+  const forkOpen = () =>
+    void forkSession(s.id).then((row) => {
+      if (!row) return;
+      if (foreign)
+        postToHost({
+          type: "open-project",
+          path: dir,
+          session: row.id,
+        });
+      else postToHost({ type: "open-session", id: row.id });
+    });
+
   const commitRename = (title: string) => {
     setEditing(false);
     if (title && title !== s.title) void renameSession(s.id, title);
   };
 
   return (
-    <div class={props.picked ? "sess-row picked" : "sess-row"}>
+    <div
+      class={[
+        "sess-row",
+        props.picked && "picked",
+        menu && "ctx-open",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      onContextMenu={(e) => {
+        // The rename input keeps the browser's clipboard menu; the
+        // confirm dialog has no contextmenu handler of its own, so gate
+        // it too or the menu opens beneath it.
+        if (editing || confirming) return;
+        e.preventDefault();
+        setMenu({ x: e.clientX, y: e.clientY });
+      }}
+    >
       {editing ? (
         <RenameInput
           class="rename-input"
@@ -1058,20 +1023,7 @@ function SessionRow(props: {
             <button
               class="row-act iconic"
               title="Fork session"
-              onClick={() =>
-                void forkSession(s.id).then((row) => {
-                  if (!row) return;
-                  // The row's own convention: another project's session
-                  // opens in its window, deep-linked — so does its fork.
-                  if (foreign)
-                    postToHost({
-                      type: "open-project",
-                      path: dir,
-                      session: row.id,
-                    });
-                  else postToHost({ type: "open-session", id: row.id });
-                })
-              }
+              onClick={forkOpen}
             >
               <ForkIcon />
             </button>
@@ -1101,6 +1053,42 @@ function SessionRow(props: {
             </button>
           </span>
         </>
+      )}
+      {confirming && (
+        <div class="confirm-backdrop" onClick={() => setConfirming(false)}>
+          <div class="confirm" role="dialog" onClick={(e) => e.stopPropagation()}>
+            <div class="confirm-text">
+              Delete session “{sessionTitle(s, s.id)}”? This cannot be
+              recovered.
+            </div>
+            <div class="confirm-actions">
+              <button
+                class="confirm-danger"
+                onClick={() => {
+                  setConfirming(false);
+                  void deleteSession(s.id);
+                }}
+              >
+                Delete session
+              </button>
+              <button onClick={() => setConfirming(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {menu && (
+        <RowMenu x={menu.x} y={menu.y} onClose={() => setMenu(undefined)}>
+          <SessionMenuItems
+            id={s.id}
+            onClose={() => setMenu(undefined)}
+            onFork={forkOpen}
+            onRename={() => {
+              disarm();
+              setEditing(true);
+            }}
+            onDelete={() => setConfirming(true)}
+          />
+        </RowMenu>
       )}
     </div>
   );

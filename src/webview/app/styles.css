@@ -511,7 +511,8 @@ body {
 /* The context menu's owner wears the same quiet fill while the menu is
    up, so the row the menu acts on reads at a glance. Gone when the menu
    closes (any click, Escape, scroll). */
-.proj-row.ctx-open {
+.proj-row.ctx-open,
+.sess-row.ctx-open {
   background: var(
     --vscode-list-inactiveSelectionBackground,
     rgb(128 128 128 / 15%)
