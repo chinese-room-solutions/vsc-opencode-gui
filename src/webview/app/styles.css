@@ -1496,11 +1496,12 @@ body {
   caret-color: transparent;
   font: inherit;
   line-height: 1.45;
-  /* The textarea's internal soft-wrap follows no CSS rule a div can
-     copy (it fits a "word head" on a line then breaks); word-break on a
-     textarea IS honored, so both layers run the same engine rule and
-     wrap identically. */
-  word-break: break-all;
+  /* Both layers wrap with one rule: words carry to the next line at
+     spaces; an unbroken token with no space (a URL, a path) breaks at
+     the edge only when it cannot fit a line alone. Textareas honor
+     these properties, and the mirror copies them, so the invisible
+     glyphs sit under the painted ones. */
+  overflow-wrap: break-word;
   outline: none;
 }
 
@@ -1540,12 +1541,10 @@ body {
   line-height: 1.45;
   padding: 5px 5px 0;
   white-space: pre-wrap;
-  /* The textarea soft-wraps like break-all — it fills a line and breaks
-     mid-word rather than moving the word down, and gives "/" no break
-     privilege. A word-wrapped mirror paints different lines than the
-     caret's truth whenever a word straddles the fill point; matching the
-     engine keeps the glyphs and the caret on the same lines. */
-  word-break: break-all;
+  /* The wrap rule must equal the textarea's (see .composer textarea) or
+     the painted glyphs leave the caret's lines: spaces carry words down,
+     a spaceless token breaks at the edge only when it cannot fit a
+     line. */
   overflow-wrap: break-word;
   /* The mirror's own (phantom 0.x-px) overflow must not buy it a
      scrollbar: that would wrap the paint narrower than the selection
