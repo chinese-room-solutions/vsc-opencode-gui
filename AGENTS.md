@@ -26,8 +26,11 @@ light weight.
   app (`src/webview/app/`, Preact + signals) type-checks with
   `tsconfig.webview.json` and bundles with esbuild — `npm run compile` runs
   both. Tests: mocha via `@vscode/test-electron` — `npm test` boots a real VS
-  Code instance and runs the lifecycle scenarios in `test/`. Needs Node ≥ 22.5
-  (node:sqlite) and `opencode` + `git` on PATH.
+  Code instance and runs the lifecycle scenarios in `test/`. UI specs:
+  `npm run test:ui` — its `-c test/ui/playwright.config.mjs` carries the
+  1280×800 viewport and system Chrome; invoking `playwright test` from the
+  repo root without it silently drops both and specs fail on layout. Needs
+  Node ≥ 22.5 (node:sqlite) and `opencode` + `git` on PATH.
 - UI behavior can't be driven through the harness. Test the app served
   standalone (`node scripts/ui-rig.js <dir> [port]` — real server, plain
   browser) with Playwright: snapshot → click → screenshot every view and
