@@ -201,6 +201,11 @@ body {
   height: 22px;
   padding: 0;
   background: none;
+  justify-content: center;
+  /* The body insets content 10px; the header has no padding, so without
+     this the button (and its hover box) sits flush against the panel
+     edge, past the rows it belongs to. */
+  margin-right: 10px;
 }
 
 .tb-new.nav-new:hover {
