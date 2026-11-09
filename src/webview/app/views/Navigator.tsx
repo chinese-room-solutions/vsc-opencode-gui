@@ -404,7 +404,11 @@ export function Navigator() {
         class="nav-sec proj-sec"
         style={
           projectsOpen.value && homeH.value > 0
-            ? { height: `${splitPx()}px`, flex: "none" }
+            ? sessionsOpen.value
+              ? // Both open: the pinned, draggable split height.
+                { height: `${splitPx()}px`, flex: "none" }
+              : // Sessions folded: Projects takes the column.
+                { flex: "1 1 auto" }
             : undefined
         }
       >
@@ -466,7 +470,7 @@ export function Navigator() {
           </div>
         )}
       </section>
-      {projectsOpen.value && (
+      {projectsOpen.value && sessionsOpen.value && (
         <div
           class="nav-split"
           role="separator"
@@ -506,7 +510,12 @@ export function Navigator() {
           onPointerCancel={() => (splitDrag = undefined)}
         />
       )}
-      <section class="nav-sec sess-sec">
+      {/* Folded Sessions is header-only; flex:none keeps it from claiming
+          the space Projects grows into. */}
+      <section
+        class="nav-sec sess-sec"
+        style={sessionsOpen.value ? undefined : { flex: "none" }}
+      >
         <div class="sec-head">
           <button
             class={sessionsOpen.value ? "sec-toggle" : "sec-toggle closed"}
