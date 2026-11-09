@@ -13,6 +13,7 @@ import {
   ForkIcon,
   NewSessionIcon,
   PencilIcon,
+  PixelSpinner,
   SearchIcon,
   TrashIcon,
 } from "../icons";
@@ -862,8 +863,20 @@ function SessionRow(props: {
             }}
             title={formatSessionTimes(s)}
           >
-            <span class="tile" style={{ background: tile.color }}>
-              {props.picked ? <CheckIcon /> : tile.letter}
+            <span
+              class="tile"
+              style={{ background: tile.color }}
+              title={st?.type === "busy" ? "Running" : undefined}
+            >
+              {props.picked ? (
+                <CheckIcon />
+              ) : st?.type === "busy" ? (
+                // The tab's busy mark, in the tile: the letter steps aside
+                // while the session works.
+                <PixelSpinner />
+              ) : (
+                tile.letter
+              )}
             </span>
             <span class="texts">
               <span class="sess-title">{sessionTitle(s, s.id)}</span>
@@ -873,7 +886,6 @@ function SessionRow(props: {
                 <span class="sess-proj">{projectDisplayName(dir)}</span>
               )}
             </span>
-            {st?.type === "busy" && <span class="spin" title="Running" />}
           </button>
           <span class="row-acts">
             <button

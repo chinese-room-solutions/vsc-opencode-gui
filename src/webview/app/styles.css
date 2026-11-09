@@ -3534,24 +3534,6 @@ a.tool-pill:hover {
   background: var(--vscode-diffEditor-insertedTextBackground);
 }
 
-/* running spinner */
-
-.spin {
-  width: 8px;
-  height: 8px;
-  flex: none;
-  border: 1.5px solid var(--oc-text-2);
-  border-top-color: transparent;
-  border-radius: 50%;
-  animation: spin-rotate 0.8s linear infinite;
-}
-
-@keyframes spin-rotate {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 /* --- parity fix: popovers+session (pass 3) --- */
 
 /* Picker popovers anchor to their chip: left-aligned with it, content-wide
