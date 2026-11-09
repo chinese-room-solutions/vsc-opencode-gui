@@ -710,6 +710,12 @@ body {
   text-decoration: underline;
 }
 
+/* The auto-load trigger: invisible, exists so an IntersectionObserver can
+   watch the list's end. */
+.load-sentinel {
+  height: 1px;
+}
+
 /* In-app confirm dialog for a project delete */
 
 .confirm-backdrop {

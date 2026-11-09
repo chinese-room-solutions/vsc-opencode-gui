@@ -482,12 +482,16 @@ const childRow = {
 // sections.
 // FAKE_API_PAGINATE=1 grows the list past the store's page size (50):
 // /api/session serves a full first page plus a cursor, the rest on the
-// cursor page — the "Load older sessions" path. Flat order (updated
-// desc) is stable: seeded first, then the bulk rows newest-first.
-const paginate = process.env.FAKE_API_PAGINATE === "1";
+// cursor page — the "Load older sessions" path. =2 seeds two full pages
+// plus a 3-row tail (three cursor pages) — the scroll auto-load path.
+// Flat order (updated desc) is stable: seeded first, then the bulk rows
+// newest-first.
+const paginate = Number(process.env.FAKE_API_PAGINATE) || 0;
 const extraSessions =
   process.env.FAKE_API_HOME_LIST === "1" || paginate
-    ? Array.from({ length: paginate ? 52 : 6 }, (_, i) => ({
+    ? Array.from({
+        length: paginate >= 2 ? 102 : paginate ? 52 : 6,
+      }, (_, i) => ({
         id: `ses_bulk_${i + 1}`,
         title: `Bulk session ${i + 1}`,
         cost: 0,
@@ -1042,10 +1046,13 @@ const server = http.createServer(async (req, res) => {
     }
     if (path === "/api/session") {
       if (paginate) {
-        const p2 = url.searchParams.get("cursor") === "page2";
-        json(res, 200, p2
-          ? { data: sessionList.slice(50), cursor: {} }
-          : { data: sessionList.slice(0, 50), cursor: { next: "page2" } });
+        const cur = url.searchParams.get("cursor");
+        const start = cur === "page2" ? 50 : cur === "page3" ? 100 : 0;
+        const next = start === 0 ? "page2" : start === 50 ? "page3" : undefined;
+        json(res, 200, {
+          data: sessionList.slice(start, start + 50),
+          cursor: next ? { next } : {},
+        });
         return;
       }
       json(res, 200, { data: sessionList, cursor: {} });

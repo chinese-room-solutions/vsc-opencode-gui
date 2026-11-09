@@ -302,6 +302,38 @@ export function Navigator() {
     if (walkOlder) void loadMoreSessions();
   }, [walkOlder]);
 
+  // Auto-load: a sentinel at the list's end fires the next page as it
+  // scrolls into view (clipped rows don't intersect the viewport, so only
+  // the real end triggers). The gate reads live signals, so a double-fire
+  // rides loadMoreSessions' own loading guard. The button stays as the
+  // failed-fetch retry: an observer never re-fires without an
+  // intersection change, and a failed fetch leaves the sentinel exactly
+  // where it was.
+  const sentinelEl = useRef<HTMLDivElement>(null);
+  const sessionsOpenNow = sessionsOpen.value;
+  useEffect(() => {
+    const el = sentinelEl.current;
+    if (!el) return;
+    // One intersection pages while the sentinel stays in view: rows land
+    // below and scroll anchoring pins the view to the end, so the observer
+    // often never sees another crossing. Continuing is gated on growth -
+    // a failed fetch stops the pump (no growth) and the button retries.
+    const pump = async (): Promise<void> => {
+      if (sessionsNext.value === undefined || sessionsLoadingMore.value)
+        return;
+      const r = el.getBoundingClientRect();
+      if (r.bottom <= 0 || r.top >= innerHeight) return;
+      const before = homeVisibleSessions().length;
+      await loadMoreSessions();
+      if (homeVisibleSessions().length > before) await pump();
+    };
+    const obs = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) void pump();
+    });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [sessionsOpenNow]);
+
   // Server-side search: typing hands the query to the server, which
   // matches titles across the whole history — the loaded pool alone
   // can't see past the newest pages. Debounced: one request per pause
@@ -524,6 +556,7 @@ export function Navigator() {
                   : "Load older sessions"}
               </button>
             )}
+            <div class="load-sentinel" ref={sentinelEl} />
           </div>
         )}
       </section>
