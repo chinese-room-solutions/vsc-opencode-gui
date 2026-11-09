@@ -1,5 +1,10 @@
 import { signal } from "@preact/signals";
-import { useEffect, useRef, useState } from "preact/hooks";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "preact/hooks";
 import type { Session } from "../api";
 import { postToHost } from "../host";
 import { RenameInput } from "../components/RenameInput";
@@ -653,6 +658,9 @@ function ProjectRow(props: {
   const [confirming, setConfirming] = useState(false);
   const [editing, setEditing] = useState(false);
   const [coloring, setColoring] = useState(false);
+  const [menu, setMenu] = useState<{ x: number; y: number } | undefined>(
+    undefined,
+  );
   const row = projects.value.find(
     (p) => normPath(p.worktree) === props.dir,
   );
@@ -667,6 +675,15 @@ function ProjectRow(props: {
     setColoring(false);
     if (color !== row?.icon?.color) void setProjectColor(props.dir, color);
   };
+  // Esc abandons the recolor like click-away: no PATCH until a pick.
+  useEffect(() => {
+    if (!coloring) return;
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setColoring(false);
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [coloring]);
 
   return (
     <div
@@ -674,9 +691,20 @@ function ProjectRow(props: {
         "proj-row",
         props.selected && "selected",
         props.picked && "picked",
+        menu && "ctx-open",
       ]
         .filter(Boolean)
         .join(" ")}
+      onContextMenu={(e) => {
+        // The rename input and the swatches keep the browser's clipboard
+        // menu; the row itself gets ours (Cut/Copy/Paste helps nobody on
+        // a project row). The confirm dialog has no contextmenu handler
+        // of its own, so gate it too or the menu opens beneath it.
+        if (editing || coloring || confirming || purge?.dir === props.dir)
+          return;
+        e.preventDefault();
+        setMenu({ x: e.clientX, y: e.clientY });
+      }}
     >
       {editing ? (
         <RenameInput
@@ -791,7 +819,129 @@ function ProjectRow(props: {
           </div>
         </div>
       )}
+      {menu && (
+        <RowMenu x={menu.x} y={menu.y} onClose={() => setMenu(undefined)}>
+          <button
+            class="menu-item"
+            role="menuitem"
+            onClick={() => {
+              setMenu(undefined);
+              void navigator.clipboard.writeText(props.dir).catch(() => {});
+            }}
+          >
+            Copy path
+          </button>
+          <div class="menu-sep" role="separator" />
+          {/* Rename and recolor need a project row to PATCH; session-only
+              dirs (a folder the server never booted in) have none. */}
+          {row && (
+            <>
+              <button
+                class="menu-item"
+                role="menuitem"
+                onClick={() => {
+                  setMenu(undefined);
+                  setEditing(true);
+                }}
+              >
+                Rename…
+              </button>
+              <button
+                class="menu-item"
+                role="menuitem"
+                onClick={() => {
+                  setMenu(undefined);
+                  setColoring(true);
+                }}
+              >
+                Change color…
+              </button>
+              <div class="menu-sep" role="separator" />
+            </>
+          )}
+          <button
+            class="menu-item"
+            role="menuitem"
+            onClick={() => {
+              setMenu(undefined);
+              setConfirming(true);
+            }}
+          >
+            Delete project
+          </button>
+        </RowMenu>
+      )}
     </div>
+  );
+}
+
+// The row's right-click menu: a .menu at fixed viewport coords (the
+// pointer), pulled inside the viewport after first paint. Any click,
+// Escape, scroll, resize, or window blur closes it.
+function RowMenu(props: {
+  x: number;
+  y: number;
+  onClose: () => void;
+  children?: preact.ComponentChildren;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ x: props.x, y: props.y });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPos({
+      x: Math.max(4, Math.min(props.x, window.innerWidth - r.width - 4)),
+      y: Math.max(4, Math.min(props.y, window.innerHeight - r.height - 4)),
+    });
+    // Per mount; the menu unmounts between opens.
+  }, []);
+  useEffect(() => {
+    const close = () => props.onClose();
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") props.onClose();
+    };
+    window.addEventListener("blur", close);
+    window.addEventListener("resize", close);
+    // Scroll doesn't bubble; capture catches the lists' scrollers.
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("blur", close);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("keydown", key);
+    };
+  }, []);
+  return (
+    <>
+      <div
+        class="backdrop"
+        onClick={props.onClose}
+        onContextMenu={(e) => {
+          // A right-click elsewhere closes ours and stays closed:
+          // stopPropagation keeps the row's own handler (which re-opens
+          // at the pointer) out of the bubble path.
+          e.preventDefault();
+          e.stopPropagation();
+          props.onClose();
+        }}
+      />
+      <div
+        ref={ref}
+        class="menu row-menu"
+        role="menu"
+        style={{ left: pos.x, top: pos.y }}
+        onContextMenu={(e) => {
+          // Right-click on the open menu itself: no native menu, no
+          // re-open - it just stays.
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+      >
+        {props.children}
+      </div>
+    </>
   );
 }
 

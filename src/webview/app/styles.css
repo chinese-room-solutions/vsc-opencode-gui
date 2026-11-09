@@ -508,6 +508,17 @@ body {
   border-radius: 6px;
 }
 
+/* The context menu's owner wears the same quiet fill while the menu is
+   up, so the row the menu acts on reads at a glance. Gone when the menu
+   closes (any click, Escape, scroll). */
+.proj-row.ctx-open {
+  background: var(
+    --vscode-list-inactiveSelectionBackground,
+    rgb(128 128 128 / 15%)
+  );
+  border-radius: 6px;
+}
+
 /* Neighboring picks read as one block: square the corners the run's
    members share (:has — the end of a run keeps its bottom corners). */
 .proj-row.picked:has(+ .proj-row.picked),
@@ -2052,6 +2063,14 @@ body {
   height: 1px;
   margin: 4px 8px;
   background: var(--oc-border);
+}
+
+/* The navigator's row context menu: a .menu pinned to the pointer
+   (fixed coords), floating over the panel above its backdrop. */
+.row-menu {
+  position: fixed;
+  min-width: 160px;
+  padding: 4px 0;
 }
 
 /* Permission + question docks */
