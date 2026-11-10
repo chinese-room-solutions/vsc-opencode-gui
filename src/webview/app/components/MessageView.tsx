@@ -996,7 +996,7 @@ function CompactedTurnImpl(props: {
           trigger row; the fold below tells the outcome. Auto-compactions
           are the server's own doing, not a sent message. */}
       {!auto && (
-        <div class="msg user" data-pin-compact="1">
+        <div class="msg user">
           <div class="user-pill">
             <div class="markdown msg-text user-text">/compact</div>
           </div>
