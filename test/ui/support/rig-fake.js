@@ -180,8 +180,16 @@ const shellHtml = (serverUrl) => {
       process.env.OPENCODE_HOST === "navigator" ? "navigator" : "session",
     )
     // The session a session panel is pinned to (AppHost bakes the same
-    // from its options) — derived from the boot route.
-    .replaceAll("{{SESSION_ID}}", attr(routeSessionId()))
+    // from its options) — derived from the boot route, or
+    // OPENCODE_RIG_PIN when a spec needs the pin and the route to
+    // disagree (the re-rooted drill). Rig-only name: the ambient
+    // environment carries opencode's own vars (a shell spawned from an
+    // opencode session exports OPENCODE_SESSION_ID), and the rig
+    // inherits process.env verbatim.
+    .replaceAll(
+      "{{SESSION_ID}}",
+      attr(process.env.OPENCODE_RIG_PIN ?? routeSessionId()),
+    )
     // Boot-restore metas honor env so Playwright can exercise restore
     // (same contract as AppHost: the host bakes what it stored).
     .replaceAll("{{ROUTE}}", attr(process.env.OPENCODE_ROUTE || ""))

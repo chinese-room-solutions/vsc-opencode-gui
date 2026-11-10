@@ -69,6 +69,7 @@ import {
   purgeProject,
   purgeState,
   tabFacts,
+  tabSignalRoot,
   putDraft,
   queueCommand,
   queuedTurns,
@@ -432,6 +433,28 @@ describe("tab signal prefix", () => {
       { id: "p2", sessionID: "gone", action: "bash", resources: [], save: [] },
     ];
     assert.deepEqual(tabFacts("root"), { busy: false, attention: false });
+  });
+
+  it("tabSignalRoot: a sub-agent transcript reports its top ancestor", () => {
+    sessions.value = [
+      sessRow("root"),
+      sessRow("kid", { parentID: "root" }),
+      sessRow("grandkid", { parentID: "kid" }),
+      sessRow("chat"),
+    ];
+    assert.equal(tabSignalRoot("root"), "root");
+    assert.equal(tabSignalRoot("kid"), "root");
+    assert.equal(tabSignalRoot("grandkid"), "root");
+    assert.equal(tabSignalRoot("chat"), "chat");
+    // A malformed cycle degrades to the displayed session, not a hang.
+    sessions.value = [
+      sessRow("a", { parentID: "b" }),
+      sessRow("b", { parentID: "a" }),
+    ];
+    assert.equal(tabSignalRoot("a"), "a");
+    // Rows not loaded yet: the displayed session stands in.
+    sessions.value = [];
+    assert.equal(tabSignalRoot("kid"), "kid");
   });
 });
 

@@ -1996,6 +1996,22 @@ export function tabFacts(root: string): { busy: boolean; attention: boolean } {
   return { busy, attention };
 }
 
+// The conversation a session tab's facts are about: the displayed chat,
+// unless it is a sub-agent transcript — then the top of its parent chain,
+// the conversation whose turn is running (the same root the attention
+// walk above marks). The App-level poster calls this.
+export function tabSignalRoot(displayed: string): string {
+  const seen = new Set<string>();
+  let sid = displayed;
+  while (!seen.has(sid)) {
+    seen.add(sid);
+    const row = sessions.value.find((s) => s.id === sid);
+    if (!row?.parentID) return sid;
+    sid = row.parentID;
+  }
+  return displayed;
+}
+
 function setIdle(sessionID: string): void {
   const tail = [...(messagesBySession.value.get(sessionID) ?? [])]
     .reverse()

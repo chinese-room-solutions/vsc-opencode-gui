@@ -4,7 +4,7 @@ import { Lightbox } from "./components/Lightbox";
 import { useEffect } from "preact/hooks";
 import { hostKind, hostSessionId, postToHost } from "./host";
 import { route } from "./router";
-import { status, tabFacts } from "./store";
+import { status, tabFacts, tabSignalRoot } from "./store";
 import DOMPurify from "dompurify";
 
 // Shell: one content panel filling the host. A session
@@ -61,9 +61,10 @@ function SessionPanel() {
   return (
     <>
       {/* The tab's status prefix (spinner / yellow / green) is host-side
-          (panel.iconPath): this poster reports the ROOT session's facts —
-          the tab stays the root's even while drilled into a child. */}
-      <TabSignalPoster root={r.id} />
+          (panel.iconPath): this poster reports the conversation on screen
+          — the displayed chat, or its top ancestor while a sub-agent
+          transcript is showing. */}
+      <TabSignalPoster root={tabSignalRoot(r.child ?? r.id)} />
       <Session
         key={`${r.id}:${r.child ?? ""}`}
         sessionId={r.child ?? r.id}
@@ -73,14 +74,25 @@ function SessionPanel() {
   );
 }
 
-// Reports the root session's busy/attention to the host whenever they
-// change (turnEnded posts separately from the store's setIdle). The
-// meta gate keeps the navigator and mis-pinned pages silent.
+// Reports the shown conversation's busy/attention to the host whenever
+// they change (turnEnded posts separately from the store's setIdle). A
+// session tab is any page with a session meta — the route need not match
+// it, so a re-rooted drill still reports for its own tab; the navigator
+// (no meta) stays silent. Posts re-fire on a beat so a dropped post (a
+// hidden panel, a suspended renderer) self-heals instead of leaving the
+// tab idle for the whole turn; the host's TabSignal dedupes unchanged
+// facts.
+const TAB_SIGNAL_BEAT_MS = 10_000;
+
 function TabSignalPoster(props: { root: string }) {
   const facts = tabFacts(props.root);
   useEffect(() => {
-    if (hostSessionId() !== props.root) return;
-    postToHost({ type: "tab-signal", ...facts });
+    if (!hostSessionId()) return;
+    const post = () =>
+      postToHost({ type: "tab-signal", ...tabFacts(props.root) });
+    post();
+    const beat = window.setInterval(post, TAB_SIGNAL_BEAT_MS);
+    return () => window.clearInterval(beat);
   }, [props.root, facts.busy, facts.attention]);
   return null;
 }
