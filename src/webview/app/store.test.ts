@@ -5157,6 +5157,19 @@ describe("session fork", () => {
     assert.equal(sendError.value?.for, "fk3");
     assert.equal(sessions.value.length, 1);
   });
+
+  it("a blank session is refused locally with no request sent", async () => {
+    sessions.value = [];
+    await sseFlush("session.created", { info: sessRow("fk4") });
+    assert.equal(isEmptySession(sessions.value[0]), true);
+    assert.equal(await forkSession("fk4"), undefined);
+    assert.equal(
+      sendError.value?.text,
+      "Could not fork the session: an empty session has nothing to copy.",
+    );
+    assert.equal(sendError.value?.for, "fk4");
+    assert.equal(sessions.value.length, 1);
+  });
 });
 
 

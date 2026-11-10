@@ -127,7 +127,18 @@ suite("opencode GUI commands", function () {
       isBlankSession(id: string): Promise<boolean>;
     } | undefined;
     assert.ok(sm, "ensureServer returns the manager");
-    assert.strictEqual(await sm!.isBlankSession(id), true, "fresh session is blank");
+    // isBlankSession fails open ("not blank") on any fetch blip, so a
+    // single sample conflates server health with session state — poll to
+    // steady state, then assert. A genuinely non-blank session still
+    // fails after the window.
+    let blank: boolean | undefined;
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      blank = await sm!.isBlankSession(id);
+      if (blank) break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    assert.strictEqual(blank, true, "fresh session is blank");
     assert.strictEqual(
       await sm!.isBlankSession("ses_doesnotexist"),
       false,
@@ -185,9 +196,9 @@ suite("opencode GUI commands", function () {
       target.id,
       "the active session's id",
     );
-    // forkSession on an empty session (no turns): the server 400s
-    // "Cannot fork empty session" — the command must settle with the
-    // panel set unchanged, not hang or throw.
+    // forkSession on an empty session (no turns): the command refuses
+    // blanks locally (the isBlankSession pre-check) — the panel set is
+    // unchanged, no hang, no throw, no forked empty copy on v1.
     const before = api.panels.ids().length;
     await vscode.commands.executeCommand("opencodeGui.forkSession");
     await new Promise((r) => setTimeout(r, 1_000));

@@ -1143,7 +1143,18 @@ function blockingSubagentLive(id: string): boolean {
 // titles it "… (fork #N)") and hand the copy back; the caller opens it
 // (in-app, or deep-linked for another project's session).
 export async function forkSession(id: string): Promise<Session | undefined> {
-  const directory = sessions.value.find((s) => s.id === id)?.location?.directory;
+  const row = sessions.value.find((s) => s.id === id);
+  const directory = row?.location?.directory;
+  // v1 forks an empty session into another empty one and jumps the tab to
+  // it; v2 400s. Refuse blanks locally so every fork entry point reads
+  // the same refusal.
+  if (row && isEmptySession(row)) {
+    setSendError(
+      withReason("Could not fork the session", "an empty session has nothing to copy"),
+      id,
+    );
+    return undefined;
+  }
   const { session, error } = await forkSessionApi(id, directory);
   if (!session) {
     setSendError(withReason("Could not fork the session", error), id);

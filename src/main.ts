@@ -351,12 +351,20 @@ export function activate(context: vscode.ExtensionContext) {
       const target = tabMenuTarget(ctx);
       if (!target) return;
       const sm = ensureServer() ?? serverManager;
-      const fork = await sm?.forkSession(target.id);
-      if (fork) openSession(fork);
-      else
+      const fail = () =>
         void vscode.window.showErrorMessage(
           "Could not fork the session — an empty one has nothing to copy, or the server is not reachable. Try Open Code: Restart.",
         );
+      // v1 forks an empty session into another empty one and jumps the tab
+      // to it; v2 400s. Reject blanks locally so every dialect reads the
+      // same refusal.
+      if (sm && (await sm.isBlankSession(target.id))) {
+        fail();
+        return;
+      }
+      const fork = await sm?.forkSession(target.id);
+      if (fork) openSession(fork);
+      else fail();
     }),
     vscode.commands.registerCommand("opencodeGui.renameSession", async (ctx?: unknown) => {
       const target = tabMenuTarget(ctx);
