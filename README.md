@@ -11,138 +11,89 @@
 <img src="https://github.com/chinese-room-solutions/vsc-opencode-gui/releases/download/media/vsc-opencode-gui.gif" alt="VSC OpenCode GUI demo: session home, chat in an editor tab, mid-turn steering">
 </div>
 
-VSC OpenCode GUI runs the [opencode](https://opencode.ai) agent in a native
-VS Code chat tab. The extension starts a headless `opencode serve` process,
-and the chat UI talks to it directly.
+VSC OpenCode GUI runs the [opencode](https://opencode.ai) agent in native VS
+Code chat tabs, backed by a headless `opencode serve` the extension starts and
+owns.
 
 ## ✨ Features
 
-- **One editor tab per session** - like any editor: each conversation is
-  its own tab, titled with the session name, revived after a reload. An
-  empty session isn't kept: its tab isn't restored and it stays out of
-  history until its first message.
-- **Sessions side panel** - two collapsible sections, Source Control
-  style, with a draggable split (default half, remembered across
-  reloads) that pins the border: Projects (own search) above
-  day-grouped sessions that load older rows as you scroll, with
-  whole-history search. Clicking a project narrows the sessions;
-  rename/recolor, fork, and bulk delete stay on the rows, and
-  right-clicking a project row opens a menu with rename, change color,
-  copy path, and delete; a session row or the chat itself answers
-  right-click with Copy Session ID, Fork, Rename, and Delete. Clicking a
-  session opens its tab; another project's session deep-links its folder
-  in a new window.
-- **Sub-agents are sessions** - open one from its task chip, steer it, or
-  stop it. The parent turn collects the result. While sub-agents run, a
-  button left of the context ring shows how many. Click it to list them,
-  so one buried under later messages stays findable.
-- **Session tab menu** - right-click a session's editor tab for Copy
-  Session ID, Fork, Rename, and Delete. The same commands sit in the
-  command palette while a session tab is active.
-- **Notifications, visual and sound** - a tab's icon spins while a session
-  works, pulses yellow when a session waits on you, green when a turn
-  finishes. Chimes play for finished turns, permissions, and questions.
-- **Steer mid-turn** - a prompt or command sent while the agent works runs
-  after the current step. Hover one for **Revert**. A queued message
-  returns to the input box, unsent. A sent prompt rewinds the session: it
-  and everything after it leave the transcript, **Redo** brings them back,
-  and your next message makes the cut permanent.
-- **Stuck turns get a way out** - a model stream can die quietly and leave
-  a turn busy forever. After `opencodeGui.stuckToolSeconds` of silence the
-  transcript shows the silent time and an **Interrupt** chip.
-  `opencodeGui.stuckAutoAbortSeconds` can end the turn for you. A
-  sub-agent still working is not silence - the wait runs until it stops.
-- **Typewriter streaming** - replies and thinking type in
-  character-by-character instead of landing in chunks, catching up
-  quickly after a burst.
-- **Fast copy** - hold the copy modifier (see `opencodeGui.codeCopyModifier`)
-  and click a code block, quote, or inline code to copy it.
-- **Peer messages** - messages from other opencode sessions show the
-  sender's name and live session title
-  ([opencode-peers](https://github.com/chinese-room-solutions/opencode-peers)).
-- **Attachments become real files** - images, PDFs, and documents are saved
-  into the workspace before the turn starts, ready for the agent to reuse.
-- **Context and cost ring** - live context-window fill. Click for the cost
-  and token breakdown.
+- **A tab per session** - each conversation is its own editor tab, restored
+  after a reload.
+- **Sessions side panel** - projects and day-grouped history, with search.
+- **Sub-agents are sessions** - open, steer, or stop one from its task chip.
+- **Steer mid-turn** - a message sent while the agent works runs after the
+  current step. Revert a prompt to rewind the session, and Redo brings it
+  back.
+- **Notifications** - tab icons show working, waiting on you, and done.
+  Chimes mark finished turns, permission asks, and questions.
+- **Stuck-turn recovery** - a turn that goes silent gets an Interrupt chip,
+  or stops on its own.
+- **Attachments as files** - images, PDFs, and documents are saved into the
+  workspace for the agent to reuse.
+- **Context and cost ring** - live context-window fill. Click it for the
+  cost and token breakdown.
 
 ## ⌨️ Commands
 
-All commands live under the **`Open Code:`** prefix in the command palette.
+In the command palette under **`Open Code:`**.
 
-| | |
+| Command | What it does |
 | --- | --- |
-| `Open Code: Open in Primary Editor` | Reveal the last-active session tab, or start one |
-| `Open Code: Toggle Chat` | Close the active session tab, or reveal/start one (`Ctrl+Esc`) |
-| `Open Code: Toggle Side Panel` | Sidebar view |
-| `Open Code: New Session` | Start a session in its own tab |
-| `Open Code: Show History` | Session picker — opens the picked session's tab |
-| `Open Code: Add Selection to Chat` | Send the editor selection as context |
-| `Open Code: Add to Chat` | Insert the file's relative path into the chat |
-| `Open Code: Manage Models` | Provider and model picker |
-| `Open Code: Manage Providers` | Pick which providers the lists show. The plug on a row turns that provider on or off on the server. The shield row goes further: only the checked providers may run anywhere — sub-agent sessions included (opencode 2.x only). |
-| `Open Code: Show Session Diff` | Working-tree diff of the session |
-| `Open Code: Toggle Context Breakdown` | Per-message context panel |
-| `Open Code: Open in Terminal` | Terminal bound to the session |
-| `Open Code: Restart` | Restart the server. Also repairs a dead chat tab. |
+| `Open in Primary Editor` | Reveal the last session tab, or start one |
+| `Toggle Chat` (`Ctrl+Esc`) | Close the active session tab, or reveal one |
+| `Toggle Side Panel` | Show or hide the sessions panel |
+| `New Session` | Start a session in a new tab |
+| `Show History` | Pick a session to open |
+| `Add Selection to Chat` | Send the editor selection as context |
+| `Add to Chat` | Insert the file's path into the chat |
+| `Manage Models` | Pick the provider and model |
+| `Manage Providers` | Show, enable, or (opencode 2.x) restrict providers |
+| `Show Session Diff` | The session's working-tree diff |
+| `Toggle Context Breakdown` | Per-message context usage |
+| `Open in Terminal` | A terminal attached to the session |
+| `Copy Session ID`, `Fork Session`, `Rename Session`, `Delete Session` | Act on the active session, also from its tab's right-click menu |
+| `Restart` | Restart the server, which also repairs a dead chat tab |
 
 ## ⚙️ Settings
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `opencodeGui.port` | `0` | Fixed server port (`0` = random). Changing it resets the chat's saved settings. |
-| `opencodeGui.path` | *(empty)* | Full path to the opencode CLI. Empty = use `PATH`. |
-| `opencodeGui.exposeToNetwork` | `false` | Expose the server to the local network. v1 uses `--mdns` (find it at `http://opencode.local:<port>`). v2 listens on all addresses (find it at `http://<LAN-IP>:<port>`). |
-| `opencodeGui.codeGlow` | `false` | Neon-glow rendering for code-block tokens. |
-| `opencodeGui.codeCopyModifier` | `alt` | Modifier held to copy code blocks and quotes on click. |
-| `opencodeGui.readySound` | `true` | Chime when a turn finishes. A follow-up within 1.5 s cancels it. |
-| `opencodeGui.permissionSound` | `true` | Chime on permission asks. |
-| `opencodeGui.questionSound` | `true` | Chime on questions. |
-| `opencodeGui.stuckToolSeconds` | `300` | Seconds of silence before a tool counts as stuck and the Interrupt chip appears. `0` disables. |
-| `opencodeGui.stuckAutoAbortSeconds` | `0` | Seconds of silence past the stuck threshold before the turn is stopped for you. Nothing is sent into the session. `0` disables. |
+| `opencodeGui.path` | *(empty)* | opencode CLI path. Empty uses `PATH` |
+| `opencodeGui.port` | `0` | Server port (`0` = random). Changing it resets the chat's saved preferences |
+| `opencodeGui.exposeToNetwork` | `false` | Serve on the LAN: `http://opencode.local:<port>` (1.x), `http://<LAN-IP>:<port>` (2.x) |
+| `opencodeGui.codeGlow` | `false` | Neon glow on code tokens |
+| `opencodeGui.codeCopyModifier` | `alt` | Hold it and click a code block or quote to copy it |
+| `opencodeGui.readySound` | `true` | Chime when a turn finishes |
+| `opencodeGui.permissionSound` | `true` | Chime on permission asks |
+| `opencodeGui.questionSound` | `true` | Chime on questions |
+| `opencodeGui.stuckToolSeconds` | `300` | Silence before a turn is marked stuck (`0` = off) |
+| `opencodeGui.stuckAutoAbortSeconds` | `0` | Further silence before the turn is stopped for you (`0` = off) |
 
 ## 📦 Install
-
-Install from source:
 
 ```bash
 git clone https://github.com/chinese-room-solutions/vsc-opencode-gui
 cd vsc-opencode-gui
-make install   # compile, package the .vsix, install - then reload VS Code
+make install   # build and install the .vsix, then reload VS Code
 ```
 
-Needs the [opencode CLI](https://opencode.ai/) where the workspace runs -
-on the remote machine for remote workspaces. `make uninstall` removes it.
+Needs the [opencode CLI](https://opencode.ai/), 1.x (1.16+) or 2.x, where the
+workspace runs: on the remote host for remote workspaces. `make uninstall`
+removes the extension.
 
-Both server generations work: opencode 1.x (`opencode-ai`, 1.16+) and
-opencode 2.x (`@opencode/cli`). The extension detects which one at startup
-and uses the matching API.
-
-> ℹ️ On server start the extension installs the `oc-attachments` skill into
-> your opencode config dir (`~/.config/opencode/skills/`). It lets every
-> session reuse attachments. Sub-agents use the built-in `task` tool.
+> ℹ️ On server start the extension installs an `oc-attachments` skill into
+> `~/.config/opencode/skills/` so sessions can reuse attachments.
 
 ## 🛠️ Development
 
 ```bash
-make watch   # recompile on change (auto-installs deps on first run)
+make watch      # recompile on change, then F5 for the Extension Development Host
+make webview    # rebuild only the webview app
+make test       # unit + real VS Code lifecycle suite
+make test-unit  # unit suite only
+make test-ui    # Playwright UI specs
 ```
 
-Then open the repo in VS Code and press `F5` for the Extension Development
-Host. Touching only the webview app? `make webview` is the fast path.
-
-### Tests
-
-```bash
-make test        # compile + unit suite + real VS Code lifecycle suite
-make test-unit   # unit suite only
-make test-ui     # Playwright UI pass (builds first)
-```
-
-`make test` starts a real VS Code and runs the lifecycle checks: server
-boot, restart with port reuse, the port freed on `deactivate()`, uncaught
-exceptions, orphaned processes. Needs Node ≥ 22.5 plus `opencode` and
-`git` on `PATH`. It takes about 30 s and cleans up after itself.
-
-The UI can also be driven in a plain browser: `node scripts/ui-rig.js <dir>
-[port]` serves it against a real server (`OPENCODE_BIN=<path>` picks
-another binary, e.g. a 2.x `@opencode/cli` install). See `AGENTS.md`.
+Tests need Node ≥ 22.5 with `opencode` and `git` on `PATH`.
+`node scripts/ui-rig.js <dir> [port]` serves the UI in a plain browser against
+a real server. More in [AGENTS.md](AGENTS.md).
