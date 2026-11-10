@@ -155,10 +155,18 @@ suite("opencode GUI lifecycle", function () {
     const url = await waitForUrl(api, 30_000);
     fs.writeFileSync(portFile, String(api.serverPort ?? new URL(url).port));
 
+    // The real-turn section (OC_TEST_REAL_TURN=1) can pin the model via
+    // OC_TEST_MODEL=providerID/modelID — a plan's flash tier keeps the
+    // certified turn free; unpinned, the account's default runs.
+    const [modelProvider, ...modelRest] = (process.env.OC_TEST_MODEL ?? "").split("/");
     const res = await fetch(`${url}/api/session`, {
       method: "POST",
       headers: { ...api.authHeaders(), "content-type": "application/json" },
-      body: "{}",
+      body: JSON.stringify(
+        modelProvider && modelRest.length
+          ? { model: { providerID: modelProvider, id: modelRest.join("/") } }
+          : {},
+      ),
     });
     assert.ok(res.ok, `session created (${res.status})`);
     const j = (await res.json()) as { data?: { id?: string }; id?: string };
@@ -184,10 +192,11 @@ suite("opencode GUI lifecycle", function () {
       assert.ok(api.panels.has(sid), "panel still alive after the facts landed");
 
       // A real model turn (cleared for tests; opt-in via OC_TEST_REAL_TURN=1
-      // so plain runs stay free): the session's DEFAULT model, no catalog
-      // needed. Track the tab icon through it: the spinner appears while
-      // the session works and the icon settles when the turn ends (idle
-      // mark or, on an inactive tab, the green one).
+      // so plain runs stay free; OC_TEST_MODEL pins a cheap tier — the
+      // default otherwise is whatever the account resolves). Track the tab
+      // icon through it: the spinner appears while the session works and
+      // the icon settles when the turn ends (idle mark or, on an inactive
+      // tab, the green one).
       if (process.env.OC_TEST_REAL_TURN !== "1") this.skip();
       const iconFsPath = () => {
         const icon = panel.icon as
