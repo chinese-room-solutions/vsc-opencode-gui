@@ -52,6 +52,9 @@ and the chat UI talks to it directly.
   transcript shows the silent time and an **Interrupt** chip.
   `opencodeGui.stuckAutoAbortSeconds` can end the turn for you. A
   sub-agent still working is not silence - the wait runs until it stops.
+- **Typewriter streaming** - replies and thinking type in
+  character-by-character instead of landing in chunks, catching up
+  quickly after a burst.
 - **Fast copy** - hold the copy modifier (see `opencodeGui.codeCopyModifier`)
   and click a code block, quote, or inline code to copy it.
 - **Peer messages** - messages from other opencode sessions show the

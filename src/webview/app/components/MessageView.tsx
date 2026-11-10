@@ -109,9 +109,15 @@ export function StatusStats(props: { start?: number; gen: number }) {
 // turns. While the owning part streams, re-parse at most once per 250 ms
 // (trailing edge, so the final text always lands); past 128 KB skip the
 // markdown pipeline entirely — one escaped text node until the part
-// settles, then the normal full render happens once.
+// settles, then the normal full render happens once. Between ticks the
+// text types on character-by-character: each tick parses exactly the
+// prefix the reveal has shown, and the unparsed characters ride a
+// plain-text tail — revealed at least TYPE_CPS, scaled to the backlog so
+// a wire burst catches up within ~TYPE_CATCHUP_S.
 const STREAM_PARSE_MS = 250;
 const STREAM_RAW_LIMIT = 131_072;
+const TYPE_CPS = 150;
+const TYPE_CATCHUP_S = 1.5;
 
 // One floating image preview for pill hovers — created lazily, reused,
 // never interactive.
@@ -155,11 +161,34 @@ function Markdown(props: {
 }) {
   const streaming = props.streaming === true;
   const raw = streaming && props.text.length > STREAM_RAW_LIMIT;
+  // The typewriter runs on every streaming part in normal (non-raw) mode —
+  // unconditionally: Chromium maps prefers-reduced-motion to the OS
+  // animation setting, and a performance-tuned machine (animations off)
+  // would silently lose the reveal.
+  const animated = streaming && !raw;
+  // A mount mid-stream (a thinking fold re-opened, a tab restored, an F5
+  // into a live turn) shows the text that already streamed at once and
+  // types only what arrives from here — the reveal never replays. A fresh
+  // part spawns with empty text, so this is also its zero start.
   const [deferred, setDeferred] = useState(props.text);
   const painted = useRef(0);
+  // Typewriter truth lives in refs: the reveal loop advances `visible`
+  // per frame without a re-render, and the parse tick reads it here.
+  // Preact repaints only on ticks and the settle, as before.
+  const visible = useRef(props.text.length);
+  const latest = useRef(props.text);
+  const parsed = useRef(deferred);
+  const tail = useRef<HTMLSpanElement | null>(null);
+  latest.current = props.text;
+  parsed.current = deferred;
   useEffect(() => {
     if (!streaming) {
       // Settled: the final text lands immediately (the trailing parse).
+      // No tail cleanup here — the span leaves with the settle parse's
+      // innerHTML swap; touching it before would shrink the scroller's
+      // content ahead of the growth and its clamp reads as
+      // leave-the-bottom intent (see the layout effect below).
+      visible.current = props.text.length;
       setDeferred(props.text);
       return;
     }
@@ -167,10 +196,15 @@ function Markdown(props: {
     const wait = Math.max(0, STREAM_PARSE_MS - (Date.now() - painted.current));
     const timer = window.setTimeout(() => {
       painted.current = Date.now();
-      setDeferred(props.text);
+      if (!animated) visible.current = latest.current.length;
+      // Parse exactly what is displayed — the revealed prefix, not the
+      // wire's backlog; the tail span carries the rest as text.
+      setDeferred(
+        animated ? latest.current.slice(0, visible.current) : latest.current,
+      );
     }, wait);
     return () => window.clearTimeout(timer);
-  }, [props.text, streaming, raw]);
+  }, [props.text, streaming, raw, animated]);
   const html = useMemo(
     () => (raw ? "" : renderMarkdown(deferred)),
     [raw, deferred],
@@ -184,7 +218,61 @@ function Markdown(props: {
       enhanceBlockquotes(el);
       enhanceInlineCode(el);
     }
-  }, [html, props.tokenize, raw]);
+    // Re-mount the tail after each parse (dangerouslySetInnerHTML
+    // destroys it with the rest) inside the deepest last element, so
+    // streamed text continues inline instead of opening a line after the
+    // prefix's last block — never inside the copy buttons that sit last
+    // in code wraps and quotes. textContent only: the tail is raw
+    // source, never trusted html.
+    const span = tail.current ?? document.createElement("span");
+    tail.current = span;
+    if (animated && el) {
+      let at: Element = el;
+      for (;;) {
+        const next = at.lastElementChild;
+        if (!next || next === span || next.tagName === "BUTTON") break;
+        at = next;
+      }
+      at.appendChild(span);
+      const text = latest.current;
+      const from = Math.min(parsed.current.length, text.length);
+      const to = Math.min(visible.current, text.length);
+      span.textContent = to > from ? text.slice(from, to) : "";
+    }
+    // Not animated: leave an attached tail alone. Removing it here (the
+    // settle flips animated before the settle parse lands) would shrink
+    // the scroller's content for one layout, and the clamp that follows
+    // reads as leave-the-bottom intent — it kills the tail-follow. The
+    // tail is empty by then if the reveal caught up, or dies with the
+    // settle parse's innerHTML swap; either way nothing is left behind.
+  }, [html, props.tokenize, raw, animated]);
+  // The per-frame reveal: only the tail's textContent moves — Preact is
+  // not involved. The rate walks the backlog down with a ~1.5 s time
+  // constant (bounded below by TYPE_CPS) so bursts catch up quickly
+  // without snapping.
+  useEffect(() => {
+    if (!animated) return;
+    let raf = 0;
+    let last = performance.now();
+    const frame = (now: number) => {
+      // Clamp dt so a backgrounded tab's gap doesn't teleport the tail.
+      const dt = Math.min((now - last) / 1000, 0.25);
+      last = now;
+      const text = latest.current;
+      const backlog = text.length - visible.current;
+      if (backlog > 0 && tail.current) {
+        const cps = Math.max(TYPE_CPS, backlog / TYPE_CATCHUP_S);
+        visible.current = Math.min(text.length, visible.current + cps * dt);
+        const span = tail.current;
+        const from = Math.min(parsed.current.length, text.length);
+        const to = visible.current;
+        span.textContent = to > from ? text.slice(from, to) : "";
+      }
+      raf = requestAnimationFrame(frame);
+    };
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  }, [animated]);
   const setEl = (el: HTMLDivElement | null) => {
     ref.current = el;
     props.innerRef?.(el);

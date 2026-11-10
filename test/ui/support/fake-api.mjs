@@ -566,6 +566,9 @@ const promptCalls = [];
 // One-shot failure for the next prompt POST (either dialect's send route):
 // the failed-send take-back spec arms it via /__control/fail-next-prompt.
 let failNextPrompt = false;
+// The most recent scripted prompt turn (runPrompt), for specs that
+// compare the rendered transcript against the wire truth.
+let lastPrompt = null;
 const timers = new Set();
 function later(fn, ms) {
   const t = setTimeout(() => {
@@ -598,29 +601,175 @@ function streamText(sid, messageID, partID, { first = 100, count, chars, interva
   later(step, first);
 }
 
-// POST /session/:id/prompt_async — durable user row, assistant row, growing
-// text part, completion, idle. The first delta is delayed so the pinned
-// prompt's hold window (everything on screen, dist <= 0) is observable.
-let nextTurn = SEED_TURNS + 1;
-function runPrompt(sid) {
+// v2 twin of streamText: same pacing, deltas on the v2 turn dialect
+// (session.text.delta on /api/event, the part addressed as
+// assistantMessageID + ordinal-within-kind).
+function streamTextV2(sid, messageID, { first = 100, count, chars, interval = 150, onChunk, onDone }) {
+  streamCount++;
+  let s = Math.floor(Math.random() * SENTENCES.length);
+  let tick = 0;
+  const step = () => {
+    let delta = "";
+    while (delta.length < chars) delta += sentence(s++) + " ";
+    if (tick % 4 === 3) delta += "\n\n";
+    emitV2("session.text.delta", { sessionID: sid, assistantMessageID: messageID, ordinal: 0, delta });
+    onChunk?.(delta);
+    tick++;
+    if (tick < count) {
+      later(step, interval);
+    } else {
+      streamCount--;
+      onDone?.();
+    }
+  };
+  later(step, first);
+}
+
+// Reasoning twin of streamTextV2: same pacing, deltas on the reasoning
+// family (session.reasoning.delta; ordinals count within their own kind,
+// so the think and the answer are both ordinal 0).
+function streamReasoningV2(sid, messageID, { first = 100, count, chars, interval = 150, onChunk, onDone }) {
+  streamCount++;
+  let s = Math.floor(Math.random() * SENTENCES.length);
+  let tick = 0;
+  const step = () => {
+    let delta = "";
+    while (delta.length < chars) delta += sentence(s++) + " ";
+    if (tick % 4 === 3) delta += "\n\n";
+    emitV2("session.reasoning.delta", { sessionID: sid, assistantMessageID: messageID, ordinal: 0, delta });
+    onChunk?.(delta);
+    tick++;
+    if (tick < count) {
+      later(step, interval);
+    } else {
+      streamCount--;
+      onDone?.();
+    }
+  };
+  later(step, first);
+}
+
+// v2 twin of runPrompt: the prompt POST's reply carries the admitted user
+// row (api.ts promptSession upserts it in place of the optimistic echo),
+// then the turn runs on the v2 dialect — execution.started (busy),
+// step.started (the assistant row), a thinking phase (reasoning.started,
+// reasoning deltas ordinal 0, reasoning.ended) before the answer, text
+// deltas on (assistantMessageID, ordinal), text.ended, step.ended,
+// execution.succeeded (idle) — the whole turn runs ~17 s. Rows track into
+// the v2 message page so the busy refresh and a mid-turn reload see them.
+function runPromptV2(sid, text) {
   const n = nextTurn++;
   const t = Date.now();
   const u = `msg_u${n}`;
   const a = `msg_a${n}`;
   const pt = `pt_a${n}`;
-  later(() => emitV1("message.updated", { sessionID: sid, info: { id: u, role: "user", time: { created: t } } }), 150);
-  later(() => emitV1("message.updated", {
-    sessionID: sid,
-    info: { id: a, role: "assistant", time: { created: t + 200 }, providerID: "fake", modelID: "fake-model", agent: "build" },
-  }), 300);
-  later(() => emitV1("message.part.updated", { sessionID: sid, part: { id: pt, messageID: a, sessionID: sid, type: "text", text: "" } }), 380);
+  const pr = `pr_a${n}`;
+  stepsRows = [];
+  trackInfo({ id: u, role: "user", time: { created: t } });
+  trackPart({ id: `${u}:text`, messageID: u, sessionID: sid, type: "text", text });
+  later(() => emitV2("session.execution.started", { sessionID: sid }), 150);
+  later(() => {
+    emitV2("session.step.started", {
+      sessionID: sid,
+      assistantMessageID: a,
+      agent: "build",
+      model: { providerID: "fake", id: "fake-model" },
+      started: t,
+    });
+    trackInfo({ id: a, role: "assistant", time: { created: Date.now() }, agent: "build", modelID: "fake-model", providerID: "fake" });
+  }, 300);
+  // Thinking first: reasoning.started projects nothing (the part spawns on
+  // its first delta), the think streams ~6 s, reasoning.ended carries the
+  // full text, then the answer phase starts.
+  later(() => {
+    emitV2("session.reasoning.started", { sessionID: sid, assistantMessageID: a, ordinal: 0 });
+    trackPart({ id: pr, messageID: a, sessionID: sid, type: "reasoning", text: "" });
+  }, 380);
+  const think = [];
+  streamReasoningV2(sid, a, {
+    first: 2000,
+    count: 40,
+    chars: 170,
+    onChunk: (delta) => {
+      think.push(delta);
+      trackText(a, pr, delta);
+    },
+    onDone: () => {
+      emitV2("session.reasoning.ended", { sessionID: sid, assistantMessageID: a, ordinal: 0, text: think.join("") });
+      later(() => {
+        emitV2("session.text.started", { sessionID: sid, assistantMessageID: a, ordinal: 0 });
+        trackPart({ id: pt, messageID: a, sessionID: sid, type: "text", text: "" });
+      }, 150);
+      const full = [];
+      streamTextV2(sid, a, {
+        first: 2000,
+        count: 44,
+        chars: 170,
+        onChunk: (delta) => {
+          full.push(delta);
+          trackText(a, pt, delta);
+        },
+        onDone: () => {
+          lastPrompt = { sessionID: sid, messageID: a, partID: pt, text: full.join(""), reasoning: think.join("") };
+          emitV2("session.text.ended", { sessionID: sid, assistantMessageID: a, ordinal: 0, text: full.join("") });
+          later(() => emitV2("session.step.ended", {
+            sessionID: sid,
+            assistantMessageID: a,
+            finish: "stop",
+            cost: 0.001,
+            tokens: { input: 120, output: 4000, reasoning: 0, cache: { read: 0, write: 0 } },
+            timestamp: Date.now(),
+          }), 100);
+          later(() => emitV2("session.execution.succeeded", { sessionID: sid }), 250);
+        },
+      });
+    },
+  });
+  return { user: { id: u, created: t, text } };
+}
+
+// POST /session/:id/prompt_async — durable user row, assistant row, growing
+// text part, completion, idle. The first delta is delayed so the pinned
+// prompt's hold window (everything on screen, dist <= 0) is observable.
+let nextTurn = SEED_TURNS + 1;
+function runPrompt(sid, text = "") {
+  const n = nextTurn++;
+  const t = Date.now();
+  const u = `msg_u${n}`;
+  const a = `msg_a${n}`;
+  const pt = `pt_a${n}`;
+  // Track alongside the emits (runSteps' pattern): the app re-pulls the
+  // message page while the session reads busy — a mid-turn reload must see
+  // the in-flight rows or the fresh page drops the turn and every later
+  // delta lands on a row it doesn't know. No reset: earlier scripted turns
+  // stay in the page like durable rows would.
+  later(() => {
+    const info = { id: u, role: "user", time: { created: t } };
+    emitV1("message.updated", { sessionID: sid, info });
+    trackInfo(info);
+    trackPart({ id: `${u}:text`, messageID: u, sessionID: sid, type: "text", text });
+  }, 150);
+  later(() => {
+    const info = { id: a, role: "assistant", time: { created: t + 200 }, providerID: "fake", modelID: "fake-model", agent: "build" };
+    emitV1("message.updated", { sessionID: sid, info });
+    trackInfo(info);
+  }, 300);
+  later(() => {
+    const part = { id: pt, messageID: a, sessionID: sid, type: "text", text: "" };
+    emitV1("message.part.updated", { sessionID: sid, part });
+    trackPart(part);
+  }, 380);
   const full = [];
   streamText(sid, a, pt, {
     first: 2000,
     count: 44,
     chars: 170,
-    onChunk: (delta) => full.push(delta),
+    onChunk: (delta) => {
+      full.push(delta);
+      trackText(a, pt, delta);
+    },
     onDone: () => {
+      lastPrompt = { sessionID: sid, messageID: a, partID: pt, text: full.join("") };
       emitV1("session.idle", { sessionID: sid });
       // Final durable part write AFTER idle: the turn footer settles on the
       // idle render, and the part swap re-fires the follow effect so the
@@ -835,6 +984,10 @@ const server = http.createServer(async (req, res) => {
   if (path.startsWith("/__control/")) {
     if (method === "GET" && path === "/__control/status") {
       json(res, 200, { streaming: streamCount > 0 });
+      return;
+    }
+    if (method === "GET" && path === "/__control/last-prompt") {
+      json(res, 200, lastPrompt);
       return;
     }
     if (method === "POST" && path === "/__control/steps") {
@@ -1126,6 +1279,7 @@ const server = http.createServer(async (req, res) => {
     if (path === "/project") { json(res, 200, [{ id: "prj_1", worktree: directory, icon: { color: "pink" }, time: { created: T0, updated: T0 } }]); return; }
     if (path === "/project/current") { json(res, 200, { id: "prj_1", worktree: directory }); return; }
     if (path === "/permission") { json(res, 200, []); return; }
+    if (path === "/api/permission/request") { json(res, 200, { data: [] }); return; }
     if (path === "/question") { json(res, 200, []); return; }
     if (path === "/find/file") {
       const q = (url.searchParams.get("query") ?? "").toLowerCase();
@@ -1224,7 +1378,7 @@ const server = http.createServer(async (req, res) => {
       });
       return;
     }
-    if ((m = path.match(/^\/api\/session\/([^/]+)\/(permission|question)$/))) {
+    if ((m = path.match(/^\/api\/session\/([^/]+)\/(permission|question|form)$/))) {
       json(res, 200, { data: [] });
       return;
     }
@@ -1258,7 +1412,11 @@ const server = http.createServer(async (req, res) => {
         at: Date.now(),
         seq: ++recSeq,
       });
-      runPrompt(m[1]);
+      const text = (Array.isArray(body.parts) ? body.parts : [])
+        .filter((p) => p?.type === "text" && typeof p.text === "string")
+        .map((p) => p.text)
+        .join("");
+      runPrompt(m[1], text);
       // 200+JSON, not 204: Chrome logs ERR_ABORTED on preflighted CORS
       // POSTs answered 204 (fetch resolves fine, the network log cries).
       json(res, 200, {});
@@ -1276,16 +1434,22 @@ const server = http.createServer(async (req, res) => {
         json(res, 500, { message: "Internal error" });
         return;
       }
-      // Record only — the v2 feed has no scripted turn here (no model).
-      // 200+JSON, not 204: Chrome logs ERR_ABORTED on preflighted CORS
-      // POSTs answered 204 (fetch resolves fine, the network log cries).
+      const text = typeof body.text === "string" ? body.text : "";
       promptCalls.push({
         sessionID: m[1],
-        text: typeof body.text === "string" ? body.text : "",
+        text,
         at: Date.now(),
         seq: ++recSeq,
       });
-      json(res, 200, {});
+      // The scripted turn runs on the v2 dialect; the reply carries the
+      // admitted user row (promptSession upserts it in place of the
+      // optimistic echo). 200+JSON, not 204: Chrome logs ERR_ABORTED on
+      // preflighted CORS POSTs answered 204 (fetch resolves fine, the
+      // network log cries).
+      const turn = runPromptV2(m[1], text);
+      json(res, 200, {
+        data: { id: turn.user.id, time: { created: turn.user.created }, payload: { text: turn.user.text } },
+      });
       return;
     }
     if ((m = path.match(/^\/api\/session\/([^/]+)\/(agent|model)$/))) {

@@ -123,7 +123,9 @@ test("wheel-up disengages follow; returning to the bottom re-arms it", async ({ 
     const g = await geom(page);
     expect(Math.abs(g.top - left.top), `sample ${i} moved`).toBeLessThanOrEqual(3);
   }
-  expect((await geom(page)).h).toBeGreaterThan(left.h + 200); // content did grow
+  expect((await geom(page)).h).toBeGreaterThan(left.h + 100); // content did grow
+  // (the typewriter reveal paces visual growth behind the wire, so the
+  // bar follows the reveal, not the wire's 200px-per-window)
 
   // Wheel back to the bottom: follow re-arms and tracks the stream again.
   await wheelToBottom(page);
@@ -158,7 +160,10 @@ test("trackpad recoil at the bottom does not disengage follow", async ({ page, r
   expect(Math.max(...samples), label).toBeLessThan(150);
   expect(samples.filter((d) => d <= 8).length, label).toBeGreaterThan(0);
   // The view genuinely tracked the stream down, not sat frozen at the top.
-  expect((await geom(page)).top).toBeGreaterThan(topBefore + 200);
+  // (the typewriter reveal paces visual growth behind the wire — this
+  // short stream reveals ~80px per window, so the bar sits well under it
+  // but far above a frozen view's ~0px)
+  expect((await geom(page)).top).toBeGreaterThan(topBefore + 40);
 
   await waitIdle(rig);
   await expect
