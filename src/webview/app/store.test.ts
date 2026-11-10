@@ -5163,6 +5163,7 @@ describe("session fork", () => {
     await sseFlush("session.created", { info: sessRow("fk4") });
     assert.equal(isEmptySession(sessions.value[0]), true);
     assert.equal(await forkSession("fk4"), undefined);
+    assert.equal(callsFor("/session/fk4/fork").length, 0);
     assert.equal(
       sendError.value?.text,
       "Could not fork the session: an empty session has nothing to copy.",
