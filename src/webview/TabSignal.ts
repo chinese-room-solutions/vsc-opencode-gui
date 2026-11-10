@@ -254,6 +254,24 @@ export class TabIconSet {
   }
 }
 
+// Generate every icon up front: the lazy first-use write otherwise races
+// the first busy turn, and a transient failure there leaves the tab idle
+// for the whole turn - nothing retries until the next state change.
+// Best-effort, retried, never awaited by activation.
+export async function prewarmIcons(icons: TabIconSet): Promise<void> {
+  for (let i = 0; i < 5; i++) {
+    if (
+      icons.spinner("light") !== undefined &&
+      icons.spinner("dark") !== undefined &&
+      icons.mark("attention") !== undefined &&
+      icons.mark("ready") !== undefined
+    )
+      return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  log.warn("tab icon prewarm incomplete");
+}
+
 export type TabSignalState = "idle" | "busy" | "attention" | "ready";
 
 // Facts the page reports (AppHost "tab-signal"); all optional so one

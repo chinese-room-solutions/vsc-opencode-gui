@@ -10,7 +10,7 @@ import {
   tabSpot,
 } from "./webview/ChatPanel";
 import { PeerRegistry } from "./webview/Peers";
-import { TabIconSet } from "./webview/TabSignal";
+import { TabIconSet, prewarmIcons } from "./webview/TabSignal";
 import type {
   HiddenModels,
   HiddenProviders,
@@ -265,6 +265,7 @@ export function activate(context: vscode.ExtensionContext) {
       // Read-only install dir: the leftover dir is inert.
     }
   }
+  void prewarmIcons(icons);
   const panels = new SessionPanels({
     hub,
     extensionUri: context.extensionUri,
