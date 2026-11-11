@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import hljs from "highlight.js/lib/common";
 import type { ToolPart } from "../api";
 import {
@@ -338,11 +338,18 @@ export function modelWaitAnchor(part: ToolPart): number | undefined {
   return anchor > 0 ? anchor : undefined;
 }
 
+// Past this many chars a patch skips highlight.js and keeps the escaped
+// paint — highlighting is per-character work (markdown.ts's CODE_HL_MAX:
+// same reasoning, same ceiling).
+const DIFF_HL_MAX = 16_384;
+
 function highlightDiff(diff: string): string {
+  const escaped = () => diff.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  if (diff.length > DIFF_HL_MAX) return escaped();
   try {
     return hljs.highlight(diff, { language: "diff" }).value;
   } catch {
-    return diff.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    return escaped();
   }
 }
 
@@ -421,6 +428,12 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
     return undefined;
   };
 
+  // The file patch the body shows, highlighted once per diff — the memo
+  // keeps the 1s tick and part updates from re-highlighting the patch.
+  // Both ride above the task-tool early return: hooks can't sit behind it.
+  const diff = diffText(part);
+  const diffHtml = useMemo(() => (diff ? highlightDiff(diff) : undefined), [diff]);
+
   // A spawned sub-agent is the one tool that renders as a link, not a card:
   // its details live in the child session, one click away. A part stuck
   // "running"/"pending" vouches for liveness only inside the live turn: a
@@ -471,7 +484,6 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
   const linkPath = path ?? patchPath;
   // Fetch rows link their URL (opens in the browser, host-side).
   const url = part.tool === "webfetch" ? inputStr(part, "url") : undefined;
-  const diff = diffText(part);
   // The +/- stat rides the collapsed row (the original app's), so it only
   // computes for the file-changing tools whose diff the body would show.
   const stat =
@@ -593,10 +605,7 @@ export function ToolCard(props: { part: ToolPart; live?: boolean }) {
             </div>
           )}
           {diff && (
-            <pre
-              class="diff hljs"
-              dangerouslySetInnerHTML={{ __html: highlightDiff(diff) }}
-            />
+            <pre class="diff hljs" dangerouslySetInnerHTML={{ __html: diffHtml ?? "" }} />
           )}
         </>
       )}
