@@ -53,31 +53,35 @@ function todoRows(part: ToolPart): { content?: string; status?: string }[] {
   return [];
 }
 
-// File names an apply_patch call touched (structured.files[]; a patch can
-// span several).
+// File names an apply_patch call touched (the result's files list — a
+// patch can span several).
 function patchFilePaths(part: ToolPart): string[] {
-  const files = (
-    part.state?.structured as { files?: { file?: unknown }[] } | undefined
-  )?.files;
-  if (!Array.isArray(files)) return [];
-  return files
-    .map((f) => (typeof f?.file === "string" ? f.file : ""))
+  return diffFiles(part)
+    .map((f) => (typeof f.file === "string" ? f.file : ""))
     .filter(Boolean);
 }
 
-// The unified patch strings both dialects deliver for edit and apply_patch
-// (one per file, already diff-formatted). Older rows carried metadata.diff.
+// The files a file-changing call touched. Three wire shapes: v2's
+// edit/apply_patch success lists FileDiff.Info ({file, patch,
+// additions, deletions}) in metadata.files, v1 carried the same array
+// in structured.files, and older v2 rows a lone metadata.diff string.
+function diffFiles(part: ToolPart): { file?: unknown; patch?: unknown }[] {
+  const fromMeta = (
+    part.state?.metadata as { files?: unknown } | undefined
+  )?.files;
+  if (Array.isArray(fromMeta)) return fromMeta as never[];
+  const fromStructured = part.state?.structured?.files;
+  if (Array.isArray(fromStructured)) return fromStructured as never[];
+  return [];
+}
+
+// The unified patch strings of those files, already diff-formatted.
 function diffText(part: ToolPart): string {
+  const patches = diffFiles(part)
+    .map((f) => (typeof f.patch === "string" ? f.patch : ""))
+    .filter(Boolean);
+  if (patches.length > 0) return patches.join("\n");
   const meta = part.state?.metadata?.diff;
-  const files = part.state?.structured?.files;
-  if (Array.isArray(files)) {
-    const patches = files
-      .map((f) => (typeof (f as { patch?: unknown })?.patch === "string"
-        ? (f as { patch: string }).patch
-        : ""))
-      .filter(Boolean);
-    if (patches.length > 0) return patches.join("\n");
-  }
   return typeof meta === "string" ? meta : "";
 }
 

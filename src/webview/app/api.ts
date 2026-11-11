@@ -874,9 +874,11 @@ export interface ToolState {
   output?: string;
   title?: string;
   // The machine-readable result, present in BOTH dialects (live SSE
-  // tool.success and durable rows): edit/apply_patch carry unified patch
-  // strings in structured.files[], todowrite the todo rows, write the
-  // operation facts. The OUT text lives in output/content instead.
+  // tool.success and durable rows): v1 carries it in structured
+  // (edit/apply_patch unified patches in files[].patch, todowrite's todo
+  // rows); v2's wire has no structured field — the diffs ride metadata.files
+  // instead (ToolCard reads both). The OUT text lives in output/content
+  // either way.
   structured?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   error?: string;

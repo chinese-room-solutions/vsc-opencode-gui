@@ -246,6 +246,77 @@ for (let i = 1; i <= SEED_TURNS; i++) {
   const ca = cu + 1_000;
   // The last turn leads with settled tool calls so the rig can exercise
   // tool cards: one shell, a fold of reads/searches, one edit with a diff.
+  // The second-to-last turn carries the v2 wire-shape file tools (edit
+  // FileDiff.Info in metadata.files, apply_patch spanning files, a write
+  // with no diff) — turn 12's height must stay untouched: the pin specs
+  // hinge on its pill staying inside one viewport at bottom scroll.
+  const v2FileTools =
+    i === SEED_TURNS - 1
+      ? [
+          {
+            type: "tool",
+            id: "pt_te2",
+            name: "edit",
+            state: {
+              status: "completed",
+              input: { filePath: "src/webview/app/store.ts" },
+              metadata: {
+                files: [
+                  {
+                    file: "src/webview/app/store.ts",
+                    patch: "--- a/src/webview/app/store.ts\n+++ b/src/webview/app/store.ts\n@@ -1,2 +1,3 @@\n const a = 1\n+const b = 2\n const c = 3",
+                    additions: 1,
+                    deletions: 0,
+                    status: "modified",
+                  },
+                ],
+              },
+              output: "Edited src/webview/app/store.ts (1 replacement)",
+              time: { start: ca + 1_200, end: ca + 1_400 },
+            },
+          },
+          {
+            type: "tool",
+            id: "pt_tap1",
+            name: "apply_patch",
+            state: {
+              status: "completed",
+              input: { patch: "*** Begin Patch\n*** End Patch" },
+              metadata: {
+                files: [
+                  {
+                    file: "docs/a.md",
+                    patch: "--- a/docs/a.md\n+++ b/docs/a.md\n@@ -1,1 +1,2 @@\n+added line\n",
+                    additions: 1,
+                    deletions: 0,
+                    status: "modified",
+                  },
+                  {
+                    file: "docs/b.md",
+                    patch: "--- a/docs/b.md\n+++ b/docs/b.md\n@@ -1,2 +1,1 @@\n-removed line\n rest",
+                    additions: 0,
+                    deletions: 1,
+                    status: "modified",
+                  },
+                ],
+              },
+              output: "Success. Updated the following files: docs/a.md, docs/b.md",
+              time: { start: ca + 1_500, end: ca + 1_900 },
+            },
+          },
+          {
+            type: "tool",
+            id: "pt_tw1",
+            name: "write",
+            state: {
+              status: "completed",
+              input: { path: "notes.md", content: "# Notes\n" },
+              output: "Wrote notes.md",
+              time: { start: ca + 2_000, end: ca + 2_200 },
+            },
+          },
+        ]
+      : [];
   const tools =
     i === SEED_TURNS
       ? [
@@ -401,6 +472,7 @@ for (let i = 1; i <= SEED_TURNS; i++) {
     cost: 0.01,
     tokens: { input: 100 * i, output: 400 * i, reasoning: 0, cache: { read: 0, write: 0 }, total: 500 * i },
     content: [
+      ...v2FileTools,
       ...tools,
       {
         type: "text",
