@@ -614,10 +614,14 @@ export interface QuestionRequest {
   // answer by the field's `key` (wire-verified 2.0.18: the reply body is
   // ALWAYS {answer: {<key>: value}} — scalars 400 with Expected
   // Form.Answer), a multiselect field takes the chosen option VALUES as a
-  // string[], and option labels may differ from their values.
+  // string[], and option labels may differ from their values. `type` rides
+  // only for the typed fields (number/integer/boolean) whose answer must be
+  // coerced off the dock's free text — the server rejects the stringified
+  // value (Expected number/boolean for form field).
   formFields?: {
     key: string;
     multiple: boolean;
+    type?: string;
     optionValues?: Record<string, string>;
   }[];
 }
@@ -707,6 +711,9 @@ export function formToQuestion(
     return {
       key: typeof f.key === "string" ? f.key : `field${i}`,
       multiple: f.type === "multiselect" || f.multiple === true,
+      ...(f.type === "number" || f.type === "integer" || f.type === "boolean"
+        ? { type: f.type as string }
+        : {}),
       optionValues,
     };
   });
@@ -2493,6 +2500,16 @@ export async function replyQuestion(
         const picked = (answers[i] ?? []).map(
           (label) => f.optionValues?.[label] ?? label,
         );
+        if (!f.multiple) {
+          const text = picked[0] ?? "";
+          // Typed fields answer as free text — the server wants the value's
+          // type. A non-number keeps the raw string so its message surfaces.
+          if (f.type === "number" || f.type === "integer") {
+            const n = Number(text);
+            return [f.key, Number.isNaN(n) ? text : n];
+          }
+          if (f.type === "boolean") return [f.key, text === "true"];
+        }
         return [f.key, f.multiple ? picked : (picked[0] ?? "")];
       }),
     );

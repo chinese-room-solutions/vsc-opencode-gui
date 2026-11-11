@@ -1519,6 +1519,68 @@ describe("v2 transcript normalization (fetchMessages)", () => {
     assert.equal(isTaskTool("bash"), false);
   });
 
+  it("typed form fields answer in their own type", async () => {
+    onApi((call) => {
+      if (call.path === "/api/session/ses_1/form")
+        return {
+          data: [
+            {
+              id: "frm_typ",
+              sessionID: "ses_1",
+              title: "Questions",
+              fields: [
+                {
+                  key: "count",
+                  type: "number",
+                  title: "How many",
+                  description: "Pick a count",
+                },
+                {
+                  key: "total",
+                  type: "integer",
+                  title: "Total",
+                  description: "Pick a total",
+                },
+                {
+                  key: "confirm",
+                  type: "boolean",
+                  title: "Confirm",
+                  description: "Proceed?",
+                },
+              ],
+            },
+          ],
+        };
+      if (call.method === "POST" && call.path === "/api/session/ses_1/form/frm_typ/reply")
+        return {};
+      return undefined;
+    });
+    const questions = await fetchSessionQuestions("ses_1");
+    const row = questions?.rows[0];
+    assert.deepEqual(row?.formFields, [
+      { key: "count", multiple: false, type: "number", optionValues: {} },
+      { key: "total", multiple: false, type: "integer", optionValues: {} },
+      { key: "confirm", multiple: false, type: "boolean", optionValues: {} },
+    ]);
+    assert.equal(
+      await replyQuestion("ses_1", "frm_typ", [["42"], ["7"], ["true"]], false, row),
+      true,
+    );
+    assert.deepEqual(
+      callsFor("/api/session/ses_1/form/frm_typ/reply")[0].body,
+      { answer: { count: 42, total: 7, confirm: true } },
+    );
+    // A non-number keeps the raw string — the server's message surfaces.
+    assert.equal(
+      await replyQuestion("ses_1", "frm_typ", [["abc"], ["7"], ["yes"]], false, row),
+      true,
+    );
+    assert.deepEqual(
+      callsFor("/api/session/ses_1/form/frm_typ/reply")[1].body,
+      { answer: { count: "abc", total: 7, confirm: false } },
+    );
+  });
+
   it("fetchSessionStatus reads the active record's keys; fetchAgents keeps display labels", async () => {
     onApi((call) => {
       if (call.path === "/api/session/active")
