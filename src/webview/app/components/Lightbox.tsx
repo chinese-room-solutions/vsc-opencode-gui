@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { createPortal } from "preact/compat";
 import { signal } from "@preact/signals";
 
@@ -47,6 +47,16 @@ export function Lightbox() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  // The component stays mounted between opens — a fresh open starts the
+  // picture clean, not carrying the last one's zoom and pan. Layout
+  // effect so the stale transform never paints a frame.
+  useLayoutEffect(() => {
+    if (open) {
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
+    }
   }, [open]);
 
   // The pan may not pull a scaled edge inside the box — the picture always
