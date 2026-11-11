@@ -13,15 +13,21 @@ import { serverAuthHeaders, setSpawnedServerPassword } from "../server/serverAut
 // ServerManager directly, complementing lifecycle.ts's end-to-end runs:
 // argv/path handling, attach-vs-spawn on a live port, the lease/store
 // bookkeeping, and dispose's kill path. Real `opencode serve` boots are
-// allowed but kept to four; every manager lands in `managers` so a failure
+// allowed but kept to six; every manager lands in `managers` so a failure
 // cannot leak a child past the suite.
 
 const managers: ServerManager[] = [];
 
-// ServerManager only reads context.globalState; an in-memory store keeps
-// these boots from touching the globalState lifecycle.ts relies on.
-function fakeContext(): { ctx: vscode.ExtensionContext; store: Map<string, unknown> } {
+// ServerManager only reads context.globalState and context.secrets;
+// in-memory stores keep these boots from touching the globalState and
+// secret storage the lifecycle.ts runs rely on.
+function fakeContext(): {
+  ctx: vscode.ExtensionContext;
+  store: Map<string, unknown>;
+  secrets: Map<string, string>;
+} {
   const store = new Map<string, unknown>();
+  const secrets = new Map<string, string>();
   const ctx = {
     globalState: {
       get: (key: string) => store.get(key),
@@ -30,8 +36,19 @@ function fakeContext(): { ctx: vscode.ExtensionContext; store: Map<string, unkno
         return Promise.resolve();
       },
     },
+    secrets: {
+      get: (key: string) => Promise.resolve(secrets.get(key)),
+      store: (key: string, value: string) => {
+        secrets.set(key, value);
+        return Promise.resolve();
+      },
+      delete: (key: string) => {
+        secrets.delete(key);
+        return Promise.resolve();
+      },
+    },
   } as unknown as vscode.ExtensionContext;
-  return { ctx, store };
+  return { ctx, store, secrets };
 }
 
 function freePort(): Promise<number> {
@@ -91,13 +108,18 @@ async function boot(
   port: number,
   exposeToNetwork = false,
   opencodePath = "",
-): Promise<{ sm: ServerManager; hub: ChatHub; store: Map<string, unknown> }> {
+): Promise<{
+  sm: ServerManager;
+  hub: ChatHub;
+  store: Map<string, unknown>;
+  secrets: Map<string, string>;
+}> {
   const hub = new ChatHub();
   const sm = new ServerManager();
-  const { ctx, store } = fakeContext();
+  const { ctx, store, secrets } = fakeContext();
   managers.push(sm);
   await sm.start(hub, ctx, port, exposeToNetwork, opencodePath);
-  return { sm, hub, store };
+  return { sm, hub, store, secrets };
 }
 
 // Sets env vars for the duration of fn and restores the ambient values
@@ -221,6 +243,43 @@ suite("opencode ServerManager", function () {
     if (process.platform === "win32") {
       assert.strictEqual(cmdlineForPort(port), "", "no process left on the port");
     }
+  });
+
+  test("a crashed host's orphan re-attaches with the stored password", async function () {
+    const port = await freePort();
+    const a = await boot(port);
+    const url = await waitForUrl(a.hub);
+    // v2 spawns store their generated password for this port; v1 spawns
+    // (the pinned CI binary) run open and store nothing.
+    const key = `opencode.spawnedPassword.${port}`;
+    const stored = await a.secrets.get(key);
+    if (stored !== undefined) assert.ok(stored.length > 0);
+    // Crash, not dispose: the host disappears without killing its child.
+    // _live is compile-time private — the runtime set is what matters.
+    (ServerManager as unknown as { _live: Set<ServerManager> })._live.delete(
+      a.sm,
+    );
+    // A fresh host: fresh globalState, but secret storage persists.
+    const hub = new ChatHub();
+    const sm = new ServerManager();
+    managers.push(sm);
+    const { ctx, secrets } = fakeContext();
+    if (stored !== undefined) await ctx.secrets.store(key, stored);
+    await sm.start(hub, ctx, port);
+    assert.strictEqual(
+      await waitForUrl(hub, 30_000),
+      url,
+      "re-attached to the orphan, no second spawn",
+    );
+    assert.strictEqual(sm.serverPort, port);
+    assert.ok(
+      secrets.has(key),
+      "the re-attach consumed nothing: the secret stays for the next host",
+    );
+    await sm.dispose();
+    assert.strictEqual((await fetch(url)).status, 200, "attacher spared the orphan");
+    await a.sm.dispose();
+    assert.ok(await untilDead(url), "the spawner's dispose killed the orphan");
   });
 
   test("exposeToNetwork binds all interfaces on v2 and dials localhost", async function () {

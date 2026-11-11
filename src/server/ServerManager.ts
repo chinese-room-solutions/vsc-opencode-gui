@@ -249,6 +249,13 @@ export function randomPort(): number {
   return Math.floor(Math.random() * (65535 - 16384 + 1)) + 16384;
 }
 
+// SecretStorage key that carries a spawn's password past a host crash,
+// keyed by port: the next start on this port re-attaches to the orphaned
+// child with it.
+function passwordSecretKey(port: number): string {
+  return `opencode.spawnedPassword.${port}`;
+}
+
 // Live (heartbeat < 90s) server leases across all windows.
 function leaseEntries(
   context: vscode.ExtensionContext,
@@ -321,9 +328,21 @@ export class ServerManager {
     }
 
     // A fresh start may attach to someone else's server — drop any
-    // password a previous spawn of ours registered, unless another live
-    // manager in this host still owns it (see _live).
-    if (ServerManager._live.size <= 1) setSpawnedServerPassword(undefined);
+    // password a previous spawn registered, unless another live manager
+    // in this host still owns it (see _live). The stored secret replaces
+    // the drop: a crashed host's orphaned v2 child still serves this
+    // workspace, and reloading its password lets the probes re-attach
+    // instead of reading 401 and spawning a second server.
+    if (ServerManager._live.size <= 1) {
+      try {
+        setSpawnedServerPassword(
+          await context.secrets.get(passwordSecretKey(port)),
+        );
+      } catch (err) {
+        // No keyring (headless Linux): today's memory-only behavior.
+        log.warn("could not read the stored server password:", err);
+      }
+    }
 
     // Persist the port so we can reuse it next time (preserves webview
     // localStorage, which is tied to the origin).
@@ -369,12 +388,20 @@ export class ServerManager {
     // belong to a server started for another folder (or before a folder
     // rename), and attaching to it shows that project's stale data.
     const existingUrl = `http://localhost:${port}`;
-    if (await this.isServerAlive(existingUrl)) {
-      if (await this.servesWorkspace(existingUrl, cwd)) {
-        await attach(existingUrl);
-        return;
-      }
-      // Foreign server owns the stored port — spawn ours on a fresh one.
+    const alive = await this.isServerAlive(existingUrl);
+    if (alive && (await this.servesWorkspace(existingUrl, cwd))) {
+      await attach(existingUrl);
+      return;
+    }
+    // Nothing re-attachable on the stored port. A foreign server may own
+    // it (never kill one we cannot authenticate — it may be the user's
+    // own, spawn beside it on a fresh port as before), or nothing answers
+    // and the child is gone. Either way the stored password is stale.
+    void Promise.resolve(context.secrets.delete(passwordSecretKey(port)))
+      .catch((err) =>
+        log.warn("could not drop the stored server password:", err),
+      );
+    if (alive) {
       port = randomPort();
       void context.globalState.update("opencode.serverPort", port);
     }
@@ -465,6 +492,16 @@ export class ServerManager {
           resolved = true;
           if (this.bootTimer) clearTimeout(this.bootTimer);
           this.bootTimer = undefined;
+          // Persist the v2 spawn password for this port: a crashed host
+          // leaves the child alive and orphaned, and the next start
+          // re-attaches with it. dispose keeps the secret on purpose —
+          // a future host still wants it.
+          if (spawnPassword)
+            void Promise.resolve(
+              context.secrets.store(passwordSecretKey(port), spawnPassword),
+            ).catch((err) =>
+              log.warn("could not store the server password:", err),
+            );
           // A v2 wide bind announces http://0.0.0.0:<port>; dial it as
           // localhost (macOS refuses 0.0.0.0 as a destination).
           void attach(rawUrl.replace("//0.0.0.0:", "//localhost:"));
@@ -571,6 +608,8 @@ export class ServerManager {
     if (this.bootTimer) clearTimeout(this.bootTimer);
     this.bootTimer = undefined;
     setSpawnedServerPassword(undefined);
+    // The per-port secret survives dispose: a future host re-attaches to
+    // a child that outlives this window.
 
     // Kill-by-port only when this manager spawned the server, or no other
     // live window still leases it (another window may have attached to ours).
