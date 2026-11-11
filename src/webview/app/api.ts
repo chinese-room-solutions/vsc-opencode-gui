@@ -2206,8 +2206,30 @@ export async function promptSession(
   // — {text, files, agents} — mapped from our parts below; the schema is
   // additionalProperties:false, so nothing else may ride along.
   if (serverDialect === "v2") {
-    if (agent) await switchSessionAgent(id, agent);
-    if (model) await switchSessionModel(id, model.providerID, model.id, model.variant);
+    // A switch that the server rejects (bad ref, schema 400, relay abort)
+    // must stop the send — the turn would otherwise run on the previous
+    // agent/model while the UI believes otherwise.
+    if (agent) {
+      const res = await switchSessionAgent(id, agent);
+      if (!res.ok)
+        return {
+          ok: false,
+          error: `Could not switch the agent to ${agent}${res.error ? `: ${res.error}` : ""}`,
+        };
+    }
+    if (model) {
+      const res = await switchSessionModel(
+        id,
+        model.providerID,
+        model.id,
+        model.variant,
+      );
+      if (!res.ok)
+        return {
+          ok: false,
+          error: `Could not switch the model to ${model.providerID}/${model.id}${res.error ? `: ${res.error}` : ""}`,
+        };
+    }
     const text = parts
       .filter((p): p is { type: "text"; text: string } => p.type === "text")
       .map((p) => p.text)
@@ -2299,8 +2321,9 @@ export async function backgroundSession(
 export async function switchSessionAgent(
   id: string,
   agent: string,
-): Promise<boolean> {
-  return (await sendJson("POST", `/api/session/${id}/agent`, { agent }))?.ok === true;
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await sendJson("POST", `/api/session/${id}/agent`, { agent });
+  return res.ok ? { ok: true } : { ok: false, error: res.error };
 }
 
 // A model pick: provider + model id, plus the reasoning-effort variant
@@ -2317,12 +2340,11 @@ export async function switchSessionModel(
   providerID: string,
   modelID: string,
   variant?: string,
-): Promise<boolean> {
-  return (
-    (await sendJson("POST", `/api/session/${id}/model`, {
-      model: { providerID, id: modelID, ...(variant ? { variant } : {}) },
-    }))?.ok === true
-  );
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await sendJson("POST", `/api/session/${id}/model`, {
+    model: { providerID, id: modelID, ...(variant ? { variant } : {}) },
+  });
+  return res.ok ? { ok: true } : { ok: false, error: res.error };
 }
 
 // POST /session/{id}/command — run a slash command; replies {info, parts}

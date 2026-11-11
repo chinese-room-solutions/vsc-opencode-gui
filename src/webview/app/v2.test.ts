@@ -358,6 +358,37 @@ describe("v2 route/body/envelope translation", () => {
     });
   });
 
+  it("promptSession stops on a failed agent switch — no prompt POST", async () => {
+    onApi((call) =>
+      call.path === "/api/session/ses_1/agent"
+        ? apiFailWith("HTTP 400: unknown agent")
+        : undefined,
+    );
+    const sent = await promptSession(
+      "ses_1",
+      [{ type: "text", text: "hi" }],
+      "build",
+    );
+    assert.equal(sent.ok, false);
+    assert.match(sent.error ?? "", /Could not switch the agent to build/);
+    assert.equal(callsFor("/api/session/ses_1/prompt").length, 0);
+  });
+
+  it("promptSession stops on a failed model switch — no prompt POST", async () => {
+    onApi((call) =>
+      call.path === "/api/session/ses_1/model"
+        ? apiFailWith("HTTP 400: unknown model")
+        : undefined,
+    );
+    const sent = await promptSession("ses_1", [{ type: "text", text: "hi" }], undefined, {
+      providerID: "p",
+      id: "m",
+    });
+    assert.equal(sent.ok, false);
+    assert.match(sent.error ?? "", /Could not switch the model to p\/m/);
+    assert.equal(callsFor("/api/session/ses_1/prompt").length, 0);
+  });
+
   it("promptSession folds multiple text parts into one {text} plus agents", async () => {
     onApi((call) =>
       call.path === "/api/session/ses_1/prompt" ? {} : undefined,
