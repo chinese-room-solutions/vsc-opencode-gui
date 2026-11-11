@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "preact/hooks";
 import type { JSX } from "preact";
-import { attachAllowed, attachMime, chipMime, extOf, findFiles, isText, sniffsText, type SessionStatus } from "../api";
+import { attachAllowed, attachMime, chipMime, droppedFileRefs, extOf, findFiles, isText, sniffsText, type SessionStatus } from "../api";
 import { postToHost, openFile, openExternal } from "../host";
 import { atTrigger, mentionTokens, resolve, type MentionToken } from "../mentions";
 import {
@@ -849,11 +849,43 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
           .split(/\r?\n/)
           .filter((l: string) => l && !l.startsWith("#"));
       }
-      const refs = urls.map((u) => ({
-        uri: u,
-        name: decodeURIComponent(u.split("/").pop() ?? "file"),
-      }));
-      if (refs.length > 0) addComposerFiles(draftKey, refs);
+      // Remote windows hand out vscode-remote:// / vscode-vfs:// URIs the
+      // server cannot read — translate them to the file paths they name,
+      // refuse the rest, then apply the attach gate like files-picked.
+      const { refs, refused: unreadable } = droppedFileRefs(urls);
+      const input = attachInputs(draftKey);
+      let unsupported = 0;
+      let notForModel = 0;
+      const ok = refs.filter((f) => {
+        const mime = chipMime(f);
+        if (mime === undefined) unsupported++;
+        else if (!attachAllowed(mime, input)) notForModel++;
+        else return true;
+        return false;
+      });
+      const refused = unreadable + unsupported + notForModel;
+      if (refused)
+        setSendError(
+          `${refused} file${refused > 1 ? "s" : ""} not attached (${
+            [
+              unreadable &&
+                (unreadable > 1
+                  ? `${unreadable} not a local file`
+                  : "not a local file"),
+              unsupported &&
+                (unsupported > 1
+                  ? `${unsupported} unsupported type`
+                  : "unsupported type"),
+              notForModel &&
+                (notForModel > 1
+                  ? `${notForModel} not supported by this model`
+                  : "not supported by this model"),
+            ]
+              .filter(Boolean)
+              .join(", ")
+          }).`,
+        );
+      if (ok.length > 0) addComposerFiles(draftKey, ok);
     };
     window.addEventListener("dragover", onOver);
     window.addEventListener("dragleave", onLeave);

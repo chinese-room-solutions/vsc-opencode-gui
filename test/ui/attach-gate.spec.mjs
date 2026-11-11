@@ -141,6 +141,36 @@ test("a file over the relay cap is refused and points at the + picker", async ({
   expect(watched.errors).toEqual([]);
 });
 
+// A VS Code-internal drag (explorer) carries no Files — resourceurls hold
+// the URIs. Remote windows hand out vscode-remote:// URIs the server
+// cannot read: they must land as file paths, and web addresses are
+// refused like any other unreadable chip.
+test("a resourceurls drop translates remote URIs and refuses web ones", async ({ page, rig }) => {
+  const watched = watchPage(page);
+  await openSession(page, rig.url);
+  await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.setData(
+      "resourceurls",
+      JSON.stringify([
+        "file:///repo/picks/config.json",
+        "vscode-remote://wsl%2Bubuntu/home/dev/notes.txt",
+        "https://example.com/page",
+      ]),
+    );
+    window.dispatchEvent(new DragEvent("dragover", { dataTransfer: dt, bubbles: true, cancelable: true }));
+    window.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }));
+  });
+  const chip = page.locator(".composer-files .file-chip");
+  await expect(chip).toHaveCount(2);
+  await expect(chip.nth(0).locator(".chip-name")).toHaveText("config.json");
+  await expect(chip.nth(1).locator(".chip-name")).toHaveText("notes.txt");
+  await expect(page.locator(".send-error")).toHaveText(
+    "1 file not attached (not a local file).",
+  );
+  expect(watched.errors).toEqual([]);
+});
+
 // The rig's acquireVsCodeApi stand-in logs non-api host messages to the
 // console as "[host-msg] {json}" — the observable side of a chip click.
 const hostMsgs = (page) => {

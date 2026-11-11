@@ -2102,6 +2102,37 @@ export function chipMime(f: {
   return attachMime(f.name, "") ?? (f.text ? "text/plain" : undefined);
 }
 
+// Explorer drops arrive as VS Code resource URIs, and in remote windows
+// those carry vscode-remote:// or vscode-vfs:// schemes the server cannot
+// read — it only opens file: URIs, and one unreadable chip kills the whole
+// prompt POST. Translate the readable ones to the file paths they name and
+// count the rest as refused; the caller surfaces one error line instead.
+export function droppedFileRefs(urls: string[]): {
+  refs: { uri: string; name: string }[];
+  refused: number;
+} {
+  const refs: { uri: string; name: string }[] = [];
+  let refused = 0;
+  const last = (s: string) => decodeURIComponent(s.split("/").pop() ?? "file");
+  for (const raw of urls) {
+    let u: URL;
+    try {
+      u = new URL(raw);
+    } catch {
+      refused++;
+      continue;
+    }
+    if (u.protocol === "file:") {
+      refs.push({ uri: raw, name: last(u.pathname) });
+    } else if (u.protocol === "vscode-remote:" || u.protocol === "vscode-vfs:") {
+      refs.push({ uri: `file://${u.pathname}`, name: last(u.pathname) });
+    } else {
+      refused++;
+    }
+  }
+  return { refs, refused };
+}
+
 // v1 message parts we send. Text carries the prompt (mentions stay inline);
 // a file part is an attachment (data-URI) or a mention (file:// url plus a
 // source range pointing back at the "@path" text); an agent part switches

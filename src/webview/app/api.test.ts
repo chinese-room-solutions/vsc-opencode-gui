@@ -12,6 +12,7 @@ import {
   attachMime,
   attachmentParts,
   chipMime,
+droppedFileRefs,
   clampPartText,
   clampToolOutput,
   createSession,
@@ -277,6 +278,33 @@ describe("api", () => {
     it("stays undefined when nothing classifies", () => {
       assert.equal(chipMime({ uri: "file:///w/blob.bin", name: "blob.bin" }), undefined);
       assert.equal(chipMime({ uri: "file:///w/notes.weird", name: "notes.weird" }), undefined);
+    });
+  });
+
+  describe("droppedFileRefs", () => {
+    it("keeps file urls as-is with their decoded name", () => {
+      const { refs, refused } = droppedFileRefs(["file:///d%3A/proj/notes.txt"]);
+      assert.deepEqual(refs, [{ uri: "file:///d%3A/proj/notes.txt", name: "notes.txt" }]);
+      assert.equal(refused, 0);
+    });
+    it("translates vscode-remote and vscode-vfs to the file path they name", () => {
+      const { refs, refused } = droppedFileRefs([
+        "vscode-remote://wsl%2Bubuntu/home/dev/notes.txt",
+        "vscode-vfs://github/mine/readme.md",
+      ]);
+      assert.deepEqual(refs, [
+        { uri: "file:///home/dev/notes.txt", name: "notes.txt" },
+        { uri: "file:///mine/readme.md", name: "readme.md" },
+      ]);
+      assert.equal(refused, 0);
+    });
+    it("refuses anything the server cannot read", () => {
+      const { refs, refused } = droppedFileRefs([
+        "https://example.com/x.png",
+        "not a url at all",
+      ]);
+      assert.deepEqual(refs, []);
+      assert.equal(refused, 2);
     });
   });
 
