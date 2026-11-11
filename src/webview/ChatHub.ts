@@ -130,6 +130,17 @@ export class ChatHub implements vscode.Disposable {
       this._safe(chat, (c) => c.setQuestionSound(enabled));
   }
 
+  // The stuck thresholds changed (main.ts watches them).
+  setStuckTool(seconds: number) {
+    for (const chat of this._chats)
+      this._safe(chat, (c) => c.setStuckTool(seconds));
+  }
+
+  setStuckAutoAbort(seconds: number) {
+    for (const chat of this._chats)
+      this._safe(chat, (c) => c.setStuckAutoAbort(seconds));
+  }
+
   // The peer registry (PeerRegistry) changed — peer cards re-name.
   setPeers(peers: PeerInfo[]) {
     this._peers = peers;

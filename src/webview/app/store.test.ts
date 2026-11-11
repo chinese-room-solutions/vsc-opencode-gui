@@ -1,5 +1,6 @@
 ﻿import "./setup.test";
 import { strict as assert } from "node:assert";
+import { stuckState } from "./stuck";
 import {
   apiLog,
   ApiCall,
@@ -17,6 +18,7 @@ import {
   API_FAIL,
   apiFailWith,
   pendingTimers,
+  runStuckTick,
   sessRow,
   setNow,
   settle,
@@ -4769,6 +4771,9 @@ describe("revert fold", () => {
 });
 
 describe("hostMessage routing", () => {
+  // Fresh read per call — stuck.test.ts's pattern, a direct assert on the
+  // element access narrows it for the rest of the scope.
+  const marksOf = (sid: string) => stuckState.value[sid];
   it("insert-text hands text to the composer on screen", () => {
     const prev = composerInsert.value?.seq ?? 0;
     hostMessage({ type: "insert-text", text: "hello" });
@@ -4802,6 +4807,92 @@ describe("hostMessage routing", () => {
       ep1: { name: "zen-garden", title: "Fix the rate" },
       ep3: { name: "no-title", title: "" },
     });
+  });
+  it("stuck-tool flips the threshold the live tick uses", () => {
+    const sid = "hm-st1";
+    sessionStatus.value = { ...sessionStatus.value, [sid]: { type: "busy" } };
+    messagesBySession.value = new Map([
+      ...messagesBySession.value,
+      [
+        sid,
+        [
+          {
+            info: { id: "m1", role: "assistant", time: { created: T0 } },
+            parts: [
+              {
+                id: "p1",
+                messageID: "m1",
+                sessionID: sid,
+                type: "tool",
+                tool: "bash",
+                state: { status: "running", time: { start: T0 } },
+              },
+            ],
+          },
+        ],
+      ],
+    ]);
+    hostMessage({ type: "stuck-tool", seconds: 60 });
+    setNow(T0 + 1_100); // past the baked boot value, under the push
+    runStuckTick();
+    assert.ok(!marksOf(sid), "no mark under the pushed threshold");
+    hostMessage({ type: "stuck-tool", seconds: 1 }); // the boot value again
+    setNow(T0 + 1_200);
+    runStuckTick();
+    assert.deepEqual(marksOf(sid)?.parts["p1"], { since: T0 });
+    sessionStatus.value = Object.fromEntries(
+      Object.entries(sessionStatus.value).filter(([k]) => k !== sid),
+    );
+    const rows = new Map(messagesBySession.value);
+    rows.delete(sid);
+    messagesBySession.value = rows;
+  });
+  it("stuck-auto-abort arms the automatic interrupt live", async () => {
+    const sid = "hm-st2";
+    sessionStatus.value = { ...sessionStatus.value, [sid]: { type: "busy" } };
+    messagesBySession.value = new Map([
+      ...messagesBySession.value,
+      [
+        sid,
+        [
+          {
+            info: { id: "m1", role: "assistant", time: { created: T0 } },
+            parts: [
+              {
+                id: "p1",
+                messageID: "m1",
+                sessionID: sid,
+                type: "tool",
+                tool: "bash",
+                state: { status: "running", time: { start: T0 } },
+              },
+            ],
+          },
+        ],
+      ],
+    ]);
+    setNow(T0 + 1_100);
+    runStuckTick();
+    assert.ok(marksOf(sid)?.parts["p1"], "marked at the boot value");
+    assert.equal(callsFor(`/session/${sid}/abort`).length, 0);
+    hostMessage({ type: "stuck-auto-abort", seconds: 1 });
+    setNow(T0 + 1_200);
+    onApi(
+      (call) =>
+        call.method === "POST" && call.path === `/session/${sid}/abort`
+          ? {}
+          : undefined,
+    );
+    runStuckTick();
+    await settle();
+    assert.equal(callsFor(`/session/${sid}/abort`).length, 1);
+    hostMessage({ type: "stuck-auto-abort", seconds: 0 }); // detection only
+    sessionStatus.value = Object.fromEntries(
+      Object.entries(sessionStatus.value).filter(([k]) => k !== sid),
+    );
+    const rows = new Map(messagesBySession.value);
+    rows.delete(sid);
+    messagesBySession.value = rows;
   });
   it("files-picked filters unsupported types onto the session composer", () => {
     // The session's model is unknown to the catalog, so the legacy

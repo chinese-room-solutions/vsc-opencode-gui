@@ -630,6 +630,16 @@ export class AppHost implements vscode.Disposable {
     this._post({ type: "question-sound", enabled });
   }
 
+  // The stuck thresholds changed (main.ts watches them), the app's stuck
+  // module adopts them live, the baked metas stay the boot values.
+  setStuckTool(seconds: number) {
+    this._post({ type: "stuck-tool", seconds });
+  }
+
+  setStuckAutoAbort(seconds: number) {
+    this._post({ type: "stuck-auto-abort", seconds });
+  }
+
   // Peer registry snapshot (PeerRegistry) for peer-card headers. The page
   // may not be listening when the first one races its load, so every ping
   // replays it — cheap, and idempotent in the store.

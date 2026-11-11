@@ -65,6 +65,18 @@ function questionSoundSetting(): boolean {
     .get<boolean>("questionSound", true);
 }
 
+function stuckToolSetting(): number {
+  return vscode.workspace
+    .getConfiguration("opencodeGui")
+    .get<number>("stuckToolSeconds", 300);
+}
+
+function stuckAutoAbortSetting(): number {
+  return vscode.workspace
+    .getConfiguration("opencodeGui")
+    .get<number>("stuckAutoAbortSeconds", 0);
+}
+
 const SIDEBAR_CMDS = {
   primary: "workbench.action.toggleSidebarVisibility",
   auxiliary: "workbench.action.toggleAuxiliaryBar",
@@ -1261,6 +1273,13 @@ export function activate(context: vscode.ExtensionContext) {
       // And the question sound.
       if (e.affectsConfiguration("opencodeGui.questionSound")) {
         hub.setQuestionSound(questionSoundSetting());
+      }
+      // And the stuck thresholds.
+      if (e.affectsConfiguration("opencodeGui.stuckToolSeconds")) {
+        hub.setStuckTool(stuckToolSetting());
+      }
+      if (e.affectsConfiguration("opencodeGui.stuckAutoAbortSeconds")) {
+        hub.setStuckAutoAbort(stuckAutoAbortSetting());
       }
     }),
   );

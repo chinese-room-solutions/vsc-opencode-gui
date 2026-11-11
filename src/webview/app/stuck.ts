@@ -47,8 +47,18 @@ function numMeta(name: string, fallback: number): number {
   return Number.isFinite(raw) && raw >= 0 ? raw : fallback;
 }
 
-const stuckToolSeconds = numMeta("opencode-stuck-tool", 300);
-const stuckAutoAbortSeconds = numMeta("opencode-stuck-auto-abort", 0);
+let stuckToolSeconds = numMeta("opencode-stuck-tool", 300);
+let stuckAutoAbortSeconds = numMeta("opencode-stuck-auto-abort", 0);
+
+// The host hot-pushes the settings (main.ts watches them), the baked metas
+// stay the boot values. Anything else keeps the current value.
+export function setStuckTool(seconds: number): void {
+  if (Number.isFinite(seconds) && seconds >= 0) stuckToolSeconds = seconds;
+}
+
+export function setStuckAutoAbort(seconds: number): void {
+  if (Number.isFinite(seconds) && seconds >= 0) stuckAutoAbortSeconds = seconds;
+}
 
 // Last activity per tool part (session → part → epoch ms) and per session,
 // tracked by diffing what the signals show between ticks: a new list for a

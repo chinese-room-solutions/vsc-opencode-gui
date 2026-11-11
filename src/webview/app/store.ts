@@ -81,6 +81,7 @@ import { translateV2Event, v2RowID } from "./v2events";
 import { hostSessionId, postToHost } from "./host";
 import { parseMentions } from "./mentions";
 import { setCopyModifier } from "./markdown";
+import { setStuckAutoAbort, setStuckTool } from "./stuck";
 import {
   navigate,
   route,
@@ -3591,6 +3592,7 @@ export function hostMessage(msg: unknown) {
     dialect?: string;
     url?: string;
     kind?: string;
+    seconds?: number;
   };
   // The webview became visible again: events streamed while VS Code had
   // it suspended were lost — pull truth.
@@ -3650,6 +3652,13 @@ export function hostMessage(msg: unknown) {
   // The questionSound setting changed host-side.
   if (m.type === "question-sound" && typeof m.enabled === "boolean") {
     setQuestionSound(m.enabled);
+  }
+  // The stuck thresholds changed host-side.
+  if (m.type === "stuck-tool" && typeof m.seconds === "number") {
+    setStuckTool(m.seconds);
+  }
+  if (m.type === "stuck-auto-abort" && typeof m.seconds === "number") {
+    setStuckAutoAbort(m.seconds);
   }
   // This page's chime claim won the host's window (every chat page
   // claims the same event — see sound.ts); the granted page rings it.
