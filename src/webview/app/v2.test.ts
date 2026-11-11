@@ -71,7 +71,8 @@ function row(
   return { info: { id, role, time: { created } }, parts: [] };
 }
 
-// v2 form row: one option field; the field title is the capitalized key.
+// v2 form row: one option field, the question text rides the field
+// description (mirrors toField), the field title is the capitalized key.
 function formRow(
   id: string,
   title: string,
@@ -87,7 +88,9 @@ function formRow(
       {
         key,
         type: "string",
+        custom: true,
         title: key[0].toUpperCase() + key.slice(1),
+        description: title,
         options: options.map(([value, label]) => ({ value, label })),
       },
     ],
@@ -1390,7 +1393,28 @@ describe("v2 transcript normalization (fetchMessages)", () => {
         };
       if (call.path === "/api/session/ses_1/form")
         return {
-          data: [formRow("frm_1", "Proceed?", "go", [["yes", "Yes"]])],
+          data: [
+            formRow("frm_1", "Proceed?", "go", [["yes", "Yes"]]),
+            // websearch-shaped: no field title, the question is only in
+            // the description.
+            {
+              id: "frm_2",
+              sessionID: "ses_1",
+              title: "Questions",
+              fields: [
+                {
+                  key: "search",
+                  type: "string",
+                  custom: true,
+                  description: "Allow OpenCode to search the web",
+                  options: [
+                    { value: "allow", label: "Allow" },
+                    { value: "deny", label: "Deny" },
+                  ],
+                },
+              ],
+            },
+          ],
         };
       if (call.method === "POST" && call.path === "/api/session/ses_1/form/frm_1/reply")
         return {};
@@ -1415,6 +1439,10 @@ describe("v2 transcript normalization (fetchMessages)", () => {
     ]);
     assert.equal(row?.questions[0].question, "Proceed?");
     assert.equal(row?.questions[0].options?.[0].label, "Yes");
+    const web = questions?.rows[1];
+    assert.equal(web?.id, "frm_2");
+    assert.equal(web?.questions[0].question, "Allow OpenCode to search the web");
+    assert.equal(web?.questions[0].header, "search");
     // The reply is always keyed by the field key, values not labels.
     assert.equal(
       await replyQuestion("ses_1", "frm_1", [["Yes"]], false, row),
@@ -2511,7 +2539,7 @@ describe("v2 SSE → pipeline translation", () => {
     ]);
     assert.equal(q.questions?.[0].question, "Continue?");
     assert.deepEqual(q.questions?.[0].options, [{ label: "Yes" }, { label: "No" }]);
-    assert.equal(q.questions?.[0].custom, false);
+    assert.equal(q.questions?.[0].custom, true);
     // settle events
     assert.deepEqual(
       translateV2Event(ev("form.replied", { sessionID: "s", id: "frm_1" })),

@@ -657,9 +657,10 @@ export async function fetchSessionQuestions(
   };
 }
 
-// v2 form row → v1 QuestionRequest. Field shape is only partially known
-// (Form.Field: name/label/type/options); option-like fields list their
-// options, everything else offers the free-text row. Reply specs (key,
+// v2 form row → v1 QuestionRequest. The real Form.Field carries
+// key/title/description/type/options/custom — the question text rides
+// `description`, the dock header rides `title`. Option-like fields list
+// their options, everything else offers the free-text row. Reply specs (key,
 // multiple, label→value) ride along so the reply can key by `key` and send
 // option values.
 export function formToQuestion(
@@ -728,11 +729,14 @@ export function formToQuestion(
                   (o): o is { label: string; description?: string } => !!o,
                 )
             : [];
+          const desc =
+            typeof f.description === "string" ? f.description : undefined;
           return {
             question:
-              fields.length > 1
+              desc ??
+              (fields.length > 1
                 ? `${title} — ${label}`
-                : title || label,
+                : title || label),
             header: label,
             options,
             multiple: f.type === "multiselect" || f.multiple === true,
