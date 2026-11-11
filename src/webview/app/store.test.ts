@@ -3405,6 +3405,24 @@ describe("session.error", () => {
     });
     assert.equal(sendError.value, undefined);
   });
+  it("a turn error takes the queued command's echo with the entry", async () => {
+    const sid = "se4";
+    open(sid, [row("u1", "user", T0)]);
+    setBusy(sid);
+    queueCommand(sid, "/compact");
+    const cid = queuedTurns.value[0].echoCid ?? "";
+    assert.ok(findRow(sid, cid));
+    await sseFlush("session.error", {
+      sessionID: sid,
+      error: { name: "RetryError", data: { message: "boom" } },
+    });
+    assert.equal(queuedTurns.value.length, 0);
+    assert.equal(findRow(sid, cid), undefined);
+    assert.deepEqual(
+      JSON.parse(localStorageStub.getItem(`opencode-cmd-${sid}`) ?? "null"),
+      [],
+    );
+  });
 });
 
 describe("stop and interrupt", () => {
@@ -3428,6 +3446,56 @@ describe("stop and interrupt", () => {
     await stopSession(sid);
     assert.equal(sendError.value?.text, "Could not interrupt the session.");
     assert.equal(stoppedPrompts.value.has("u1"), false);
+  });
+  it("a stop takes the queued command's echo with the entry", async () => {
+    const sid = "st3";
+    open(sid, [row("u1", "user", T0)]);
+    setBusy(sid);
+    queueCommand(sid, "/compact");
+    const cid = queuedTurns.value[0].echoCid ?? "";
+    assert.ok(findRow(sid, cid));
+    await stopSession(sid);
+    assert.equal(queuedTurns.value.length, 0);
+    assert.equal(findRow(sid, cid), undefined);
+    assert.deepEqual(
+      JSON.parse(localStorageStub.getItem(`opencode-cmd-${sid}`) ?? "null"),
+      [],
+    );
+  });
+  it("the dropped echo never resurrects, and a later run pairs with its own row", async () => {
+    const sid = "st4";
+    open(sid, [row("u1", "user", T0)]);
+    setBusy(sid);
+    queueCommand(sid, "/compact");
+    const dropped = queuedTurns.value[0].echoCid ?? "";
+    await stopSession(sid);
+    // Reload path: the fetch re-splices stored echoes — the dropped one
+    // must be gone from storage, or it comes back from the dead.
+    onApi(messageMock(sid, { data: [], cursor: {} }, []));
+    await refreshMessages(sid);
+    assert.equal(findRow(sid, dropped), undefined);
+    // A later real run: exactly its own echo is up.
+    setBusy(sid);
+    queueCommand(sid, "/compact");
+    const live = queuedTurns.value[0].echoCid ?? "";
+    assert.ok(findRow(sid, live));
+    onApi(
+      messageMock(sid, { data: [], cursor: {} }, [
+        {
+          info: { id: "srv_c", role: "user", time: { created: Date.now() } },
+          parts: [textPart("srv_c:0", "srv_c", sid, "/compact")],
+        },
+      ]),
+    );
+    await refreshMessages(sid);
+    // The durable row claims the live echo — had the dropped one
+    // survived, oldest-with-oldest would have fed it the row instead and
+    // left the live echo hanging.
+    assert.equal(findRow(sid, live), undefined);
+    assert.equal(
+      listOf(sid).some((m) => m.info.id.startsWith("cmd:")),
+      false,
+    );
   });
 });
 

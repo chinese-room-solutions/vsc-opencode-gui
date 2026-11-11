@@ -172,8 +172,15 @@ export type QueuedTurn = {
 export const queuedTurns = signal<QueuedTurn[]>([]);
 
 function dropQueued(id: string): void {
-  if (queuedTurns.value.some((q) => q.id === id))
-    queuedTurns.value = queuedTurns.value.filter((q) => q.id !== id);
+  const gone = queuedTurns.value.filter((q) => q.id === id);
+  if (!gone.length) return;
+  queuedTurns.value = queuedTurns.value.filter((q) => q.id !== id);
+  // A dropped entry never fired, so its queue-time echo reads as a sent
+  // command that never ran — and an orphaned /compact echo shifts the
+  // oldest-with-oldest pairing onto the next real run. Take it with the
+  // entry (only the user-driven take-back also restores the composer).
+  for (const q of gone)
+    if (q.kind === "command" && q.echoCid) removeCommandEcho(id, q.echoCid);
 }
 
 export function hasQueued(id: string): boolean {
