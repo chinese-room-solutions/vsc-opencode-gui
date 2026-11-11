@@ -106,6 +106,7 @@ import {
   providerColors,
   setProjectColor,
   setSelection,
+  setSendError,
   status,
   stepUsage,
   stopSession,
@@ -5241,6 +5242,67 @@ describe("transcript load retry (9c1f2e7)", () => {
     await settle();
     assert.equal(failedMsgLoads.value.has("rl2"), false);
     assert.equal(fireExact(2000), 0);
+  });
+});
+
+// The child view mounts its own composer, so the feedback keyed to "the
+// session on screen" must follow the route's child, not its parent id.
+describe("a sub-agent view keeps its own composer feedback", () => {
+  it("a failed send restores the draft into the child composer", async () => {
+    const child = "ca1";
+    open(child, []);
+    const seqBefore = composerInsert.value?.seq ?? 0;
+    navigate({ view: "session", id: "pa1", child });
+    onApi((call) =>
+      call.path.startsWith(`/session/${child}/prompt_async`)
+        ? API_FAIL
+        : undefined,
+    );
+    await sendPrompt(child, "to the child");
+    assert.equal(getDraft(child), "to the child");
+    assert.equal(composerInsert.value?.seq, seqBefore + 1);
+    assert.equal(composerInsert.value?.text, "to the child");
+    // The default banner keys to the child too.
+    assert.equal(sendError.value?.for, child);
+    navigate({ view: "home" });
+  });
+
+  it("setSendError defaults to the child without an explicit session", () => {
+    navigate({ view: "session", id: "pa2", child: "ca2" });
+    setSendError("boom");
+    assert.equal(sendError.value?.for, "ca2");
+    assert.equal(sendError.value?.text, "boom");
+    navigate({ view: "home" });
+  });
+
+  it("files-picked lands its chips on the child composer", () => {
+    providers.value = undefined;
+    const child = "ca3";
+    sessions.value = [sessRow(child, { parentID: "pa3" })];
+    navigate({ view: "session", id: "pa3", child });
+    hostMessage({
+      type: "files-picked",
+      files: [{ uri: "u1", name: "a.png" }],
+    });
+    assert.equal(composerFiles.value[child]?.length, 1);
+    assert.equal(composerFiles.value["pa3"], undefined);
+    sessions.value = [];
+    navigate({ view: "home" });
+  });
+
+  it("a failed child transcript pull retries while the child is on screen", async () => {
+    navigate({ view: "session", id: "pa4", child: "ca4" });
+    onApi(messageMock("ca4", API_FAIL, API_FAIL));
+    await refreshMessages("ca4");
+    assert.equal(failedMsgLoads.value.has("ca4"), true);
+    assert.equal(fireExact(1000), 1); // the child's retry survives the fire
+    await settle();
+    assert.equal(failedMsgLoads.value.has("ca4"), true);
+    // Leaving the screen retires it: the next fire clears instead of pulling.
+    navigate({ view: "home" });
+    assert.equal(fireExact(2000), 1);
+    await settle();
+    assert.equal(failedMsgLoads.value.has("ca4"), false);
   });
 });
 // e4b1c93: v2 writes the prompt's user row only at first step start and

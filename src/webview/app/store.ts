@@ -386,7 +386,7 @@ function scheduleMsgRetry(id: string): void {
   const state = { timer: 0, tries: 0 };
   const fire = () => {
     state.tries++;
-    if (route.value.view === "session" && route.value.id === id)
+    if (routeSessionId() === id)
       void refreshMessages(id).then(() => {
         const r = msgRetries.get(id);
         if (r && r === state) {
@@ -423,6 +423,13 @@ export function messagesFor(
 // carries its own id, so it lands right even if another tab is front).
 // Keyed: nothing leaks into another session's transcript. Cleared on the
 // next attempt in the same session.
+// The session whose composer feedback (banners, drafts, attachment chips,
+// retry pulls) belongs on screen: the child when a sub-agent view is
+// open, else the route session.
+function routeSessionId(): string | undefined {
+  const r = route.value;
+  return r.view === "session" ? (r.child ?? r.id) : undefined;
+}
 export const sendError = signal<{ for?: string; text: string } | undefined>(
   undefined,
 );
@@ -449,12 +456,7 @@ export function setSendError(
   sendError.value =
     text === undefined
       ? undefined
-      : {
-          for:
-            forSession ??
-            (route.value.view === "session" ? route.value.id : undefined),
-          text,
-        };
+      : { for: forSession ?? routeSessionId(), text };
   if (sendError.value !== undefined) {
     sendErrorTimer = window.setTimeout(() => {
       sendError.value = undefined;
@@ -1387,10 +1389,7 @@ function commitRevertCut(id: string, revertID: string): void {
 export async function resolveFileRef(path: string): Promise<string> {
   if (path.includes("/")) return path;
   const base = (p: string) => p.replace(/\\/g, "/").split("/").pop() ?? "";
-  const sid =
-    route.value.view === "session"
-      ? (route.value.child ?? route.value.id)
-      : undefined;
+  const sid = routeSessionId();
   // Most recently touched wins — the model cites what it just read.
   let touched: string | undefined;
   const list = sid ? messagesBySession.value.get(sid) : undefined;
@@ -3670,40 +3669,42 @@ export function hostMessage(msg: unknown) {
   // then the host's content sniff stamp (text), then the active model's
   // input modalities — and a refused pick is surfaced once rather than sent
   // as a binary blob the endpoint would "read" into the context as raw
-  // bytes. The pick lands on the session composer that asked; with no
-  // session on screen there is no composer to land on.
-  if (m.type === "files-picked" && Array.isArray(m.files) && route.value.view === "session") {
-    const target = route.value.id;
-    const rows = (m.files as ComposerFile[]).filter(
-      (f) => !!f && typeof f.uri === "string" && typeof f.name === "string",
-    );
-    const input = attachInputs(target);
-    let unsupported = 0;
-    let notForModel = 0;
-    const ok = rows.filter((f) => {
-      const mime = chipMime(f);
-      if (mime === undefined) unsupported++;
-      else if (!attachAllowed(mime, input)) notForModel++;
-      else return true;
-      return false;
-    });
-    const refused = unsupported + notForModel;
-    if (refused)
-      setSendError(
-        `${refused} file${refused > 1 ? "s" : ""} not attached (${
-          [
-            unsupported &&
-              (unsupported > 1 ? `${unsupported} unsupported type` : "unsupported type"),
-            notForModel &&
-              (notForModel > 1
-                ? `${notForModel} not supported by this model`
-                : "not supported by this model"),
-          ]
-            .filter(Boolean)
-            .join(", ")
-        }).`,
+  // bytes. The pick lands on the composer of the session on screen — the
+  // child when a sub-agent view is open; with no session, no composer.
+  if (m.type === "files-picked" && Array.isArray(m.files)) {
+    const target = routeSessionId();
+    if (target !== undefined) {
+      const rows = (m.files as ComposerFile[]).filter(
+        (f) => !!f && typeof f.uri === "string" && typeof f.name === "string",
       );
-    addComposerFiles(target, ok);
+      const input = attachInputs(target);
+      let unsupported = 0;
+      let notForModel = 0;
+      const ok = rows.filter((f) => {
+        const mime = chipMime(f);
+        if (mime === undefined) unsupported++;
+        else if (!attachAllowed(mime, input)) notForModel++;
+        else return true;
+        return false;
+      });
+      const refused = unsupported + notForModel;
+      if (refused)
+        setSendError(
+          `${refused} file${refused > 1 ? "s" : ""} not attached (${
+            [
+              unsupported &&
+                (unsupported > 1 ? `${unsupported} unsupported type` : "unsupported type"),
+              notForModel &&
+                (notForModel > 1
+                  ? `${notForModel} not supported by this model`
+                  : "not supported by this model"),
+            ]
+              .filter(Boolean)
+              .join(", ")
+          }).`,
+        );
+      addComposerFiles(target, ok);
+    }
   }
   // The host snapshotted a pasted attachment: hand the path to the waiting
   // attach (requestAttachmentSnapshot) so the chip is born with it.
@@ -4419,8 +4420,7 @@ export async function sendPrompt(
 function restoreFailedDraft(id: string, body: string): void {
   const existing = getDraft(id).replace(/\s+$/, "");
   putDraft(id, existing ? `${existing}\n\n${body}` : body);
-  if (route.value.view === "session" && route.value.id === id)
-    insertComposerText(body);
+  if (routeSessionId() === id) insertComposerText(body);
 }
 
 // POST a prompt and adopt its turn: optimistic busy, the model/agent
