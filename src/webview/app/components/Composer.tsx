@@ -941,8 +941,10 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
       // The image preview floats over everything; dismiss it first — even
       // focused on the editor, Esc must not stop a turn underneath it.
       // (The Lightbox's window keydown does the closing; this editor
-      // handler fires before it and must just stand down.)
-      if (imgPreview.value) return;
+      // handler fires before it and must just stand down.) The same holds
+      // while an IME composition is live: cancelling it must not stop the
+      // turn or steal focus either.
+      if (e.isComposing || imgPreview.value) return;
       // Esc stops a running turn (Claude Code parity) — the zhipuai
       // endpoint's empty-step loops keep a dead turn busy with no way out
       // but the stop button. Idle, it drops focus back to the editor.

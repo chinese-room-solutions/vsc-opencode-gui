@@ -180,7 +180,7 @@ function PermissionDock(props: { perms: PermissionRequest[] }) {
           value={message}
           onInput={(e) => setMessage(e.currentTarget.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && message.trim()) {
+            if (e.key === "Enter" && !e.isComposing && message.trim()) {
               e.preventDefault();
               fire("reject");
             }
@@ -338,10 +338,10 @@ function QuestionDock(props: { q: QuestionRequest }) {
               )
             }
             onKeyDown={(e) => {
-              if (e.key === "Enter" && custom[step].trim()) {
+              if (e.key === "Enter" && !e.isComposing && custom[step].trim()) {
                 e.preventDefault();
                 advance();
-              } else if (e.key === "Escape") {
+              } else if (e.key === "Escape" && !e.isComposing) {
                 e.preventDefault();
                 void dismissQuestion(q.sessionID, q.id, q.v1 === true);
               }
