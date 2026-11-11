@@ -1485,6 +1485,65 @@ describe("queued turns apply in publish order (0382677)", () => {
   });
 });
 
+describe("a dead-end slash command keeps its text", () => {
+  it("an unknown command restores the draft and inserts it on screen", async () => {
+    const sid = "sl1";
+    commands.value = [{ name: "foo" }];
+    navigate({ view: "session", id: sid });
+    const seqBefore = composerInsert.value?.seq ?? 0;
+    await runSlashCommand(sid, "/nope now");
+    assert.equal(sendError.value?.text, "Unknown command /nope.");
+    assert.equal(getDraft(sid), "/nope now");
+    assert.deepEqual(composerInsert.value, {
+      text: "/nope now",
+      seq: seqBefore + 1,
+      replace: false,
+    });
+    navigate({ view: "home" });
+  });
+  it("a failed dispatch restores the draft when the server reads idle", async () => {
+    const sid = "sl2";
+    commands.value = [{ name: "foo" }];
+    onApi((call) =>
+      call.path === `/session/${sid}/command` ? API_FAIL : undefined,
+    );
+    await runSlashCommand(sid, "/foo go");
+    assert.equal(sendError.value?.text, "The command /foo could not be run.");
+    assert.equal(getDraft(sid), "/foo go");
+    assert.equal(listOf(sid).some((m) => m.info.id.startsWith("cmd:")), false);
+  });
+  it("a failed dispatch that reads busy keeps the echo and restores nothing", async () => {
+    const sid = "sl3";
+    commands.value = [{ name: "foo" }];
+    onApi((call) => {
+      if (call.path === `/session/${sid}/command`) return API_FAIL;
+      if (call.path === "/session/status") return { [sid]: { type: "busy" } };
+      return undefined;
+    });
+    await runSlashCommand(sid, "/foo go");
+    assert.equal(sendError.value, undefined);
+    assert.equal(getDraft(sid), "");
+    assert.ok(listOf(sid).some((m) => m.info.id.startsWith("cmd:")));
+  });
+  it("a slash line that is no command keeps its text", async () => {
+    const sid = "sl4";
+    await runSlashCommand(sid, "/ hi");
+    assert.equal(sendError.value, undefined);
+    assert.equal(getDraft(sid), "/ hi");
+  });
+  it("a queued run of an unknown command leaves the composer alone", async () => {
+    const sid = "sl5";
+    commands.value = [{ name: "foo" }];
+    navigate({ view: "session", id: sid });
+    const seqBefore = composerInsert.value?.seq ?? 0;
+    await runSlashCommand(sid, "/nope", true, "cmd:x");
+    assert.equal(sendError.value?.text, "Unknown command /nope.");
+    assert.equal(getDraft(sid), "");
+    assert.equal(composerInsert.value?.seq, seqBefore);
+    navigate({ view: "home" });
+  });
+});
+
 describe("composer attachment persistence", () => {
   const KEY = "opencode.attachments";
   const reset = async () => {

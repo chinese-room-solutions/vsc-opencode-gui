@@ -4720,7 +4720,12 @@ export async function runSlashCommand(
 ): Promise<void> {
   const m = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
   const name = m?.[1];
-  if (!name) return;
+  if (!name) {
+    // The line never parses as a command — hand it back, or the composer
+    // (already cleared) loses it silently.
+    if (!echoed) restoreFailedDraft(target, text.trim());
+    return;
+  }
   if (name === "compact") {
     await runCompact(target, echoed, echoCid);
     return;
@@ -4738,6 +4743,9 @@ export async function runSlashCommand(
     return;
   }
   if (!commands.value.some((c) => c.name === name)) {
+    // Unknown here means the queue pre-check missed or the registry
+    // changed — the user still typed it, so the text goes back.
+    if (!echoed) restoreFailedDraft(target, text.trim());
     setSendError(`Unknown command /${name}.`);
     return;
   }
@@ -4806,6 +4814,9 @@ export async function runSlashCommand(
     sessionStatus.value = { ...sessionStatus.value, [id]: { type: "idle" } };
     dropPending(id);
     if (cid) removeCommandEcho(id, cid);
+    // Idle truth: nothing fired server-side, so the line returns to the
+    // composer (the busy early-return above keeps it — that turn runs).
+    if (!echoed) restoreFailedDraft(target, text.trim());
     setSendError(`The command /${name} could not be run.`);
   } else {
     // The command turn's rows land in the legacy store; pull the durable
