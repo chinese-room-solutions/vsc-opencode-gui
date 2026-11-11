@@ -90,6 +90,10 @@ export interface AppHostOptions {
   claimBell?: (kind: BellKind) => boolean;
   // The page's tab-status facts landed (a session host's TabSignal).
   onTabSignal?: (facts: TabSignalFacts) => void;
+  // The page navigated to a loading/error view (ChatHub state change) —
+  // nothing will post tab-signal facts until it boots again, so the
+  // host-side icon flags must drop now.
+  onResetTabSignal?: () => void;
 }
 
 // The app pings at boot, then every 15 s. Silence past three cadences
@@ -154,6 +158,7 @@ export class AppHost implements vscode.Disposable {
   private readonly _hiddenProviders: HiddenProviders;
   private readonly _claimBell: ((kind: BellKind) => boolean) | undefined;
   private readonly _onTabSignal: ((facts: TabSignalFacts) => void) | undefined;
+  private readonly _onResetTabSignal: (() => void) | undefined;
 
   constructor(options: AppHostOptions) {
     this._extensionUri = options.extensionUri;
@@ -167,6 +172,7 @@ export class AppHost implements vscode.Disposable {
     this._hiddenProviders = options.hiddenProviders;
     this._claimBell = options.claimBell;
     this._onTabSignal = options.onTabSignal;
+    this._onResetTabSignal = options.onResetTabSignal;
   }
 
   private _webview?: vscode.Webview;
@@ -554,12 +560,14 @@ export class AppHost implements vscode.Disposable {
   setError(message: string, showInstallHint = true) {
     this._error = { message, showInstallHint };
     this._serverUrl = undefined;
+    this._onResetTabSignal?.();
     this._renderCurrentState();
   }
 
   setLoading() {
     this._serverUrl = undefined;
     this._error = undefined;
+    this._onResetTabSignal?.();
     this._renderCurrentState();
   }
 

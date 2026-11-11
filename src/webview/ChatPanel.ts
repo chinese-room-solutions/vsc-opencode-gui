@@ -165,6 +165,7 @@ class SessionPanel implements vscode.Disposable {
       hiddenProviders: deps.hiddenProviders,
       claimBell: (kind) => deps.hub.claimBell(kind),
       onTabSignal: (facts) => this._signal?.apply(facts, this._panel.active),
+      onResetTabSignal: () => this._signal?.reset(),
     });
     this._panel = vscode.window.createWebviewPanel(
       sessionViewType(_sessionId),

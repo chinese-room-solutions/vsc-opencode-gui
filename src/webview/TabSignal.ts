@@ -310,6 +310,14 @@ export class TabSignal<I> {
     this.refresh();
   }
 
+  /** The page left for a loading/error view — every fact it posted is gone. */
+  reset(): void {
+    this._busy = false;
+    this._attention = false;
+    this._ready = false;
+    this.refresh();
+  }
+
   private get _state(): TabSignalState {
     if (this._attention) return "attention";
     if (this._busy) return "busy";
