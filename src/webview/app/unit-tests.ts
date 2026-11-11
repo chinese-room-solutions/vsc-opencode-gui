@@ -6,6 +6,7 @@ import "./router.test";
 import "./markdown.test";
 import "./rate.test";
 import "./store.test";
+import "./components/ContextRing.test";
 import "./components/ToolCard.test";
 import "./components/SubagentMenu.test";
 import "./v2.test";
