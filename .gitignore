@@ -17,3 +17,6 @@ test-results/
 
 # Runtime-generated tab-icon frames (EDH writes into the repo)
 /tabicons-v5/
+
+# Local work plan
+/PLAN.md
