@@ -1146,6 +1146,7 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
             spellcheck={false}
             placeholder="Ask anything, / for commands, @ for context..."
             onInput={(e) => {
+              resetSweep();
               resize(e.currentTarget);
               syncText(e.currentTarget);
               putDraft(draftKey, e.currentTarget.value);
