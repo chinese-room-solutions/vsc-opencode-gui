@@ -656,6 +656,10 @@ let failNextPrompt = false;
 // The most recent scripted prompt turn (runPrompt), for specs that
 // compare the rendered transcript against the wire truth.
 let lastPrompt = null;
+// One-shot reply script for the next runPrompt ({text, chars}), armed via
+// /__control/next-reply: the turn streams exactly this text instead of
+// the filler sentences.
+let nextReply = null;
 const timers = new Set();
 function later(fn, ms) {
   const t = setTimeout(() => {
@@ -665,16 +669,19 @@ function later(fn, ms) {
   timers.add(t);
   return t;
 }// Grow a text part over the v1 stream (message.part.delta), then call onDone.
-function streamText(sid, messageID, partID, { first = 100, count, chars, interval = 150, onChunk, onDone }) {
+function streamText(sid, messageID, partID, { first = 100, count, chars, interval = 150, source, onChunk, onDone }) {
   streamCount++;
   let s = Math.floor(Math.random() * SENTENCES.length);
   let tick = 0;
   const step = () => {
-    // One delta per tick, ~`chars` long: sentences until the budget fills,
-    // a paragraph break every 4th delta.
+    // One delta per tick: the next `chars` of a scripted `source`, else
+    // ~`chars` of sentences with a paragraph break every 4th delta.
     let delta = "";
-    while (delta.length < chars) delta += sentence(s++) + " ";
-    if (tick % 4 === 3) delta += "\n\n";
+    if (source !== undefined) delta = source.slice(tick * chars, (tick + 1) * chars);
+    else {
+      while (delta.length < chars) delta += sentence(s++) + " ";
+      if (tick % 4 === 3) delta += "\n\n";
+    }
     emitV1("message.part.delta", { sessionID: sid, messageID, partID, field: "text", delta });
     onChunk?.(delta);
     tick++;
@@ -847,10 +854,14 @@ function runPrompt(sid, text = "") {
     trackPart(part);
   }, 380);
   const full = [];
+  const script = nextReply;
+  nextReply = null;
+  const chars = script?.chars ?? 170;
   streamText(sid, a, pt, {
     first: 2000,
-    count: 44,
-    chars: 170,
+    count: script ? Math.ceil(script.text.length / chars) : 44,
+    chars,
+    source: script?.text,
     onChunk: (delta) => {
       full.push(delta);
       trackText(a, pt, delta);
@@ -1316,6 +1327,16 @@ const server = http.createServer(async (req, res) => {
     if (method === "POST" && path === "/__control/fail-next-prompt") {
       await readBody(req);
       failNextPrompt = true;
+      json(res, 200, { ok: true });
+      return;
+    }
+    if (method === "POST" && path === "/__control/next-reply") {
+      const body = await readBody(req);
+      if (typeof body.text !== "string" || !body.text) {
+        json(res, 400, { error: "text required" });
+        return;
+      }
+      nextReply = { text: body.text, chars: Math.max(1, body.chars ?? 170) };
       json(res, 200, { ok: true });
       return;
     }

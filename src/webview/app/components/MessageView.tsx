@@ -121,6 +121,13 @@ const STREAM_PARSE_MS = 250;
 const STREAM_RAW_LIMIT = 131_072;
 const TYPE_CPS = 150;
 const TYPE_CATCHUP_S = 1.5;
+// The blocks the typing tail may continue inside. Never an inline element:
+// a code span, link or emphasis that ends the parsed prefix is closed, and
+// the text after it belongs after it.
+const TAIL_BLOCKS = new Set([
+  "P", "LI", "UL", "OL", "BLOCKQUOTE", "H1", "H2", "H3", "H4", "H5", "H6",
+  "TABLE", "THEAD", "TBODY", "TR", "TH", "TD", "DIV",
+]);
 
 // One floating image preview for pill hovers — created lazily, reused,
 // never interactive.
@@ -222,19 +229,27 @@ function Markdown(props: {
       enhanceInlineCode(el);
     }
     // Re-mount the tail after each parse (dangerouslySetInnerHTML
-    // destroys it with the rest) inside the deepest last element, so
+    // destroys it with the rest) inside the deepest last block, so
     // streamed text continues inline instead of opening a line after the
-    // prefix's last block — never inside the copy buttons that sit last
-    // in code wraps and quotes. textContent only: the tail is raw
-    // source, never trusted html.
+    // prefix's last block. The walk follows the last node, not the last
+    // element, so text after a code span keeps the tail out of the span.
+    // It skips the whitespace between blocks and the copy buttons that
+    // sit last in code wraps and quotes. textContent only: the tail is
+    // raw source, never trusted html.
     const span = tail.current ?? document.createElement("span");
     tail.current = span;
     if (animated && el) {
       let at: Element = el;
       for (;;) {
-        const next = at.lastElementChild;
-        if (!next || next === span || next.tagName === "BUTTON") break;
-        at = next;
+        let last = at.lastChild;
+        while (
+          last &&
+          (last.nodeName === "BUTTON" ||
+            (last instanceof Text && !last.data.trim()))
+        )
+          last = last.previousSibling;
+        if (!(last instanceof Element) || !TAIL_BLOCKS.has(last.tagName)) break;
+        at = last;
       }
       at.appendChild(span);
       const text = latest.current;

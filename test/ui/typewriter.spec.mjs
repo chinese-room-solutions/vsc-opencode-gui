@@ -8,6 +8,7 @@ import {
   expect,
   watchPage,
   openSession,
+  control,
   waitIdle,
 } from "./support/fixture.mjs";
 
@@ -188,5 +189,77 @@ test("reduced motion still types per character and settles complete", async ({
     )
     .toBe(strip(truth.text));
 
+  expect(watched.errors).toEqual([]);
+});
+
+// Text after an inline code span streams after it, never into it: the
+// raw tail joins the last block past a closed span. Checked on every DOM
+// mutation of the stream, so the reveal reads in order and code holds
+// only the spans' own text.
+test("streamed text never lands inside a closed code span", async ({
+  page,
+  rig,
+}) => {
+  const watched = watchPage(page);
+  await openSession(page, rig.url);
+  const reply = [
+    "When `activate()` runs, the extension spawns `opencode serve` and spends the rest of its life negotiating with that process, waiting for it to bind.",
+    "The port lands in `globalState` and the next activation reads it back before it spawns again. Teardown happens in `deactivate()`, and the stream keeps going well past the last span.",
+  ].join("\n\n");
+  const spans = ["activate()", "opencode serve", "globalState", "deactivate()"];
+  const collapse = (s) => s.replace(/[`\s]+/g, "");
+  const row = await page.locator(".assistant-text").count();
+  await page.evaluate(
+    ({ row, spans, want }) => {
+      const collapse = (s) => s.replace(/[`\s]+/g, "");
+      const probe = (window.__codeProbe = { checks: 0, tails: 0, bad: [] });
+      const bad = (msg) => {
+        if (probe.bad.length < 10) probe.bad.push(msg);
+      };
+      new MutationObserver(() => {
+        const els = document.querySelectorAll(".assistant-text");
+        if (els.length <= row) return;
+        const el = els[els.length - 1];
+        probe.checks++;
+        // The typewriter's tail is the one classless span in the bubble.
+        if (el.querySelector("span:not([class])")) probe.tails++;
+        for (const c of el.querySelectorAll("code"))
+          if (!spans.includes(c.textContent)) bad(`code holds "${c.textContent}"`);
+        const got = collapse(el.textContent ?? "");
+        if (!collapse(want).startsWith(got)) bad(`out of order: ...${got.slice(-60)}`);
+      }).observe(document.querySelector(".msgs"), {
+        subtree: true,
+        childList: true,
+        characterData: true,
+      });
+    },
+    { row, spans, want: reply },
+  );
+
+  await control(rig, "/__control/next-reply", { text: reply, chars: 24 });
+  await page.click(".composer textarea");
+  await page.fill(".composer textarea", "Probe inline code mid-stream");
+  await page.press(".composer textarea", "Enter");
+  await expect
+    .poll(() => page.locator(".assistant-text").count(), { timeout: 5000 })
+    .toBe(row + 1);
+  await expect
+    .poll(
+      async () =>
+        collapse(
+          await page.evaluate(() => {
+            const els = document.querySelectorAll(".assistant-text");
+            return els[els.length - 1]?.textContent ?? "";
+          }),
+        ),
+      { timeout: 15_000 },
+    )
+    .toBe(collapse(reply));
+  await waitIdle(rig);
+
+  const probe = await page.evaluate(() => window.__codeProbe);
+  expect(probe.bad).toEqual([]);
+  expect(probe.tails, "the typewriter tail ran").toBeGreaterThan(0);
+  expect(probe.checks).toBeGreaterThan(20);
   expect(watched.errors).toEqual([]);
 });
