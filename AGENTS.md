@@ -103,6 +103,10 @@ light weight.
 ## Conventions
 
 - Use `npm run compile` / `npm run watch`, not ad-hoc `tsc`.
+- PowerShell mangles arguments: quote caret syntax (`'v0.11.1^{commit}'`,
+  not `v0.11.1^{commit}` — the bare caret silently resolves to the first
+  parent), and prefer `--%` or direct args over piping git output through
+  cmdlets (UTF-8 loss).
 - A user-visible feature, command, or settings change updates README.md in the
   same commit.
 - Before calling work done: `npm run compile` is clean and the change was
