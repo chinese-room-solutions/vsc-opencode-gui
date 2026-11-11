@@ -703,6 +703,127 @@ describe("a working session's live-only parts ride a resync pull", () => {
   });
 });
 
+// A re-pull must not undo newer live events: the fetch can start while the
+// turn streams and resolve after its terminal events, so the snapshot can
+// be behind parts the stream already settled or bound.
+describe("a re-pull never undoes newer live events", () => {
+  it("a completed tool stays completed when the snapshot still says running", async () => {
+    const sid = "rl1";
+    open(sid, [
+      {
+        info: { id: "m1", role: "assistant", time: { created: T0 } },
+        parts: [
+          {
+            id: "t1",
+            messageID: "m1",
+            sessionID: sid,
+            type: "tool",
+            tool: "read",
+            state: { status: "completed", input: { filePath: "a.ts" }, output: "ok" },
+          },
+        ],
+      },
+    ]);
+    onApi(
+      messageMock(sid, { data: [], cursor: {} }, [
+        {
+          info: { id: "m1", role: "assistant", time: { created: T0 } },
+          parts: [
+            {
+              id: "t1",
+              messageID: "m1",
+              sessionID: sid,
+              type: "tool",
+              tool: "read",
+              state: { status: "running", input: { filePath: "a.ts" } },
+            },
+          ],
+        },
+      ]),
+    );
+    await refreshMessages(sid);
+    const kept = findPart(sid, "t1") as
+      | (Part & { state?: { status?: string; error?: string } })
+      | undefined;
+    assert.equal(kept?.state?.status, "completed");
+    assert.equal(kept?.state?.error, undefined);
+  });
+
+  it("an event inside the fetch's flight keeps live-only parts on an idle map", async () => {
+    const sid = "rl2";
+    open(sid, [row("m1", "assistant", T0)]);
+    // Frozen clock: the event and the pull share one tick, so the event
+    // stamp reads as the fetch's flight (a snapshot behind the stream).
+    setNow(T0);
+    const read = {
+      id: "t1",
+      messageID: "m1",
+      sessionID: sid,
+      type: "tool",
+      tool: "read",
+      state: { status: "completed", input: { filePath: "a.ts" }, output: "ok" },
+    };
+    await sseFlush("message.part.updated", { sessionID: sid, part: read });
+    assert.equal(findPart(sid, "t1")?.type, "tool");
+    onApi(
+      messageMock(sid, { data: [], cursor: {} }, [
+        { info: { id: "m1", role: "assistant", time: { created: T0 } }, parts: [] },
+      ]),
+    );
+    await refreshMessages(sid);
+    const kept = findPart(sid, "t1") as
+      | (Part & { state?: { status?: string } })
+      | undefined;
+    assert.equal(kept?.state?.status, "completed");
+  });
+
+  it("a live part's metadata binding survives the re-pull that lacks it", async () => {
+    const sid = "rl3";
+    setBusy(sid);
+    open(sid, [
+      {
+        info: { id: "m1", role: "assistant", time: { created: T0 } },
+        parts: [
+          {
+            id: "t1",
+            messageID: "m1",
+            sessionID: sid,
+            type: "tool",
+            tool: "task",
+            state: {
+              status: "running",
+              input: {},
+              metadata: { sessionID: "child-1" },
+            },
+          },
+        ],
+      },
+    ]);
+    onApi(
+      messageMock(sid, { data: [], cursor: {} }, [
+        {
+          info: { id: "m1", role: "assistant", time: { created: T0 } },
+          parts: [
+            {
+              id: "t1",
+              messageID: "m1",
+              sessionID: sid,
+              type: "tool",
+              tool: "task",
+              state: { status: "running", input: {} },
+            },
+          ],
+        },
+      ]),
+    );
+    await refreshMessages(sid);
+    const kept = findPart(sid, "t1") as
+      | (Part & { state?: { metadata?: Record<string, unknown> } })
+      | undefined;
+    assert.equal(kept?.state?.metadata?.sessionID, "child-1");
+  });
+});
+
 // A steer admitted mid-turn lands its user row while the turn still
 // streams; the live sweep must not treat it as the turn boundary (the
 // streaming row's Thinking label would freeze into "Thought" until the

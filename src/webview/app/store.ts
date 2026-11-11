@@ -2081,6 +2081,10 @@ function upsertSession(info: Session): void {
   guardVariant(info.id, info.model);
 }
 
+// Per session, the clock time of the last stream event applied: a fetch
+// dispatched before it reads as older than the stream (see refreshMessages).
+const lastEventAt = new Map<string, number>();
+
 function applyEvent(event: ServerEvent): void {
   const data = event.data as {
     sessionID?: string;
@@ -2132,6 +2136,7 @@ function applyEvent(event: ServerEvent): void {
     partID?: string;
     field?: string;
   };
+  if (data.sessionID) lastEventAt.set(data.sessionID, Date.now());
   switch (event.type) {
     // Both carry the full session row; "created" is the only signal for a
     // session made outside this window (the local send path upserts itself).
@@ -3822,6 +3827,10 @@ export async function refreshMessages(id: string): Promise<void> {
     // button reloads them), and a covering page honestly reports "no more"
     // — the cursor no-downgrade below keeps the button from flickering.
     const shown = messagesBySession.value.get(id)?.length ?? 0;
+    // Clock at dispatch: a stream event applied from here to the merge
+    // proves the turn outlived this snapshot, whatever the status map
+    // says when the fetch lands.
+    const beganAt = Date.now();
     const [page, legacy] = await Promise.all([
       fetchMessages(id, shown > MESSAGE_PAGE ? { size: shown } : undefined),
       fetchLegacyMessages(id),
@@ -3975,7 +3984,8 @@ export async function refreshMessages(id: string): Promise<void> {
     const stored = new Map(
       messagesBySession.value.get(id)?.map((m) => [m.info.id, m]) ?? [],
     );
-    const working = sessionWorking(id);
+    const working =
+      sessionWorking(id) || (lastEventAt.get(id) ?? 0) >= beganAt;
     mutateMessages(id, () =>
       visible.map((m) => {
         const old = stored.get(m.info.id);
@@ -3986,7 +3996,39 @@ export async function refreshMessages(id: string): Promise<void> {
           if (isText(q)) oldByKind.set(q.type, [...(oldByKind.get(q.type) ?? []), q]);
         const kindSeen = new Map<string, number>();
         const parts = m.parts.map((p) => {
-          if (!isText(p)) return p;
+          if (!isText(p)) {
+            // A fetch can resolve behind the stream: it started while the
+            // turn ran and landed after its terminal events, or the
+            // durable store simply lacks what the stream patched in. A
+            // live twin that already finished while this copy still runs
+            // stays finished — otherwise settleDeadTools would re-error
+            // what the stream just completed. Either way the live copy's
+            // metadata keys (a subagent part's child binding) fill the
+            // gaps this copy has.
+            const was = old.parts.find((q) => q.id === p.id);
+            if (!was || isText(was)) return p;
+            const live = was as ToolPart;
+            const durable = p as ToolPart;
+            const done = (s?: string) => s === "completed" || s === "error";
+            if (done(live.state?.status) && !done(durable.state?.status)) {
+              merged = true;
+              return was;
+            }
+            const meta = live.state?.metadata;
+            const st = durable.state;
+            if (
+              meta &&
+              st &&
+              Object.keys(meta).some((k) => !(k in (st.metadata ?? {})))
+            ) {
+              merged = true;
+              return {
+                ...durable,
+                state: { ...st, metadata: { ...meta, ...st.metadata } },
+              };
+            }
+            return p;
+          }
           const k = kindSeen.get(p.type) ?? 0;
           kindSeen.set(p.type, k + 1);
           const was =
