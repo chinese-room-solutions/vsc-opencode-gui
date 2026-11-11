@@ -141,15 +141,21 @@ export interface Providers {
 
 // One relay round-trip: post the request, resolve on the matching reply.
 // The host always answers — any relay/fetch failure replies {ok:false} —
-// so the promise never hangs or rejects. `error` is the host's compact
-// reason (HTTP status + server message, or the transport failure).
+// but its reply post can be lost (a suspended webview drops host messages
+// without the stream knowing), so each call carries a deadline past the
+// relay's own cap and settles {ok:false} instead of hanging the guards it
+// sits under. `error` is the host's compact reason (HTTP status + server
+// message, or the transport failure).
 interface ApiResult {
   ok: boolean;
   json?: unknown;
   error?: string;
 }
 
-const pending = new Map<number, (r: ApiResult) => void>();
+const pending = new Map<
+  number,
+  { resolve: (r: ApiResult) => void; timer: number }
+>();
 let nextRequestId = 0;
 
 function apiRequest(
@@ -160,7 +166,11 @@ function apiRequest(
 ): Promise<ApiResult> {
   return new Promise((resolve) => {
     const id = ++nextRequestId;
-    pending.set(id, resolve);
+    const timer = window.setTimeout(() => {
+      pending.delete(id);
+      resolve({ ok: false, error: "api reply timeout" });
+    }, (timeoutMs ?? 10_000) + 5_000);
+    pending.set(id, { resolve, timer });
     postToHost({
       type: "api-request",
       id,
@@ -181,10 +191,11 @@ window.addEventListener("message", (e: MessageEvent) => {
     error?: unknown;
   };
   if (m?.type !== "api-result" || typeof m.id !== "number") return;
-  const resolve = pending.get(m.id);
-  if (!resolve) return;
+  const wait = pending.get(m.id);
+  if (!wait) return;
   pending.delete(m.id);
-  resolve({
+  window.clearTimeout(wait.timer);
+  wait.resolve({
     ok: m.ok === true,
     json: m.json,
     error: typeof m.error === "string" ? m.error : undefined,

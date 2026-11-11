@@ -166,6 +166,7 @@ installGlobal(
 // --- Fake extension host: answer api-requests from a responder stack ---
 
 export interface ApiCall {
+  id: number;
   method: string;
   path: string;
   body?: unknown;
@@ -173,6 +174,9 @@ export interface ApiCall {
 export const apiLog: ApiCall[] = [];
 export const hostPosted: unknown[] = [];
 export const API_FAIL = Symbol("api-fail");
+// A responder may return this to swallow the reply entirely: the request
+// never answers, so its promise can only settle via the api deadline.
+export const API_HOLD = Symbol("api-hold");
 // A failed reply carrying the relay's failure reason (HTTP status + server
 // message), mirroring what AppHost posts for a real failed fetch.
 export interface ApiFailWith {
@@ -207,7 +211,7 @@ captureApi({
   postMessage(message: unknown): void {
     const m = message as ApiCall & { type: string; id: number; kind?: string };
     if (m && m.type === "api-request") {
-      const call = { method: m.method, path: m.path, body: m.body };
+      const call = { id: m.id, method: m.method, path: m.path, body: m.body };
       apiLog.push(call);
       let result: unknown;
       try {
@@ -223,6 +227,7 @@ captureApi({
         console.error("[test] responder threw:", err);
         result = API_FAIL;
       }
+      if (result === API_HOLD) return;
       const failed =
         result === API_FAIL ||
         (!!result && typeof result === "object" && "fail" in result);
