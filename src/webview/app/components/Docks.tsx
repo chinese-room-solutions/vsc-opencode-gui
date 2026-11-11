@@ -60,6 +60,9 @@ function useDockKeys(opts: {
       const t = e.target as HTMLElement | null;
       const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA");
       if (typing && !(e.key === "Escape" && !t.closest(".dock"))) return;
+      // Workbench chords (Ctrl+2 etc.) and IME composition never answer a
+      // dock; Shift+digits already fail the digit branch.
+      if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
       const take = () => {
         e.preventDefault();
         e.stopPropagation();

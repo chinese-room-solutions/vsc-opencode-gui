@@ -555,6 +555,9 @@ setInterval(() => {
 const shellChunks = ["watching for changes...\n", "rebuilt src/main.ts\n"];
 const liveShell = { id: "shl_live_1", command: "npm run watch", status: "running", served: 0 };
 const shellDeletes = [];
+// Permission answers (dock-keys spec): {id, decision, message} per reply,
+// from either dialect's reply route.
+const permReplies = [];
 const shellText = () => shellChunks.slice(0, liveShell.served).join("");
 const shellStartedFrame = () =>
   writeFrame(v2Clients, {
@@ -1204,6 +1207,10 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, { deletes: shellDeletes });
       return;
     }
+    if (method === "GET" && path === "/__control/perm-replies") {
+      json(res, 200, { replies: permReplies });
+      return;
+    }
     // Spec levers for the stalled-tool shape: deliver one arg delta to the
     // stalled part (the stream is alive again), or drop every v2 SSE
     // connection (the host pump reconnects and resyncs, which wipes the
@@ -1482,7 +1489,8 @@ const server = http.createServer(async (req, res) => {
     // like the real server would — the app drops the ask optimistically,
     // but a 404 here would surface the failure banner in rig specs.
     if ((m = path.match(/^\/api\/session\/([^/]+)\/permission\/([^/]+)\/reply$/))) {
-      await readBody(req);
+      const body = await readBody(req);
+      permReplies.push({ id: m[2], decision: body.decision, message: body.message, at: Date.now() });
       json(res, 200, {});
       return;
     }
@@ -1548,7 +1556,9 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if ((m = path.match(/^\/(permission|question)\/([^/]+)\/(reply|reject)$/))) {
-      await readBody(req);
+      const body = await readBody(req);
+      if (m[1] === "permission")
+        permReplies.push({ id: m[2], decision: body.reply, message: body.message, at: Date.now() });
       json(res, 200, {});
       return;
     }
