@@ -57,6 +57,14 @@ export interface HiddenProviders {
   get(): string[];
 }
 
+// Provider tile colours ("providerID" → palette name — globalState-backed
+// in main.ts). Per-tab webview origins can't share them, so the host owns
+// the record: baked into the page, pushed on change, and a pick here comes
+// back up through onProviderColors for the window-wide fan-out.
+export interface ProviderColors {
+  get(): Record<string, string>;
+}
+
 // Which host a page is baked for (read by the app from the
 // opencode-host meta): a "session" host is one conversation's editor tab,
 // a "navigator" host is the sidebar view. Stage B splits the app on it.
@@ -83,6 +91,7 @@ export interface AppHostOptions {
   openProject: OpenProjectHandler;
   hiddenModels: HiddenModels;
   hiddenProviders: HiddenProviders;
+  providerColors: ProviderColors;
   // Window-wide chime arbiter (ChatHub): true when this page's claim won
   // the window and the grant should be posted back. Every chat page rings
   // the same event, and webview origins don't cross (VS Code keys them by
@@ -94,6 +103,9 @@ export interface AppHostOptions {
   // nothing will post tab-signal facts until it boots again, so the
   // host-side icon flags must drop now.
   onResetTabSignal?: () => void;
+  // The page picked a provider colour, the host persists the record and
+  // fans it out to the window's other pages.
+  onProviderColors?: (colors: Record<string, string>) => void;
 }
 
 // The app pings at boot, then every 15 s. Silence past three cadences
@@ -156,9 +168,13 @@ export class AppHost implements vscode.Disposable {
   private readonly _openProject: OpenProjectHandler;
   private readonly _hiddenModels: HiddenModels;
   private readonly _hiddenProviders: HiddenProviders;
+  private readonly _providerColors: ProviderColors;
   private readonly _claimBell: ((kind: BellKind) => boolean) | undefined;
   private readonly _onTabSignal: ((facts: TabSignalFacts) => void) | undefined;
   private readonly _onResetTabSignal: (() => void) | undefined;
+  private readonly _onProviderColors:
+    | ((colors: Record<string, string>) => void)
+    | undefined;
 
   constructor(options: AppHostOptions) {
     this._extensionUri = options.extensionUri;
@@ -170,9 +186,11 @@ export class AppHost implements vscode.Disposable {
     this._openProject = options.openProject;
     this._hiddenModels = options.hiddenModels;
     this._hiddenProviders = options.hiddenProviders;
+    this._providerColors = options.providerColors;
     this._claimBell = options.claimBell;
     this._onTabSignal = options.onTabSignal;
     this._onResetTabSignal = options.onResetTabSignal;
+    this._onProviderColors = options.onProviderColors;
   }
 
   private _webview?: vscode.Webview;
@@ -255,6 +273,21 @@ export class AppHost implements vscode.Disposable {
               : {}),
             ...(m.turnEnded === true ? { turnEnded: true } : {}),
           });
+        }
+        // A provider colour pick: coerce the record (string values only)
+        // and hand it up for the persist + window-wide fan-out.
+        if (
+          message.type === "provider-colors" &&
+          this._onProviderColors &&
+          typeof (message as { colors?: unknown }).colors === "object" &&
+          (message as { colors?: unknown }).colors !== null
+        ) {
+          const raw = Object.entries(
+            (message as { colors: Record<string, unknown> }).colors,
+          );
+          const colors: Record<string, string> = {};
+          for (const [k, v] of raw) if (typeof v === "string") colors[k] = v;
+          this._onProviderColors(colors);
         }
         // Editor-true code blocks: tokenize a fenced block with the real
         // grammar and theme (src/tokenizer.ts) and hand back the token runs.
@@ -609,6 +642,13 @@ export class AppHost implements vscode.Disposable {
     this._post({ type: "hidden-providers", ids: refs });
   }
 
+  // Live provider-colour update (the record fanned out from main.ts after
+  // a pick in any page of the window — the boot value is baked into the
+  // page, a postMessage can race the first load).
+  setProviderColors(colors: Record<string, string>) {
+    this._post({ type: "provider-colors", colors });
+  }
+
   // The codeCopyModifier setting changed (main.ts watches it); the boot
   // value rides the baked meta tag.
   setCopyModifier(modifier: string) {
@@ -861,6 +901,10 @@ export class AppHost implements vscode.Disposable {
       .replaceAll(
         "{{HIDDEN_PROVIDERS}}",
         escapeAttr(JSON.stringify(this._hiddenProviders.get())),
+      )
+      .replaceAll(
+        "{{PROVIDER_COLORS}}",
+        escapeAttr(JSON.stringify(this._providerColors.get())),
       )
       .replaceAll(
         "{{COPY_MODIFIER}}",

@@ -49,6 +49,7 @@ suite("opencode tab signal", function () {
       openProject: () => Promise.resolve(),
       hiddenModels: { get: () => [] },
       hiddenProviders: { get: () => [] },
+      providerColors: { get: () => ({}) },
       onResetTabSignal: () => resets.push(1),
     });
     try {

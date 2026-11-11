@@ -299,32 +299,19 @@ export const hiddenProviders = signal<string[]>(
   readStringList("opencode-hidden-providers"),
 );
 
-// Provider tile colors ("providerID" → palette name). Webview-local by
-// nature — the server has no field for it — so they live in localStorage
-// and the composer chip keeps its palette across reloads on the same
-// origin (a server port change resets it, like every local setting).
+// Provider tile colors ("providerID" → palette name). Window-wide state
+// owned by the host (globalState): each tab is its own webview origin, so
+// nothing browser-local could carry them across. Baked in by AppHost, a
+// pick posts the whole record to the host, which fans it back out to
+// every live page as "provider-colors".
 export const providerColors = signal<Record<string, string>>(
-  readLocalRecord("opencode-provider-colors"),
+  readRecordMeta("opencode-provider-colors"),
 );
 
 export function setProviderColor(pid: string, color: string): void {
   const next = { ...providerColors.value, [pid]: color };
   providerColors.value = next;
-  localStorage.setItem("opencode-provider-colors", JSON.stringify(next));
-}
-
-// A localStorage key read as string→string; malformed content reads empty.
-function readLocalRecord(key: string): Record<string, string> {
-  try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(key) ?? "{}");
-    if (!parsed || typeof parsed !== "object") return {};
-    const out: Record<string, string> = {};
-    for (const [k, v] of Object.entries(parsed))
-      if (typeof v === "string") out[k] = v;
-    return out;
-  } catch {
-    return {};
-  }
+  postToHost({ type: "provider-colors", colors: next });
 }
 
 // Live peer registry (opencode-plugin-peers): endpoint id → display name
@@ -346,6 +333,23 @@ function readStringList(name: string): string[] {
       : [];
   } catch {
     return [];
+  }
+}
+
+// A baked-in meta's JSON string→string record ({} when absent or malformed).
+function readRecordMeta(name: string): Record<string, string> {
+  const raw =
+    document.querySelector(`meta[name="${name}"]`)?.getAttribute("content") ??
+    "{}";
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return {};
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed))
+      if (typeof v === "string") out[k] = v;
+    return out;
+  } catch {
+    return {};
   }
 }
 
@@ -3593,6 +3597,7 @@ export function hostMessage(msg: unknown) {
     url?: string;
     kind?: string;
     seconds?: number;
+    colors?: unknown;
   };
   // The webview became visible again: events streamed while VS Code had
   // it suspended were lost — pull truth.
@@ -3622,6 +3627,18 @@ export function hostMessage(msg: unknown) {
     hiddenProviders.value = m.ids.filter(
       (x): x is string => typeof x === "string",
     );
+  }
+  // A colour picked in another page of this window (the host fans the
+  // record out): replaces the map whole, like the hidden lists.
+  if (
+    m.type === "provider-colors" &&
+    typeof m.colors === "object" &&
+    m.colors !== null
+  ) {
+    const next: Record<string, string> = {};
+    for (const [k, v] of Object.entries(m.colors))
+      if (typeof v === "string") next[k] = v;
+    providerColors.value = next;
   }
   // Peer registry snapshot (PeerRegistry poll). Replaces the map whole:
   // renames and departures both land as a fresh snapshot.

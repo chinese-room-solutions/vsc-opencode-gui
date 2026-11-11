@@ -16,6 +16,7 @@ import type {
   HiddenProviders,
   OpenProjectHandler,
   ProjectStore,
+  ProviderColors,
 } from "./webview/AppHost";
 import { ServerManager, normWorktree, randomPort } from "./server/ServerManager";
 import { serverAuthHeaders } from "./server/serverAuth";
@@ -183,6 +184,26 @@ export function activate(context: vscode.ExtensionContext) {
     for (const p of panels.all()) p.chat.setHiddenProviders(refs);
   };
 
+  // Provider tile colours ("providerID" → palette name) the pickers and
+  // chips render. globalState: window-wide, like the hidden lists — each
+  // tab is its own webview origin, so nothing browser-local could carry
+  // them across. A pick in any page lands here and fans back out.
+  const providerColors: ProviderColors = {
+    get: () => {
+      const raw: unknown = context.globalState.get("opencode.providerColors");
+      if (!raw || typeof raw !== "object") return {};
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(raw))
+        if (typeof v === "string") out[k] = v;
+      return out;
+    },
+  };
+  const setProviderColors = (colors: Record<string, string>) => {
+    void context.globalState.update("opencode.providerColors", colors);
+    provider.chat.setProviderColors(colors);
+    for (const p of panels.all()) p.chat.setProviderColors(colors);
+  };
+
   // Start the opencode server lazily, on first chat use: a server spawn
   // registers its cwd as a project in opencode's shared DB, so activating
   // in every window would litter the Home project list with folders the
@@ -321,6 +342,8 @@ export function activate(context: vscode.ExtensionContext) {
     openProject,
     hiddenModels,
     hiddenProviders,
+    providerColors,
+    onProviderColors: setProviderColors,
     icons,
     ensureServer: () => void ensureServer(),
     isBlankSession: (id) => {
@@ -478,6 +501,8 @@ export function activate(context: vscode.ExtensionContext) {
       openProject,
       hiddenModels,
       hiddenProviders,
+      providerColors,
+      onProviderColors: setProviderColors,
     },
   );
   context.subscriptions.push(

@@ -401,6 +401,7 @@ suite("opencode GUI lifecycle", function () {
       openProject: () => Promise.resolve(),
       hiddenModels: { get: () => [] },
       hiddenProviders: { get: () => [] },
+      providerColors: { get: () => ({}) },
     });
     let onMessage: ((m: unknown) => void) | undefined;
     const webview = {
@@ -464,6 +465,7 @@ suite("opencode GUI lifecycle", function () {
       openProject: () => Promise.resolve(),
       hiddenModels: { get: () => [] },
       hiddenProviders: { get: () => [] },
+      providerColors: { get: () => ({}) },
       onTabSignal: (f) => facts.push(f),
     });
     host.attach({
@@ -607,6 +609,7 @@ suite("opencode GUI lifecycle", function () {
       openProject: () => Promise.resolve(),
       hiddenModels: { get: () => [] },
       hiddenProviders: { get: () => [] },
+      providerColors: { get: () => ({}) },
     });
     const posted: { type?: string; path?: string; url?: string }[] = [];
     let onMessage: ((m: unknown) => void) | undefined;
@@ -687,6 +690,7 @@ suite("opencode GUI lifecycle", function () {
         openProject: () => Promise.resolve(),
         hiddenModels: { get: () => [] },
         hiddenProviders: { get: () => [] },
+      providerColors: { get: () => ({}) },
         claimBell: (kind) => hub.claimBell(kind),
       });
       host.attach({

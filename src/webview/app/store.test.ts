@@ -5049,13 +5049,20 @@ describe("project and provider tile colors", () => {
       "The color was rejected by the server.",
     );
   });
-  it("setProviderColor updates the signal and persists", () => {
+  it("setProviderColor updates the signal and posts the record to the host", () => {
     setProviderColor("zai-coding-plan", "cyan");
     assert.equal(providerColors.value["zai-coding-plan"], "cyan");
-    assert.equal(
-      localStorageStub.getItem("opencode-provider-colors"),
-      '{"zai-coding-plan":"cyan"}',
-    );
+    assert.deepEqual(hostPosted.at(-1), {
+      type: "provider-colors",
+      colors: { "zai-coding-plan": "cyan" },
+    });
+  });
+  it("provider-colors replaces the record with string values", () => {
+    hostMessage({
+      type: "provider-colors",
+      colors: { zai: "cyan", other: 3, openai: "amber" },
+    });
+    assert.deepEqual(providerColors.value, { zai: "cyan", openai: "amber" });
   });
 });
 

@@ -5,6 +5,7 @@ import {
   type HiddenProviders,
   type OpenProjectHandler,
   type ProjectStore,
+  type ProviderColors,
   type RouteStore,
   type TabsStore,
 } from "./AppHost";
@@ -17,6 +18,8 @@ export interface NavigatorHostDeps {
   openProject: OpenProjectHandler;
   hiddenModels: HiddenModels;
   hiddenProviders: HiddenProviders;
+  providerColors: ProviderColors;
+  onProviderColors?: (colors: Record<string, string>) => void;
 }
 
 // Sidebar host for the chat webview (Stage B turns it into the session

@@ -5,6 +5,7 @@ import {
   type HiddenProviders,
   type OpenProjectHandler,
   type ProjectStore,
+  type ProviderColors,
   type RouteStore,
   type TabsStore,
 } from "./AppHost";
@@ -112,6 +113,10 @@ export interface SessionPanelsDeps {
   openProject: OpenProjectHandler;
   hiddenModels: HiddenModels;
   hiddenProviders: HiddenProviders;
+  providerColors: ProviderColors;
+  // A provider colour pick fanned back in (the manager passes the window
+  // fan-out through).
+  onProviderColors?: (colors: Record<string, string>) => void;
   // Generated tab icons (the status prefix's animated spinner/marks).
   icons: TabIconSet;
   // Fires the server up (revival and panel opens need it eventually).
@@ -163,9 +168,11 @@ class SessionPanel implements vscode.Disposable {
       openProject: deps.openProject,
       hiddenModels: deps.hiddenModels,
       hiddenProviders: deps.hiddenProviders,
+      providerColors: deps.providerColors,
       claimBell: (kind) => deps.hub.claimBell(kind),
       onTabSignal: (facts) => this._signal?.apply(facts, this._panel.active),
       onResetTabSignal: () => this._signal?.reset(),
+      onProviderColors: (colors) => deps.onProviderColors?.(colors),
     });
     this._panel = vscode.window.createWebviewPanel(
       sessionViewType(_sessionId),
