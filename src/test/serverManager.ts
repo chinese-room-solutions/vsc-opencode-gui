@@ -1,6 +1,9 @@
 import * as assert from "assert";
 import * as net from "net";
 import { spawnSync } from "child_process";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import * as vscode from "vscode";
 import { ServerManager, normWorktree } from "../server/ServerManager";
 import { ChatHub } from "../webview/ChatHub";
@@ -9,7 +12,7 @@ import { ChatHub } from "../webview/ChatHub";
 // ServerManager directly, complementing lifecycle.ts's end-to-end runs:
 // argv/path handling, attach-vs-spawn on a live port, the lease/store
 // bookkeeping, and dispose's kill path. Real `opencode serve` boots are
-// allowed but kept to two; every manager lands in `managers` so a failure
+// allowed but kept to three; every manager lands in `managers` so a failure
 // cannot leak a child past the suite.
 
 const managers: ServerManager[] = [];
@@ -187,6 +190,42 @@ suite("opencode ServerManager", function () {
     }
     await sm.dispose();
     assert.ok(await untilDead(url), "exposed server killed on dispose");
+  });
+
+  test("a failed config read aborts the provider toggle, file untouched", async function () {
+    const port = await freePort();
+    const { sm, hub } = await boot(port);
+    await waitForUrl(hub);
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "oc-test-config-"));
+    const configRoot = path.join(tmp, "opencode");
+    const file = path.join(configRoot, "opencode.json");
+    fs.mkdirSync(configRoot, { recursive: true });
+    const before = `{ "model": "anthropic/claude-sonnet-4-5" }\n`;
+    fs.writeFileSync(file, before);
+    process.env.XDG_CONFIG_HOME = tmp;
+    // tsc's __importStar wraps modules in getter-only copies, so patch the
+    // raw module object those getters delegate to. The extension host
+    // bundle is CJS, so it is the same object ServerManager reads through.
+    const fsRaw = require("fs") as {
+      readFileSync: (p: fs.PathOrFileDescriptor, o?: unknown) => string | Buffer;
+    };
+    const realRead = fsRaw.readFileSync.bind(fsRaw);
+    const busy = Object.assign(new Error("EBUSY"), { code: "EBUSY" });
+    fsRaw.readFileSync = (p, options) => {
+      if (p === file) throw busy;
+      return realRead(p, options);
+    };
+    try {
+      // The old behavior treated any read error as "no config yet" and
+      // replaced the whole file with just the provider key.
+      assert.strictEqual(await sm.setDisabledProviders(["x"]), false);
+      assert.strictEqual(realRead(file, "utf8"), before);
+    } finally {
+      fsRaw.readFileSync = realRead;
+      delete process.env.XDG_CONFIG_HOME;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+    await sm.dispose();
   });
 
   suiteTeardown(async function () {

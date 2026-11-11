@@ -1092,6 +1092,25 @@ export class ServerManager {
     return cfg?.disabled_providers ?? [];
   }
 
+  // Atomic global-config write: temp file in the same folder, then a
+  // rename over the target. A crash mid-write cannot truncate the user's
+  // config, and the temp's name is not a config basename, so the v2
+  // server's directory watcher never reloads from it.
+  private _writeGlobalConfig(file: string, text: string): void {
+    const tmp = file + ".tmp";
+    try {
+      fs.writeFileSync(tmp, text);
+      fs.renameSync(tmp, file);
+    } catch (err) {
+      try {
+        fs.rmSync(tmp, { force: true });
+      } catch {
+        // best effort
+      }
+      throw err;
+    }
+  }
+
   // Toggle support (see disabledProviders.ts): v1 PATCHes the merged
   // config (applies immediately, comment-preserving server-side); v2 has
   // no write route — we edit the global file, the watcher hot-reloads,
@@ -1104,13 +1123,18 @@ export class ServerManager {
       let prev = "";
       try {
         prev = fs.readFileSync(file, "utf8");
-      } catch {
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          log.error("could not read " + file + ":", err);
+          return false;
+        }
         // No config file yet — start one.
       }
       try {
         fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, setDisabledProvidersInText(prev, ids));
-      } catch {
+        this._writeGlobalConfig(file, setDisabledProvidersInText(prev, ids));
+      } catch (err) {
+        log.error("could not write " + file + ":", err);
         return false;
       }
       await this.hurryConfigReload();
@@ -1149,13 +1173,18 @@ export class ServerManager {
     let prev = "";
     try {
       prev = fs.readFileSync(file, "utf8");
-    } catch {
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        log.error("could not read " + file + ":", err);
+        return false;
+      }
       // No config file yet — start one.
     }
     try {
       fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, setEnabledProvidersInText(prev, ids));
-    } catch {
+      this._writeGlobalConfig(file, setEnabledProvidersInText(prev, ids));
+    } catch (err) {
+      log.error("could not write " + file + ":", err);
       return false;
     }
     await this.hurryConfigReload();
