@@ -1,9 +1,14 @@
 import "./setup.test";
 import { strict as assert } from "node:assert";
 import { callsFor, onApi, runStuckTick, setNow } from "./setup.test";
-import { messagesBySession, pendingPermissions, sessionStatus } from "./store";
+import {
+  messagesBySession,
+  pendingPermissions,
+  sessions,
+  sessionStatus,
+} from "./store";
 import type { ChatMessage } from "./store";
-import type { Part } from "./api";
+import type { Part, Session } from "./api";
 import type { StuckSessionMark } from "./stuck";
 import { interruptStuckNow, silenceLabel, stuckState } from "./stuck";
 
@@ -396,6 +401,59 @@ describe("stuck", () => {
       setNow(T0 + 5_000); // the backgrounded child still works
       runStuckTick();
       assert.equal(marksOf(sid), undefined);
+    });
+
+    it("an unbound sub-agent part is held while a child of its session works", () => {
+      // v2 reports a running subagent call's child only in an ephemeral
+      // progress frame, so a re-pulled or reloaded part carries no binding.
+      const sid = "sk14";
+      busySession(sid);
+      busySession("childU");
+      sessions.value = [
+        ...sessions.value,
+        {
+          id: "childU",
+          parentID: sid,
+          title: "Audit the parser",
+          time: { created: T0, updated: T0 },
+        } as Session,
+      ];
+      open(sid, [
+        {
+          info: { id: "m1", role: "assistant", time: { created: T0 } },
+          parts: [
+            {
+              id: "p1",
+              messageID: "m1",
+              sessionID: sid,
+              type: "tool",
+              tool: "subagent",
+              state: {
+                status: "running",
+                time: { start: T0 },
+                input: { description: "Audit the parser" },
+                metadata: {},
+              },
+            },
+          ],
+        },
+      ]);
+      setNow(T0 + 100);
+      runStuckTick();
+      setNow(T0 + 5_000); // far past the threshold, but the child works
+      runStuckTick();
+      assert.equal(marksOf(sid), undefined);
+      // The child ends — the still-running part is the hang now.
+      sessionStatus.value = {
+        ...sessionStatus.value,
+        childU: { type: "idle" },
+      };
+      setNow(T0 + 5_100);
+      runStuckTick();
+      assert.equal(marksOf(sid), undefined);
+      setNow(T0 + 6_400);
+      runStuckTick();
+      assert.ok(marksOf(sid)?.parts["p1"]);
     });
 
     it("a live compaction turn is excluded wholesale", () => {

@@ -29,6 +29,11 @@ const blocked = process.env.FAKE_API_BLOCKED === "1";
 // (the running transition missed) while the child session works — the
 // chip spins on the child's status, so "no progress" would be false.
 const childPending = process.env.FAKE_API_CHILD_PENDING === "1";
+// FAKE_API_CHILD_UNBOUND=1 seeds what a real v2 server serves for a
+// foreground sub-agent mid-run: the task part "running" with empty
+// metadata (the child's id rides only the ephemeral progress frame) while
+// the child session works.
+const childUnbound = process.env.FAKE_API_CHILD_UNBOUND === "1";
 // FAKE_API_DUP_CHILD=1 seeds two live task parts bound to the SAME child
 // session (a steer re-opening it, or the title fallback double-binding) —
 // the roster must count the sub-agent once, not once per part.
@@ -318,6 +323,13 @@ for (let i = 1; i <= SEED_TURNS; i++) {
                     metadata: { sessionId: "ses_child_1" },
                     time: { start: ca + 8_600 },
                   }
+                : childUnbound
+                  ? {
+                      status: "running",
+                      input: { description: "Check the retry paths", subagent_type: "general" },
+                      metadata: {},
+                      time: { start: ca + 8_600 },
+                    }
                 : {
                     status: "completed",
                     input: { description: "Check the retry paths", subagent_type: "general" },
@@ -1184,7 +1196,7 @@ const server = http.createServer(async (req, res) => {
 
   // boot / reads
   if (method === "GET") {
-    if (path === "/session/status") { json(res, 200, { [SESSION_ID]: { type: stepsActive || blocked || stalled || childPending || dupChild ? "busy" : "idle" } }); return; }
+    if (path === "/session/status") { json(res, 200, { [SESSION_ID]: { type: stepsActive || blocked || stalled || childPending || childUnbound || dupChild ? "busy" : "idle" } }); return; }
     // v2: the child is mid-run — the seeded session itself stays idle so
     // the chip's running state comes from the child, not the parent,
     // except in the blocked rig (parent mid-turn on that child).
@@ -1192,7 +1204,7 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, {
         data: {
           ses_child_1: { agent: "general" },
-          ...((blocked || stalled || childPending || dupChild) ? { [SESSION_ID]: { agent: "build" } } : {}),
+          ...((blocked || stalled || childPending || childUnbound || dupChild) ? { [SESSION_ID]: { agent: "build" } } : {}),
         },
       });
       return;

@@ -18,6 +18,7 @@ import {
   messagesBySession,
   pendingPermissions,
   pendingQuestions,
+  sessions,
   sessionStatus,
   stopSession,
 } from "./store";
@@ -72,6 +73,14 @@ function hasPendingAsk(sid: string): boolean {
   return (
     pendingPermissions.value.some((p) => p.sessionID === sid) ||
     pendingQuestions.value.some((q) => q.sessionID === sid)
+  );
+}
+
+// A sub-agent session still at it: busy, retrying (the provider backoff is
+// mid-turn), or stalled on its own ask (the ask is the explanation).
+function childWorking(id: string): boolean {
+  return (
+    hasPendingAsk(id) || (sessionStatus.value[id]?.type ?? "idle") !== "idle"
   );
 }
 
@@ -153,7 +162,14 @@ function stuckTick(): void {
     // turn clock too, exactly as it holds the part clock below. No status
     // entry (never seen, or already ended) keeps the wedge detection — a
     // child done while the turn sits silent is the hang worth flagging.
-    let busyChild = false;
+    // v2 names a running subagent call's child only in an ephemeral
+    // progress frame the server never persists, so a re-pulled or reloaded
+    // part carries no binding: the session's own children (by parentID, as
+    // opencode's TUI discovers them) stand in for it.
+    const familyBusy = sessions.value.some(
+      (s) => s.parentID === sid && childWorking(s.id),
+    );
+    let busyChild = familyBusy;
     for (const m of list) {
       if (m.info.agent === "compaction") continue;
       for (const p of m.parts) {
@@ -170,13 +186,10 @@ function stuckTick(): void {
             typeof meta?.sessionID === "string")
             ? ((meta?.sessionId ?? meta?.sessionID) as string)
             : undefined;
-        // A child stalled on its own permission/question ask isn't stuck —
-        // the ask is the explanation; hold until it's answered. Retry
-        // counts as working: the provider backoff is mid-turn.
         const childBusy =
-          childId !== undefined &&
-          (hasPendingAsk(childId) ||
-            (sessionStatus.value[childId]?.type ?? "idle") !== "idle");
+          childId !== undefined
+            ? childWorking(childId)
+            : isTaskTool(p.tool) && familyBusy;
         if (childBusy) busyChild = true;
         if (st === "completed" || st === "error") {
           seen.delete(p.id);
