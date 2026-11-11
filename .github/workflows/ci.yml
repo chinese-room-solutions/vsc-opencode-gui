@@ -20,6 +20,16 @@ jobs:
   test:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    # Separate VMs per leg: the v1 and v2 packages both provide the
+    # `opencode` bin and cannot share one job.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pkg: opencode-ai
+            ver: 1.18.30
+          - pkg: "@opencode/cli"
+            ver: 2.1.4
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -32,10 +42,10 @@ jobs:
       # @vscode/test-electron's own download, cached below.
       - name: Install VS Code (Electron) runtime deps
         run: sudo apt-get install -y --no-install-recommends libgtk-3-0 libgbm1 libnss3 libasound2t64
-      # Pinned to the version the suite is verified against; bump
+      # Each leg pins the version its suite is verified against; bump
       # deliberately when the local dev version moves.
       - name: Install opencode CLI
-        run: npm install -g opencode-ai@1.18.30
+        run: npm install -g ${{ matrix.pkg }}@${{ matrix.ver }}
       - name: Cache VS Code download
         uses: actions/cache@v6
         with:
@@ -52,3 +62,21 @@ jobs:
           mkdir -p "$OC_TEST_WORKSPACE"
           git init "$OC_TEST_WORKSPACE"
           xvfb-run -a node test/runTest.js
+
+  ui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Compile
+        run: npm run compile
+      # The specs drive the fake API rig (no opencode CLI, no model
+      # turns) in system Chrome, headless — preinstalled on the runner
+      # image.
+      - name: UI tests (Playwright)
+        run: npm run test:ui
