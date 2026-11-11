@@ -618,7 +618,9 @@ export interface QuestionRequest {
 // returns [] for them — wire-verified 1.18.25). A form row maps onto the
 // v1 question shape the dock renders; the form flag routes its reply to
 // the form endpoints. The /api copy wins on an id collision, so a v2 ask
-// that shows up in both keeps the v2 reply route.
+// that shows up in both keeps the v2 reply route. On v2 the global leg is
+// skipped — there is no /question route, and the SPA fallback would
+// answer it with HTML (the relay logs that as a failure).
 // Which of the two lists actually loaded rides along: a refresh may only
 // retire an ask its own pipeline's list confirmed absent.
 export interface SessionQuestions {
@@ -633,7 +635,9 @@ export async function fetchSessionQuestions(
     serverDialect === "v2"
       ? getJson<{ data?: unknown[] }>(`/api/session/${id}/form`)
       : getJson<{ data?: QuestionRequest[] }>(`/api/session/${id}/question`),
-    getJson<QuestionRequest[]>("/question"),
+    serverDialect === "v2"
+      ? Promise.resolve(undefined)
+      : getJson<QuestionRequest[]>("/question"),
   ]);
   if (v2 === undefined && global === undefined) return undefined;
   const v2Rows =

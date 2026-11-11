@@ -1467,6 +1467,10 @@ describe("v2 transcript normalization (fetchMessages)", () => {
     assert.equal(pending?.[0].id, "per_1");
     assert.equal(pending?.[0].action, "bash");
     const questions = await fetchSessionQuestions("ses_1");
+    // No /question route on v2 — the global leg must not fire, and the
+    // v1 pipeline stays unconfirmed (nothing to retire against).
+    assert.equal(callsFor("/question").length, 0);
+    assert.equal(questions?.globalLoaded, false);
     const row = questions?.rows[0];
     assert.equal(row?.id, "frm_1");
     assert.equal(row?.v1, false);
