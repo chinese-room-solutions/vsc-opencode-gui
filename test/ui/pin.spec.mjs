@@ -140,6 +140,29 @@ test("an expanded pill docks as its clamped twin", async ({ page }) => {
   }
 });
 
+test("a collapsed pill keeps its Show more toggle", async ({ page }) => {
+  const rig = await startRig({ env: rigEnv() });
+  try {
+    await page.goto(rig.url);
+    await page.waitForSelector(".msgs .turn .msg.user", { timeout: 15_000 });
+    const pill = page.locator(".turn .msg.user", { hasText: "Question 2:" }).first();
+    await pill.locator(".clamp-toggle").click();
+    await expect(pill.locator(".user-text.expanded")).toBeVisible();
+    // A stray DOM mutation inside the box fires the measure observer: the
+    // expanded box does not overflow, and that reading must not survive
+    // the collapse.
+    await pill.locator(".user-text").evaluate((el) => {
+      el.appendChild(document.createTextNode(""));
+    });
+    await pill.locator(".clamp-toggle").click();
+    const toggle = pill.locator(".clamp-toggle");
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveText("Show more");
+  } finally {
+    rig.stop();
+  }
+});
+
 test("the successor's arrival pushes the pinned twin out", async ({ page }) => {
   const rig = await startRig({ env: rigEnv() });
   try {
