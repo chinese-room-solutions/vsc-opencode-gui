@@ -27,7 +27,7 @@ type Api = {
     recreate(id: string): SessionPanelLike;
   };
   serverPort: number | undefined;
-  ensureServer: () => void;
+  ensureServer: () => unknown;
   // The host's own auth headers (its inlined serverAuth instance knows
   // the spawned server's password; the tsc copy tests import does not).
   authHeaders: () => Record<string, string>;
@@ -362,6 +362,17 @@ suite("opencode GUI lifecycle", function () {
       await new Promise((r) => setTimeout(r, 500));
     }
     assert.ok(dead, "server port closed after deactivate");
+  });
+
+  test("after deactivate, ensureServer returns the manager it creates", async function () {
+    const main = await import("../main");
+    await main.deactivate();
+    const sm = api.ensureServer();
+    assert.ok(sm, "ensureServer returns a truthy manager");
+    // The returned manager is the live one: it boots, and the runner's
+    // orphan check learns its port.
+    const url = await waitForUrl(api);
+    fs.writeFileSync(portFile, String(api.serverPort ?? new URL(url).port));
   });
 
   test("isUnresponsive catches a page that never pinged, then a ping revives it", async function () {

@@ -225,7 +225,7 @@ export function activate(context: vscode.ExtensionContext) {
     };
   };
 
-  const createServer = (): void => {
+  const createServer = (): ServerManager => {
     const sm = new ServerManager();
     wireUnexpectedExit(sm);
     serverManager = sm;
@@ -248,6 +248,7 @@ export function activate(context: vscode.ExtensionContext) {
       cfg.get<string>("path", "").trim(),
     );
     void sm.ready.then(() => syncAfterReady());
+    return sm;
   };
 
   const ensureServer = (): ServerManager | undefined => {
@@ -260,7 +261,7 @@ export function activate(context: vscode.ExtensionContext) {
       });
       return undefined;
     }
-    createServer();
+    return createServer();
   };
 
   // Open session panels (one editor tab per session) — created on demand,
