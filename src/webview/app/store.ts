@@ -200,6 +200,25 @@ const ghostWatch = new Map<string, number>();
 const GHOST_WATCH_MS = 10_000;
 const postedRows = new Map<string, number>();
 
+// A failed v2 prompt keeps its client id so a resend of the same content
+// is idempotent server-side (see promptSession). Matched on exact body +
+// files — a reused id under edited text would make the server return the
+// old row and swallow the new prompt — and consumed on use.
+const failedPrompts = new Map<
+  string,
+  { pid: string; body: string; files: ComposerFile[] }
+>();
+
+const sameFiles = (a: ComposerFile[], b: ComposerFile[]): boolean =>
+  JSON.stringify(a) === JSON.stringify(b);
+
+// SessionMessage ids must start "msg_" — the server validates the prefix.
+function mintPromptId(): string {
+  const b = new Uint8Array(8);
+  crypto.getRandomValues(b);
+  return `msg_oc${[...b].map((n) => n.toString(16).padStart(2, "0")).join("")}`;
+}
+
 function armGhostWatch(id: string): void {
   const prev = ghostWatch.get(id);
   if (prev !== undefined) clearTimeout(prev);
@@ -4500,6 +4519,16 @@ async function postPrompt(
   files: ComposerFile[],
 ): Promise<void> {
   sessionStatus.value = { ...sessionStatus.value, [id]: { type: "busy" } };
+  // A v2 retry of a failed send reuses its minted id (idempotent server
+  // side); anything else clears the record — the newer send supersedes it.
+  const failed = failedPrompts.get(id);
+  const retry =
+    failed !== undefined &&
+    dialect() === "v2" &&
+    failed.body === body &&
+    sameFiles(failed.files, files);
+  failedPrompts.delete(id);
+  const pid = retry ? failed.pid : mintPromptId();
   // Mention tokens resolve against the session's directory (the
   // server-side file host of the parts).
   const base =
@@ -4547,7 +4576,13 @@ async function postPrompt(
     else postedRows.delete(id);
   };
   postedRows.set(id, (postedRows.get(id) ?? 0) + 1);
-  const sent = await promptSession(id, parts, agent, model);
+  const sent = await promptSession(
+    id,
+    parts,
+    agent,
+    model,
+    dialect() === "v2" ? pid : undefined,
+  );
   if (!sent.ok) {
     unpost();
     // A failed send is a take-back, not a send: the echo reads as sent
@@ -4561,6 +4596,7 @@ async function postPrompt(
     if (!hasLiveTools(id))
       sessionStatus.value = { ...sessionStatus.value, [id]: { type: "idle" } };
     setSendError(withReason("The message could not be sent", sent.error));
+    if (dialect() === "v2") failedPrompts.set(id, { pid, body, files });
   } else {
     // A v1 pick rode this prompt's body; the row converges on its turn.
     if (dialect() === "v1") v1Picks.delete(id);

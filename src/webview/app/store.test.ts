@@ -4412,6 +4412,79 @@ describe("sendPrompt", () => {
   });
 });
 
+describe("v2 prompt retry ids", () => {
+  it("a failed v2 send's resend POSTs the same id", async () => {
+    setDialect("v2");
+    try {
+      const sid = "pri1";
+      sessions.value = [sessRow(sid, { agent: "build" })];
+      open(sid, []);
+      let fail = true;
+      onApi((call) => {
+        if (call.method === "POST" && call.path === `/api/session/${sid}/prompt`)
+          return fail
+            ? API_FAIL
+            : {
+                data: {
+                  id: "usr_ok",
+                  time: { created: Date.now() },
+                  payload: { text: "retry me" },
+                },
+              };
+        return messageMock(sid, { data: [], cursor: {} })(call);
+      });
+      await sendPrompt(sid, "retry me");
+      // The failure is a take-back; the resend POSTs the minted id again so
+      // the server's admission is the same prompt, not a duplicate.
+      assert.equal(getDraft(sid), "retry me");
+      const first = callsFor(`/api/session/${sid}/prompt`).at(-1)!
+        .body as { id?: string };
+      assert.match(first.id ?? "", /^msg_/);
+      fail = false;
+      await sendPrompt(sid, "retry me");
+      const second = callsFor(`/api/session/${sid}/prompt`).at(-1)!
+        .body as { id?: string };
+      assert.equal(second.id, first.id);
+    } finally {
+      setDialect("v1");
+    }
+  });
+  it("an edited resend gets a fresh id", async () => {
+    setDialect("v2");
+    try {
+      const sid = "pri2";
+      sessions.value = [sessRow(sid, { agent: "build" })];
+      open(sid, []);
+      onApi((call) => {
+        if (call.method === "POST" && call.path === `/api/session/${sid}/prompt`)
+          return API_FAIL;
+        return messageMock(sid, { data: [], cursor: {} })(call);
+      });
+      await sendPrompt(sid, "first wording");
+      const first = callsFor(`/api/session/${sid}/prompt`).at(-1)!
+        .body as { id?: string };
+      await sendPrompt(sid, "second wording");
+      const second = callsFor(`/api/session/${sid}/prompt`).at(-1)!
+        .body as { id?: string };
+      assert.notEqual(second.id, first.id);
+    } finally {
+      setDialect("v1");
+    }
+  });
+  it("a failed v1 send's resend carries no id", async () => {
+    const sid = "pri3";
+    sessions.value = [sessRow(sid, { agent: "build" })];
+    open(sid, []);
+    onApi((call) =>
+      call.path.startsWith(`/session/${sid}/prompt_async`) ? API_FAIL : undefined,
+    );
+    await sendPrompt(sid, "v1 retry");
+    await sendPrompt(sid, "v1 retry");
+    for (const c of callsFor(`/session/${sid}/prompt_async`))
+      assert.equal((c.body as { id?: string }).id, undefined);
+  });
+});
+
 describe("newSession and blank hiding", () => {
   it("a failed create reports the relay's reason", async () => {
     onApi((call) =>

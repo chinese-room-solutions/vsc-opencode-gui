@@ -2225,6 +2225,7 @@ export async function promptSession(
   parts: PromptPart[],
   agent?: string,
   model?: ModelSelection,
+  promptId?: string,
 ): Promise<{ ok: boolean; error?: string; user?: PromptUserRow }> {
   // v2: per-turn agent/model rides the session-scoped switch routes (both
   // wire-verified). Callers only pass a selection that differs from the
@@ -2240,9 +2241,17 @@ export async function promptSession(
       .map((p) => p.text)
       .join("");
     const body = v2PromptBody(parts, text);
+    // A client id makes a resend of the same prompt idempotent: the relay's
+    // timeout can admit a prompt whose reply never lands, and the server
+    // answers a repeated id with its existing admission (the reply row
+    // carries our id either way).
     const res = await sendJson<{
       data?: { id?: string; time?: { created?: number }; payload?: { text?: string } };
-    }>("POST", `/api/session/${id}/prompt`, body);
+    }>(
+      "POST",
+      `/api/session/${id}/prompt`,
+      promptId ? { ...body, id: promptId } : body,
+    );
     const row = res.ok ? res.data?.data : undefined;
     return {
       ok: res.ok === true,

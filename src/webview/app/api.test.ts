@@ -3,6 +3,7 @@ import { strict as assert } from "node:assert";
 import {
   API_FAIL,
   apiFailWith,
+  callsFor,
   flushEvents,
   onApi,
   dispatchWindowMessage,
@@ -12,7 +13,7 @@ import {
   attachMime,
   attachmentParts,
   chipMime,
-droppedFileRefs,
+  droppedFileRefs,
   clampPartText,
   clampToolOutput,
   createSession,
@@ -428,6 +429,26 @@ describe("api", () => {
       );
       const good = await promptSession("s1", []);
       assert.equal(good.ok, true);
+    });
+    it("the client id rides the v2 body only", async () => {
+      setDialect("v2");
+      try {
+        onApi((call) =>
+          call.path === "/api/session/s1/prompt"
+            ? { data: { id: "usr_v2" } }
+            : undefined,
+        );
+        await promptSession("s1", [{ type: "text", text: "hi" }], undefined, undefined, "msg_oc01");
+        const v2call = callsFor("/api/session/s1/prompt").at(-1)!;
+        assert.equal((v2call.body as { id?: string }).id, "msg_oc01");
+        setDialect("v1");
+        onApi((call) => (call.path === "/session/s1/prompt_async" ? {} : undefined));
+        await promptSession("s1", [{ type: "text", text: "hi" }], undefined, undefined, "msg_oc01");
+        const v1call = callsFor("/session/s1/prompt_async").at(-1)!;
+        assert.equal((v1call.body as { id?: string }).id, undefined);
+      } finally {
+        setDialect("v1");
+      }
     });
   });
 
