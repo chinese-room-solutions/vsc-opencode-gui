@@ -49,11 +49,14 @@ import type { FilePart, Session } from "./api";
 import { translateV2Event } from "./v2events";
 import { judgeDialect, detectDialect, awaitDialect } from "../../server/dialect";
 import {
+  answerQuestion,
   commands,
   init,
   messagesBySession,
+  pendingQuestions,
   providers,
   refreshProvidersIfStale,
+  refreshQuestions,
   resyncFromServer,
   resetBaseRetryForTest,
   sendPrompt,
@@ -71,10 +74,15 @@ function row(
   return { info: { id, role, time: { created } }, parts: [] };
 }
 
-// v2 form row: one option field; the field title is the capitalized key.
+// v2 form row (the question tool's ask): the form title is the fixed
+// "Questions", the field mirrors toField — title = the question's header,
+// description = the question text, custom: true. Options are {value,
+// label} pairs (the question tool sends value = label, the schema lets
+// them differ and the reply tests below need the mapping).
 function formRow(
   id: string,
-  title: string,
+  question: string,
+  header: string,
   key: string,
   options: [value: string, label: string][],
   sessionID?: string,
@@ -82,12 +90,14 @@ function formRow(
   return {
     id,
     ...(sessionID !== undefined ? { sessionID } : {}),
-    title,
+    title: "Questions",
     fields: [
       {
         key,
         type: "string",
-        title: key[0].toUpperCase() + key.slice(1),
+        custom: true,
+        title: header,
+        description: question,
         options: options.map(([value, label]) => ({ value, label })),
       },
     ],
@@ -162,7 +172,7 @@ describe("dialect detection (probe logic)", () => {
       "v1",
     );
   });
-  it("detectDialect probes health first, then config; caches per origin", async () => {
+  it("detectDialect probes health first, then config; a fresh call re-probes", async () => {
     const origin = `http://cache-${Math.random().toString(36).slice(2)}:1`;
     const { calls, fetch } = fetchScript({
       "/api/health": { status: 404 },
@@ -170,10 +180,15 @@ describe("dialect detection (probe logic)", () => {
     });
     assert.equal(await detectDialect(origin, {}, fetch), "v2");
     assert.deepEqual(calls, [`${origin}/api/health`, `${origin}/api/config`]);
-    // Cached: the second detection makes no new calls.
-    calls.length = 0;
+    // No cache: the second detection probes both routes again, so a
+    // restarted server on the same origin answers fresh.
     assert.equal(await detectDialect(origin, {}, fetch), "v2");
-    assert.equal(calls.length, 0);
+    assert.deepEqual(calls, [
+      `${origin}/api/health`,
+      `${origin}/api/config`,
+      `${origin}/api/health`,
+      `${origin}/api/config`,
+    ]);
   });
   it("skips the config probe when health already answered v1", async () => {
     const origin = `http://v1-${Math.random().toString(36).slice(2)}:1`;
@@ -213,8 +228,8 @@ describe("dialect detection (probe logic)", () => {
     };
     const { calls, fetch } = fetchScript(replies);
     assert.equal(await detectDialect(origin, {}, fetch), "v1");
-    // The routes come up between the calls: a re-detection must re-probe
-    // (an "unknown" was never written to the cache) and see v2.
+    // The routes come up between the calls: a re-detection re-probes and
+    // sees v2.
     replies["/api/config"] = { status: 200, json: [] };
     assert.equal(await detectDialect(origin, {}, fetch), "v2");
     assert.ok(calls.length >= 4, "the second detection probed again");
@@ -353,6 +368,37 @@ describe("v2 route/body/envelope translation", () => {
     assert.deepEqual(callsFor("/api/session/ses_1/prompt")[0].body, {
       text: "hi",
     });
+  });
+
+  it("promptSession stops on a failed agent switch — no prompt POST", async () => {
+    onApi((call) =>
+      call.path === "/api/session/ses_1/agent"
+        ? apiFailWith("HTTP 400: unknown agent")
+        : undefined,
+    );
+    const sent = await promptSession(
+      "ses_1",
+      [{ type: "text", text: "hi" }],
+      "build",
+    );
+    assert.equal(sent.ok, false);
+    assert.match(sent.error ?? "", /Could not switch the agent to build/);
+    assert.equal(callsFor("/api/session/ses_1/prompt").length, 0);
+  });
+
+  it("promptSession stops on a failed model switch — no prompt POST", async () => {
+    onApi((call) =>
+      call.path === "/api/session/ses_1/model"
+        ? apiFailWith("HTTP 400: unknown model")
+        : undefined,
+    );
+    const sent = await promptSession("ses_1", [{ type: "text", text: "hi" }], undefined, {
+      providerID: "p",
+      id: "m",
+    });
+    assert.equal(sent.ok, false);
+    assert.match(sent.error ?? "", /Could not switch the model to p\/m/);
+    assert.equal(callsFor("/api/session/ses_1/prompt").length, 0);
   });
 
   it("promptSession folds multiple text parts into one {text} plus agents", async () => {
@@ -598,6 +644,15 @@ describe("v2 route/body/envelope translation", () => {
     );
     assert.deepEqual(await findFiles("md"), ["src/a.ts"]);
     assert.match(callsFor("/api/fs/find")[0].path, /^\/api\/fs\/find\?query=md/);
+    assert.ok(
+      !callsFor("/api/fs/find")[0].path.includes("location%5Bdirectory%5D"),
+    );
+    await findFiles("md", "C:\\w\\repo");
+    assert.ok(
+      callsFor("/api/fs/find")[1].path.includes(
+        "location%5Bdirectory%5D=C%3A%5Cw%5Crepo",
+      ),
+    );
   });
 
   it("findFiles keeps legacy string rows and stamps directory slashes", async () => {
@@ -1381,7 +1436,28 @@ describe("v2 transcript normalization (fetchMessages)", () => {
         };
       if (call.path === "/api/session/ses_1/form")
         return {
-          data: [formRow("frm_1", "Proceed?", "go", [["yes", "Yes"]])],
+          data: [
+            formRow("frm_1", "Proceed?", "Proceed", "go", [["yes", "Yes"]]),
+            // websearch-shaped: no field title, the question is only in
+            // the description, and custom: false hides the free-text row.
+            {
+              id: "frm_2",
+              sessionID: "ses_1",
+              title: "Web Search",
+              fields: [
+                {
+                  key: "choice",
+                  type: "string",
+                  custom: false,
+                  description: "Allow OpenCode to search the web",
+                  options: [
+                    { value: "allow", label: "Allow" },
+                    { value: "deny", label: "Deny" },
+                  ],
+                },
+              ],
+            },
+          ],
         };
       if (call.method === "POST" && call.path === "/api/session/ses_1/form/frm_1/reply")
         return {};
@@ -1398,6 +1474,10 @@ describe("v2 transcript normalization (fetchMessages)", () => {
     assert.equal(pending?.[0].id, "per_1");
     assert.equal(pending?.[0].action, "bash");
     const questions = await fetchSessionQuestions("ses_1");
+    // No /question route on v2 — the global leg must not fire, and the
+    // v1 pipeline stays unconfirmed (nothing to retire against).
+    assert.equal(callsFor("/question").length, 0);
+    assert.equal(questions?.globalLoaded, false);
     const row = questions?.rows[0];
     assert.equal(row?.id, "frm_1");
     assert.equal(row?.v1, false);
@@ -1406,6 +1486,11 @@ describe("v2 transcript normalization (fetchMessages)", () => {
     ]);
     assert.equal(row?.questions[0].question, "Proceed?");
     assert.equal(row?.questions[0].options?.[0].label, "Yes");
+    const web = questions?.rows[1];
+    assert.equal(web?.id, "frm_2");
+    assert.equal(web?.questions[0].question, "Allow OpenCode to search the web");
+    assert.equal(web?.questions[0].header, "choice");
+    assert.equal(web?.questions[0].custom, false);
     // The reply is always keyed by the field key, values not labels.
     assert.equal(
       await replyQuestion("ses_1", "frm_1", [["Yes"]], false, row),
@@ -1435,6 +1520,147 @@ describe("v2 transcript normalization (fetchMessages)", () => {
     assert.equal(isTaskTool("subagent"), true);
     assert.equal(isTaskTool("task"), true);
     assert.equal(isTaskTool("bash"), false);
+  });
+
+  it("typed form fields answer in their own type", async () => {
+    onApi((call) => {
+      if (call.path === "/api/session/ses_1/form")
+        return {
+          data: [
+            {
+              id: "frm_typ",
+              sessionID: "ses_1",
+              title: "Questions",
+              fields: [
+                {
+                  key: "count",
+                  type: "number",
+                  title: "How many",
+                  description: "Pick a count",
+                },
+                {
+                  key: "total",
+                  type: "integer",
+                  title: "Total",
+                  description: "Pick a total",
+                },
+                {
+                  key: "confirm",
+                  type: "boolean",
+                  title: "Confirm",
+                  description: "Proceed?",
+                },
+              ],
+            },
+          ],
+        };
+      if (call.method === "POST" && call.path === "/api/session/ses_1/form/frm_typ/reply")
+        return {};
+      return undefined;
+    });
+    const questions = await fetchSessionQuestions("ses_1");
+    const row = questions?.rows[0];
+    assert.deepEqual(row?.formFields, [
+      { key: "count", multiple: false, type: "number", optionValues: {} },
+      { key: "total", multiple: false, type: "integer", optionValues: {} },
+      { key: "confirm", multiple: false, type: "boolean", optionValues: {} },
+    ]);
+    assert.equal(
+      await replyQuestion("ses_1", "frm_typ", [["42"], ["7"], ["true"]], false, row),
+      true,
+    );
+    assert.deepEqual(
+      callsFor("/api/session/ses_1/form/frm_typ/reply")[0].body,
+      { answer: { count: 42, total: 7, confirm: true } },
+    );
+    // A non-number keeps the raw string — the server's message surfaces.
+    assert.equal(
+      await replyQuestion("ses_1", "frm_typ", [["abc"], ["7"], ["yes"]], false, row),
+      true,
+    );
+    assert.deepEqual(
+      callsFor("/api/session/ses_1/form/frm_typ/reply")[1].body,
+      { answer: { count: "abc", total: 7, confirm: false } },
+    );
+  });
+
+  it("a global (MCP elicitation) form docks in a session view and answers on the global route", async () => {
+    pendingQuestions.value = [];
+    onApi((call) => {
+      if (call.path === "/api/session/ses_1/form") return { data: [] };
+      if (call.path === "/api/session/global/form")
+        return {
+          data: [
+            formRow(
+              "frm_g",
+              "Proceed with the tool?",
+              "Proceed",
+              "go",
+              [["yes", "Yes"]],
+              "global",
+            ),
+          ],
+        };
+      if (call.method === "POST" && call.path === "/api/session/global/form/frm_g/reply")
+        return {};
+      return undefined;
+    });
+    // A missed form.created re-docks from the open session's refresh.
+    await refreshQuestions("ses_1");
+    const docked = pendingQuestions.value.find((q) => q.id === "frm_g")!;
+    assert.equal(docked.sessionID, "global");
+    assert.equal(docked.v1, false);
+    await answerQuestion("global", "frm_g", [["Yes"]]);
+    assert.deepEqual(
+      callsFor("/api/session/global/form/frm_g/reply")[0].body,
+      { answer: { go: "yes" } },
+    );
+    assert.equal(callsFor("/api/session/ses_1/form/frm_g/reply").length, 0);
+    assert.equal(pendingQuestions.value.length, 0);
+  });
+
+  it("a form listed on both the session and global legs keeps the session copy", async () => {
+    onApi((call) => {
+      if (call.path === "/api/session/ses_1/form")
+        return {
+          data: [
+            formRow("frm_g", "Proceed?", "Proceed", "go", [["yes", "Yes"]], "ses_1"),
+          ],
+        };
+      if (call.path === "/api/session/global/form")
+        return {
+          data: [
+            formRow("frm_g", "Proceed?", "Proceed", "go", [["yes", "Yes"]], "global"),
+          ],
+        };
+      return undefined;
+    });
+    const questions = await fetchSessionQuestions("ses_1");
+    assert.equal(questions?.rows.length, 1);
+    assert.equal(questions?.rows[0].sessionID, "ses_1");
+  });
+
+  it("a failed global form list leaves a docked elicitation docked", async () => {
+    pendingQuestions.value = [];
+    v2sse("form.created", {
+      form: formRow(
+        "frm_g",
+        "Proceed with the tool?",
+        "Proceed",
+        "go",
+        [["yes", "Yes"]],
+        "global",
+      ),
+    });
+    await flushEvents();
+    assert.equal(pendingQuestions.value.some((q) => q.id === "frm_g"), true);
+    onApi((call) => {
+      if (call.path === "/api/session/ses_1/form") return { data: [] };
+      if (call.path === "/api/session/global/form") return API_FAIL;
+      return undefined;
+    });
+    await refreshQuestions("ses_1");
+    assert.equal(pendingQuestions.value.some((q) => q.id === "frm_g"), true);
   });
 
   it("fetchSessionStatus reads the active record's keys; fetchAgents keeps display labels", async () => {
@@ -2442,44 +2668,24 @@ describe("v2 SSE → pipeline translation", () => {
   });
 
   it("maps session facts: permissions, forms, creation, usage, retry", () => {
-    // session.permissions {sessionID, permissions[]} → one ask per row.
-    assert.deepEqual(
-      translateV2Event(
-        ev("session.permissions", {
-          sessionID: "s",
-          permissions: [
-            {
-              id: "per_1",
-              action: "bash",
-              resources: ["rm -rf /"],
-              save: ["bash"],
-              source: { type: "tool", messageID: "m", callID: "c" },
-            },
-          ],
-        }),
-      ),
-      [
-        {
-          id: "evt_x",
-          type: "permission.v2.asked",
-          data: {
-            id: "per_1",
-            sessionID: "s",
-            action: "bash",
-            resources: ["rm -rf /"],
-            save: ["bash"],
-            source: { type: "tool", messageID: "m", callID: "c" },
-          },
-        },
+    // session.permissions carries a ruleset (rows of action/resource/
+    // effect), not asks — no translation exists, so it rides through
+    // untouched (the store ignores unknown types).
+    const rules = ev("session.permissions", {
+      sessionID: "s",
+      permissions: [
+        { action: "bash", resource: "rm -rf /", effect: "deny" },
       ],
-    );
-    // form.created {sessionID, form} → the v1 question shape.
+    });
+    assert.deepEqual(translateV2Event(rules), [rules]);
+    // form.created {form} → the v1 question shape (the event carries only
+    // the Info, whose sessionID names the session).
     const asked = translateV2Event(
       ev("form.created", {
-        sessionID: "s",
         form: formRow(
           "frm_1",
           "Continue?",
+          "Choice",
           "choice",
           [
             ["yes", "Yes"],
@@ -2502,7 +2708,7 @@ describe("v2 SSE → pipeline translation", () => {
     ]);
     assert.equal(q.questions?.[0].question, "Continue?");
     assert.deepEqual(q.questions?.[0].options, [{ label: "Yes" }, { label: "No" }]);
-    assert.equal(q.questions?.[0].custom, false);
+    assert.equal(q.questions?.[0].custom, true);
     // settle events
     assert.deepEqual(
       translateV2Event(ev("form.replied", { sessionID: "s", id: "frm_1" })),
@@ -2567,7 +2773,7 @@ describe("v2 SSE → pipeline translation", () => {
     // undock through the v2 cases, not the v1 names they share.
     const askedPerm = translateV2Event(
       ev("permission.asked", {
-        id: "pr_1",
+        id: "per_1",
         sessionID: "s",
         action: "bash",
         resources: ["cat foo"],
@@ -2578,7 +2784,7 @@ describe("v2 SSE → pipeline translation", () => {
         id: "evt_x",
         type: "permission.v2.asked",
         data: {
-          id: "pr_1",
+          id: "per_1",
           sessionID: "s",
           action: "bash",
           resources: ["cat foo"],
@@ -2591,7 +2797,7 @@ describe("v2 SSE → pipeline translation", () => {
       translateV2Event(
         ev("permission.replied", {
           sessionID: "s",
-          requestID: "pr_1",
+          requestID: "per_1",
           reply: "once",
         }),
       )[0].type,
@@ -2869,9 +3075,10 @@ describe("v2 turn through the store (recorded frame sequence)", () => {
     const sid = "v2asks";
     sessions.value = [sessRow(sid, { title: "Real title", cost: 1 })];
 
-    // The v2-shaped bare event must dock like session.permissions does.
+    // The v2-shaped bare event must dock through the v2 ask case (it
+    // shares its name with the v1 event, whose normalizer would drop it).
     v2sse("permission.asked", {
-      id: "pr_9",
+      id: "per_9",
       sessionID: sid,
       action: "bash",
       resources: ["ls"],
@@ -2879,7 +3086,7 @@ describe("v2 turn through the store (recorded frame sequence)", () => {
     await flushEvents();
     assert.ok(
       (await import("./store")).pendingPermissions.value.some(
-        (p) => p.id === "pr_9" && p.v1 !== true,
+        (p) => p.id === "per_9" && p.v1 !== true,
       ),
     );
 

@@ -141,15 +141,21 @@ export interface Providers {
 
 // One relay round-trip: post the request, resolve on the matching reply.
 // The host always answers — any relay/fetch failure replies {ok:false} —
-// so the promise never hangs or rejects. `error` is the host's compact
-// reason (HTTP status + server message, or the transport failure).
+// but its reply post can be lost (a suspended webview drops host messages
+// without the stream knowing), so each call carries a deadline past the
+// relay's own cap and settles {ok:false} instead of hanging the guards it
+// sits under. `error` is the host's compact reason (HTTP status + server
+// message, or the transport failure).
 interface ApiResult {
   ok: boolean;
   json?: unknown;
   error?: string;
 }
 
-const pending = new Map<number, (r: ApiResult) => void>();
+const pending = new Map<
+  number,
+  { resolve: (r: ApiResult) => void; timer: number }
+>();
 let nextRequestId = 0;
 
 function apiRequest(
@@ -160,7 +166,11 @@ function apiRequest(
 ): Promise<ApiResult> {
   return new Promise((resolve) => {
     const id = ++nextRequestId;
-    pending.set(id, resolve);
+    const timer = window.setTimeout(() => {
+      pending.delete(id);
+      resolve({ ok: false, error: "api reply timeout" });
+    }, (timeoutMs ?? 10_000) + 5_000);
+    pending.set(id, { resolve, timer });
     postToHost({
       type: "api-request",
       id,
@@ -181,10 +191,11 @@ window.addEventListener("message", (e: MessageEvent) => {
     error?: unknown;
   };
   if (m?.type !== "api-result" || typeof m.id !== "number") return;
-  const resolve = pending.get(m.id);
-  if (!resolve) return;
+  const wait = pending.get(m.id);
+  if (!wait) return;
   pending.delete(m.id);
-  resolve({
+  window.clearTimeout(wait.timer);
+  wait.resolve({
     ok: m.ok === true,
     json: m.json,
     error: typeof m.error === "string" ? m.error : undefined,
@@ -556,9 +567,8 @@ export async function fetchSessionPermissions(
 }
 
 // Pending asks, both dialects: v2 GETs /api/permission/request ({data}
-// envelope, same row shape the session.permissions event carries); v1
-// GETs the global /permission list. Asks made while the page was closed
-// are recovered from here.
+// envelope of Permission.Request rows); v1 GETs the global /permission
+// list. Asks made while the page was closed are recovered from here.
 export async function fetchPendingPermissions(): Promise<
   PermissionRequest[] | undefined
 > {
@@ -604,10 +614,14 @@ export interface QuestionRequest {
   // answer by the field's `key` (wire-verified 2.0.18: the reply body is
   // ALWAYS {answer: {<key>: value}} — scalars 400 with Expected
   // Form.Answer), a multiselect field takes the chosen option VALUES as a
-  // string[], and option labels may differ from their values.
+  // string[], and option labels may differ from their values. `type` rides
+  // only for the typed fields (number/integer/boolean) whose answer must be
+  // coerced off the dock's free text — the server rejects the stringified
+  // value (Expected number/boolean for form field).
   formFields?: {
     key: string;
     multiple: boolean;
+    type?: string;
     optionValues?: Record<string, string>;
   }[];
 }
@@ -618,8 +632,11 @@ export interface QuestionRequest {
 // returns [] for them — wire-verified 1.18.25). A form row maps onto the
 // v1 question shape the dock renders; the form flag routes its reply to
 // the form endpoints. The /api copy wins on an id collision, so a v2 ask
-// that shows up in both keeps the v2 reply route.
-// Which of the two lists actually loaded rides along: a refresh may only
+// that shows up in both keeps the v2 reply route. On v2 the v1 /question
+// leg stays skipped (no such route — the SPA fallback would answer it
+// with HTML), and a third leg pulls the fixed "global" session's forms:
+// MCP elicitations dock there, so they answer in every session view.
+// Which of the lists actually loaded rides along: a refresh may only
 // retire an ask its own pipeline's list confirmed absent.
 export interface SessionQuestions {
   rows: QuestionRequest[];
@@ -629,13 +646,19 @@ export interface SessionQuestions {
 export async function fetchSessionQuestions(
   id: string,
 ): Promise<SessionQuestions | undefined> {
-  const [v2, global] = await Promise.all([
+  const [v2, global, globalForms] = await Promise.all([
     serverDialect === "v2"
       ? getJson<{ data?: unknown[] }>(`/api/session/${id}/form`)
       : getJson<{ data?: QuestionRequest[] }>(`/api/session/${id}/question`),
-    getJson<QuestionRequest[]>("/question"),
+    serverDialect === "v2"
+      ? Promise.resolve(undefined)
+      : getJson<QuestionRequest[]>("/question"),
+    serverDialect === "v2"
+      ? getJson<{ data?: unknown[] }>("/api/session/global/form")
+      : Promise.resolve(undefined),
   ]);
-  if (v2 === undefined && global === undefined) return undefined;
+  if (v2 === undefined && global === undefined && globalForms === undefined)
+    return undefined;
   const v2Rows =
     serverDialect === "v2"
       ? ((Array.isArray((v2 as { data?: unknown[] })?.data)
@@ -650,16 +673,24 @@ export async function fetchSessionQuestions(
   const v1Rows = (Array.isArray(global) ? global : [])
     .filter((q) => q.sessionID === id && !seen.has(q.id))
     .map((q) => ({ ...q, v1: true }));
+  const globalRows = (
+    Array.isArray((globalForms as { data?: unknown[] })?.data)
+      ? (globalForms as { data: unknown[] }).data
+      : []
+  )
+    .map((f) => formToQuestion(f as Record<string, unknown>, "global"))
+    .filter((q): q is QuestionRequest => !!q && !seen.has(q.id));
   return {
-    rows: [...v2Rows, ...v1Rows],
+    rows: [...v2Rows, ...v1Rows, ...globalRows],
     v2Loaded: v2 !== undefined,
     globalLoaded: global !== undefined,
   };
 }
 
-// v2 form row → v1 QuestionRequest. Field shape is only partially known
-// (Form.Field: name/label/type/options); option-like fields list their
-// options, everything else offers the free-text row. Reply specs (key,
+// v2 form row → v1 QuestionRequest. The real Form.Field carries
+// key/title/description/type/options/custom — the question text rides
+// `description`, the dock header rides `title`. Option-like fields list
+// their options, everything else offers the free-text row. Reply specs (key,
 // multiple, label→value) ride along so the reply can key by `key` and send
 // option values.
 export function formToQuestion(
@@ -692,6 +723,9 @@ export function formToQuestion(
     return {
       key: typeof f.key === "string" ? f.key : `field${i}`,
       multiple: f.type === "multiselect" || f.multiple === true,
+      ...(f.type === "number" || f.type === "integer" || f.type === "boolean"
+        ? { type: f.type as string }
+        : {}),
       optionValues,
     };
   });
@@ -728,11 +762,14 @@ export function formToQuestion(
                   (o): o is { label: string; description?: string } => !!o,
                 )
             : [];
+          const desc =
+            typeof f.description === "string" ? f.description : undefined;
           return {
             question:
-              fields.length > 1
+              desc ??
+              (fields.length > 1
                 ? `${title} — ${label}`
-                : title || label,
+                : title || label),
             header: label,
             options,
             multiple: f.type === "multiselect" || f.multiple === true,
@@ -2193,8 +2230,30 @@ export async function promptSession(
   // — {text, files, agents} — mapped from our parts below; the schema is
   // additionalProperties:false, so nothing else may ride along.
   if (serverDialect === "v2") {
-    if (agent) await switchSessionAgent(id, agent);
-    if (model) await switchSessionModel(id, model.providerID, model.id, model.variant);
+    // A switch that the server rejects (bad ref, schema 400, relay abort)
+    // must stop the send — the turn would otherwise run on the previous
+    // agent/model while the UI believes otherwise.
+    if (agent) {
+      const res = await switchSessionAgent(id, agent);
+      if (!res.ok)
+        return {
+          ok: false,
+          error: `Could not switch the agent to ${agent}${res.error ? `: ${res.error}` : ""}`,
+        };
+    }
+    if (model) {
+      const res = await switchSessionModel(
+        id,
+        model.providerID,
+        model.id,
+        model.variant,
+      );
+      if (!res.ok)
+        return {
+          ok: false,
+          error: `Could not switch the model to ${model.providerID}/${model.id}${res.error ? `: ${res.error}` : ""}`,
+        };
+    }
     const text = parts
       .filter((p): p is { type: "text"; text: string } => p.type === "text")
       .map((p) => p.text)
@@ -2250,6 +2309,7 @@ export async function findFiles(
 ): Promise<string[]> {
   if (serverDialect === "v2") {
     const qs = new URLSearchParams({ query, limit: "20" });
+    if (directory) qs.set("location[directory]", directory);
     const body = await getJson<{ data?: unknown[] }>(`/api/fs/find?${qs}`);
     return (body?.data ?? []).map((r) => {
       if (typeof r === "string") return r.replace(/\\/g, "/");
@@ -2291,8 +2351,9 @@ export async function backgroundSession(
 export async function switchSessionAgent(
   id: string,
   agent: string,
-): Promise<boolean> {
-  return (await sendJson("POST", `/api/session/${id}/agent`, { agent }))?.ok === true;
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await sendJson("POST", `/api/session/${id}/agent`, { agent });
+  return res.ok ? { ok: true } : { ok: false, error: res.error };
 }
 
 // A model pick: provider + model id, plus the reasoning-effort variant
@@ -2309,12 +2370,11 @@ export async function switchSessionModel(
   providerID: string,
   modelID: string,
   variant?: string,
-): Promise<boolean> {
-  return (
-    (await sendJson("POST", `/api/session/${id}/model`, {
-      model: { providerID, id: modelID, ...(variant ? { variant } : {}) },
-    }))?.ok === true
-  );
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await sendJson("POST", `/api/session/${id}/model`, {
+    model: { providerID, id: modelID, ...(variant ? { variant } : {}) },
+  });
+  return res.ok ? { ok: true } : { ok: false, error: res.error };
 }
 
 // POST /session/{id}/command — run a slash command; replies {info, parts}
@@ -2449,6 +2509,16 @@ export async function replyQuestion(
         const picked = (answers[i] ?? []).map(
           (label) => f.optionValues?.[label] ?? label,
         );
+        if (!f.multiple) {
+          const text = picked[0] ?? "";
+          // Typed fields answer as free text — the server wants the value's
+          // type. A non-number keeps the raw string so its message surfaces.
+          if (f.type === "number" || f.type === "integer") {
+            const n = Number(text);
+            return [f.key, Number.isNaN(n) ? text : n];
+          }
+          if (f.type === "boolean") return [f.key, text === "true"];
+        }
         return [f.key, f.multiple ? picked : (picked[0] ?? "")];
       }),
     );
@@ -2661,7 +2731,9 @@ export async function unrevertSession(
 // GET /session?directory= (v1) — a project's sessions, unpaged. Only ids
 // are read (project purge). v2 has no directory filter: walk the paginated
 // /api/session list and match rows by their location directory (folded for
-// the compare — separators and drive-letter case).
+// the compare — separators and drive-letter case). Returns undefined when
+// a page fails or the walk hits its page cap — a truncated list must not
+// read as complete.
 export async function fetchProjectSessions(
   directory: string,
 ): Promise<{ id: string }[] | undefined> {
@@ -2671,7 +2743,8 @@ export async function fetchProjectSessions(
     const want = fold(directory);
     const out: { id: string }[] = [];
     let cursor: string | undefined;
-    for (let page = 0; page < 10; page++) {
+    let page = 0;
+    for (; page < 10; page++) {
       const params = new URLSearchParams({ limit: "400" });
       if (cursor) {
         params.set("cursor", cursor);
@@ -2681,13 +2754,17 @@ export async function fetchProjectSessions(
         data?: Session[];
         cursor?: { next?: string };
       }>(`/api/session?${params}`);
-      if (!body) break;
+      if (!body) return undefined;
       for (const s of body.data ?? [])
         if (fold(s.location?.directory) === want) out.push({ id: s.id });
       if ((body.data?.length ?? 0) < 400) break;
       cursor = body.cursor?.next;
       if (!cursor) break;
     }
+    // The walk ran off its page cap — every page was full and carried a
+    // next cursor, so the list is truncated, not complete: refuse like a
+    // failed page (a purge could otherwise strand the unseen sessions).
+    if (page === 10) return undefined;
     return out;
   }
   return getJson<{ id: string }[]>(

@@ -2,7 +2,9 @@
 // answers GET /api/health with 200 {"healthy":true}; v2 (@opencode/cli 2.x)
 // has no health route (404) and serves GET /api/config as a bare ARRAY of
 // config source docs (v1 serves the merged config object). Probing works
-// for spawned AND attached servers alike; the result is cached per origin.
+// for spawned AND attached servers alike, and every attach probes fresh —
+// the origin is reused across restarts, so a cached verdict could outlive
+// the server that produced it.
 // Pure module: no Node/vscode/DOM imports, so the webview unit tests can
 // exercise the judge directly.
 export type Dialect = "v1" | "v2";
@@ -57,12 +59,6 @@ export function judgeDialect(
   return "unknown";
 }
 
-const cache = new Map<string, Dialect>();
-
-export function cachedDialect(origin: string): Dialect | undefined {
-  return cache.get(origin);
-}
-
 type FetchLike = (url: string, init?: Record<string, unknown>) => Promise<{
   ok: boolean;
   status: number;
@@ -91,24 +87,21 @@ async function probe(
   }
 }
 
-// One probe round: the cached verdict, else judge a fresh probe pair. An
-// "unknown" verdict is never cached — the next caller re-probes.
+// One probe round: a fresh health/config pair, judged. Returns "unknown"
+// when no route answered with a shape that names a dialect — the caller
+// re-probes (awaitDialect) instead of acting on it.
 async function probeDialect(
   baseUrl: string,
   headers: Record<string, string>,
   fetchLike: FetchLike,
 ): Promise<DialectOrUnknown> {
   const origin = new URL(baseUrl).origin;
-  const cached = cache.get(origin);
-  if (cached) return cached;
   const health = await probe(fetchLike, `${origin}/api/health`, headers);
   const config =
     health !== "error" && health.status === 200
       ? { status: 0, json: undefined }
       : await probe(fetchLike, `${origin}/api/config`, headers);
-  const dialect = judgeDialect(health, config);
-  if (dialect !== "unknown") cache.set(origin, dialect);
-  return dialect;
+  return judgeDialect(health, config);
 }
 
 export async function detectDialect(
@@ -118,8 +111,7 @@ export async function detectDialect(
     fetch(url, init as RequestInit) as Promise<Response>,
 ): Promise<Dialect> {
   const verdict = await probeDialect(baseUrl, headers, fetchLike);
-  // No conclusive answer: keep the historic v1 guess, but leave the cache
-  // empty so a later (healthy) detection wins.
+  // No conclusive answer: keep the historic v1 guess.
   return verdict === "unknown" ? "v1" : verdict;
 }
 

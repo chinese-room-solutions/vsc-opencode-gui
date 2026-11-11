@@ -2,10 +2,13 @@ import "./setup.test";
 import { strict as assert } from "node:assert";
 import {
   API_FAIL,
+  API_HOLD,
   apiFailWith,
+  apiLog,
   flushEvents,
   onApi,
   dispatchWindowMessage,
+  fireExact,
 } from "./setup.test";
 import {
   attachAllowed,
@@ -14,6 +17,7 @@ import {
   chipMime,
   clampPartText,
   clampToolOutput,
+  compactSession,
   createSession,
   fetchMessages,
   fetchProviders,
@@ -558,6 +562,43 @@ describe("api", () => {
       });
       await fetchMessages("sc", { size: 400 });
       assert.ok(asked.includes("limit=200"), asked);
+    });
+  });
+
+  describe("api reply deadline", () => {
+    it("settles {ok:false} when the host's reply never comes", async () => {
+      onApi(() => API_HOLD);
+      const p = fetchSessions();
+      assert.equal(fireExact(15_000), 1); // relay cap 10s + margin
+      assert.equal(await p, undefined);
+    });
+    it("a normal reply wins and clears the deadline timer", async () => {
+      onApi(() => ({ data: [{ id: "s1" }], cursor: {} }));
+      const page = await fetchSessions();
+      assert.equal(page!.sessions.length, 1);
+      assert.equal(fireExact(15_000), 0);
+    });
+    it("a reply arriving after the deadline is a no-op", async () => {
+      onApi(() => API_HOLD);
+      const p = fetchSessions();
+      const call = apiLog[apiLog.length - 1];
+      fireExact(15_000);
+      assert.equal(await p, undefined);
+      dispatchWindowMessage({
+        type: "api-result",
+        id: call.id,
+        ok: true,
+        json: { data: [], cursor: {} },
+      });
+      await flushEvents();
+      assert.equal(await p, undefined);
+    });
+    it("a caller's own timeoutMs moves the deadline", async () => {
+      onApi(() => API_HOLD);
+      const p = compactSession("sc", "prov", "model");
+      assert.equal(fireExact(15_000), 0);
+      assert.equal(fireExact(305_000), 1); // the summarize POST's 300s + margin
+      assert.equal(await p, false);
     });
   });
 

@@ -5114,6 +5114,73 @@ describe("project purge", () => {
     );
     assert.equal(tombstones.value.includes("C:/work/repo"), false);
   });
+  afterEach(() => setDialect("v1"));
+  // v2 lists are paged: a failed page or a hit page cap must read as
+  // "unknown", never as a (partial) list — the purge would otherwise
+  // tombstone the folder with its unseen sessions still alive.
+  it("v2 refuses the purge when the first list page fails", async () => {
+    setDialect("v2");
+    onApi((call) =>
+      call.method === "GET" && call.path.split("?")[0] === "/api/session"
+        ? API_FAIL
+        : undefined,
+    );
+    assert.equal(await purgeProject("C:\\work\\repo"), false);
+    assert.equal(
+      sendError.value?.text,
+      "Could not list the project's sessions.",
+    );
+    assert.equal(tombstones.value.length, 0);
+    assert.equal(apiLog.filter((c) => c.method === "DELETE").length, 0);
+  });
+  it("v2 refuses the purge when a later list page fails", async () => {
+    setDialect("v2");
+    const fullPage = (): unknown => ({
+      data: Array.from({ length: 400 }, (_, i) => ({
+        id: `pzp_${i}`,
+        location: { directory: "C:/work/repo" },
+      })),
+      cursor: { next: "more" },
+    });
+    let pages = 0;
+    onApi((call) => {
+      if (call.method !== "GET" || call.path.split("?")[0] !== "/api/session")
+        return undefined;
+      pages += 1;
+      return pages === 1 ? fullPage() : API_FAIL;
+    });
+    assert.equal(await purgeProject("C:\\work\\repo"), false);
+    assert.equal(
+      sendError.value?.text,
+      "Could not list the project's sessions.",
+    );
+    assert.equal(pages, 2);
+    assert.equal(apiLog.filter((c) => c.method === "DELETE").length, 0);
+  });
+  it("v2 refuses the purge when the walk hits its page cap", async () => {
+    setDialect("v2");
+    // Every page full and carrying a next cursor: the 10-page bound ends
+    // the walk on a truncated list.
+    onApi((call) =>
+      call.method === "GET" && call.path.split("?")[0] === "/api/session"
+        ? {
+            data: Array.from({ length: 400 }, (_, i) => ({
+              id: `pzc_${i}`,
+              location: { directory: "C:/work/repo" },
+            })),
+            cursor: { next: "more" },
+          }
+        : undefined,
+    );
+    assert.equal(await purgeProject("C:\\work\\repo"), false);
+    assert.equal(
+      sendError.value?.text,
+      "Could not list the project's sessions.",
+    );
+    assert.equal(tombstones.value.length, 0);
+    assert.equal(apiLog.filter((c) => c.method === "DELETE").length, 0);
+    assert.equal(callsFor("/api/session").length, 10);
+  });
 });
 
 describe("background sub-agent (sendPrompt release)", () => {

@@ -864,8 +864,8 @@ export async function setSelection(
             sel.model.id,
             sel.model.variant,
           )
-        : true;
-  if (!ok) {
+        : { ok: true };
+  if (!ok.ok) {
     setSendError("The switch was rejected by the server.");
     return;
   }
@@ -1006,7 +1006,7 @@ function guardVariant(id: string, model: Session["model"] | undefined): void {
       pick.variant,
     );
     restoringVariants.delete(id);
-    if (!ok) {
+    if (!ok.ok) {
       pickedVariants.delete(id);
       savePickedVariants();
       return;
