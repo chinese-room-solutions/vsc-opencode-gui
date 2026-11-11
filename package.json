@@ -104,13 +104,6 @@
         "title": "Open Code: Delete Session"
       }
     ],
-    "keybindings": [
-      {
-        "command": "opencodeGui.toggleChat",
-        "key": "ctrl+escape",
-        "mac": "cmd+escape"
-      }
-    ],
     "menus": {
       "view/title": [
         {

@@ -40,7 +40,7 @@ In the command palette under **`Open Code:`**.
 | Command | What it does |
 | --- | --- |
 | `Open in Primary Editor` | Reveal the last session tab, or start one |
-| `Toggle Chat` (`Ctrl+Esc`) | Close the active session tab, or reveal one |
+| `Toggle Chat` | Close the active session tab, or reveal one |
 | `Toggle Side Panel` | Show or hide the sessions panel |
 | `New Session` | Start a session in a new tab |
 | `Show History` | Pick a session to open |
