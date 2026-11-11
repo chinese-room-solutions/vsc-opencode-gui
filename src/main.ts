@@ -23,6 +23,23 @@ import { invalidateThemeTokens } from "./theme";
 import { initLog, log } from "./log";
 
 let serverManager: ServerManager | undefined;
+// Set while a dispose-and-respawn sequence (restart command, crash
+// respawn, v1 agent-sync restart) is mid-flight: ensureServer defers to
+// it instead of spawning a competing manager onto the dying server's
+// port.
+let lifecycle: Promise<void> | undefined;
+
+// Chains `run` onto any in-flight lifecycle so those sequences never
+// overlap.
+function oneLifecycle(run: () => Promise<void>): Promise<void> {
+  const next = lifecycle ? lifecycle.then(run, run) : run();
+  lifecycle = next;
+  const settled = () => {
+    if (lifecycle === next) lifecycle = undefined;
+  };
+  void next.then(settled, settled);
+  return next;
+}
 
 function copyModifierSetting(): string {
   return vscode.workspace
@@ -179,10 +196,13 @@ export function activate(context: vscode.ExtensionContext) {
       }
       // v1 reads agents at boot only — restart so the server picks them
       // up. The next start finds the files up-to-date: no loop.
-      serverManager = undefined;
-      await sm.dispose();
-      hub.setLoading();
-      ensureServer();
+      void oneLifecycle(async () => {
+        serverManager = undefined;
+        await sm.dispose();
+        if (serverManager !== undefined) return;
+        hub.setLoading();
+        createServer();
+      });
     }
   };
 
@@ -192,20 +212,20 @@ export function activate(context: vscode.ExtensionContext) {
     sm.onUnexpectedExit = () => {
       if (serverManager !== sm) return;
       log.error("server exited unexpectedly — respawning");
-      serverManager = undefined;
       // Dispose first (same as the agent-sync restart): clears the dead
       // manager's lease heartbeat and proves the port free before the
       // replacement binds it.
-      void sm.dispose().then(() => {
+      void oneLifecycle(async () => {
+        serverManager = undefined;
+        await sm.dispose();
         if (serverManager !== undefined) return;
         hub.setLoading();
-        ensureServer();
+        createServer();
       });
     };
   };
 
-  const ensureServer = (): ServerManager | undefined => {
-    if (serverManager) return serverManager;
+  const createServer = (): void => {
     const sm = new ServerManager();
     wireUnexpectedExit(sm);
     serverManager = sm;
@@ -228,6 +248,19 @@ export function activate(context: vscode.ExtensionContext) {
       cfg.get<string>("path", "").trim(),
     );
     void sm.ready.then(() => syncAfterReady());
+  };
+
+  const ensureServer = (): ServerManager | undefined => {
+    if (serverManager) return serverManager;
+    if (lifecycle) {
+      // A dispose-and-respawn is mid-flight: chain onto its end instead
+      // of spawning a manager the dying server's dispose would kill.
+      void lifecycle.then(() => {
+        if (!serverManager) createServer();
+      });
+      return undefined;
+    }
+    createServer();
   };
 
   // Open session panels (one editor tab per session) — created on demand,
@@ -861,21 +894,26 @@ export function activate(context: vscode.ExtensionContext) {
   // Register the restart command to kill the server and start fresh
   context.subscriptions.push(
     vscode.commands.registerCommand("opencodeGui.restart", async () => {
-      const old = serverManager;
-      serverManager = undefined;
-      hub.setLoading();
-      // Wait for the ports to actually free before spawning the replacement.
-      await old?.dispose();
-      // ensureServer re-reads the config and stored port per spawn and
-      // wires the replacement (unexpected-exit respawn, model-agent sync);
-      // it returns before the boot finishes, like every other spawn site.
-      const sm = ensureServer();
+      await oneLifecycle(async () => {
+        const old = serverManager;
+        serverManager = undefined;
+        hub.setLoading();
+        // Wait for the ports to actually free before spawning the replacement.
+        await old?.dispose();
+        // createServer re-reads the config and stored port per spawn and
+        // wires the replacement (unexpected-exit respawn, model-agent
+        // sync), returning before the boot finishes like every other
+        // spawn site. Called directly: ensureServer would see this
+        // lifecycle still in flight and defer instead of spawning.
+        createServer();
+      });
       // Restart doubles as dead-webview recovery: a session tab whose
       // renderer process died shows VS Code's grey placeholder forever,
       // and only a fresh webview brings it back — rebuild every VISIBLE
       // panel whose heartbeat (AppHost.isUnresponsive) has stopped. Live
       // tabs are left alone; the sidebar re-renders from hub state
       // changes.
+      const sm = serverManager;
       void sm?.ready.then(() => {
         for (const panel of panels.all()) {
           if (panel.isVisible && panel.chat.isUnresponsive)

@@ -93,6 +93,21 @@ suite("opencode GUI lifecycle", function () {
     assert.strictEqual((await fetchOk(after)).status, 200);
   });
 
+  test("ensureServer during a restart defers to the running lifecycle", async function () {
+    // Hit ensureServer inside Restart's dispose window (the port sweep
+    // takes seconds): the lifecycle gate must defer the extra spawn, and
+    // Restart's own replacement must come up on the same port, reachable.
+    const before = await waitForUrl(api);
+    const port = new URL(before).port;
+    const restarting = vscode.commands.executeCommand("opencodeGui.restart");
+    api.ensureServer();
+    await restarting;
+    const after = await waitForUrl(api);
+    assert.strictEqual(new URL(after).port, port, "stored port reused");
+    assert.strictEqual((await fetchOk(after)).status, 200);
+    fs.writeFileSync(portFile, String(api.serverPort ?? port));
+  });
+
   test("boots on a fresh port when the stored one is squatted", async function () {
     // Squat the stored port with a listener that answers nothing: the
     // health probe fails, the port still binds, and opencode serve exits 1
