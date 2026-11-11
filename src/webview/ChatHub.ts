@@ -3,6 +3,7 @@ import { serverAuthHeaders } from "../server/serverAuth";
 import type { Dialect } from "../server/dialect";
 import { AppHost, type BellKind, type ServerEvent, type SseState } from "./AppHost";
 import type { PeerInfo } from "./Peers";
+import { log } from "../log";
 
 type State =
   | { kind: "loading" }
@@ -102,39 +103,43 @@ export class ChatHub implements vscode.Disposable {
 
   // Re-serve every chat's shell with fresh baked state (theme change).
   rerender() {
-    for (const chat of this._chats) chat.rerender();
+    for (const chat of this._chats) this._safe(chat, (c) => c.rerender());
   }
 
   // The codeCopyModifier setting changed (main.ts watches it).
   setCopyModifier(modifier: string) {
-    for (const chat of this._chats) chat.setCopyModifier(modifier);
+    for (const chat of this._chats)
+      this._safe(chat, (c) => c.setCopyModifier(modifier));
   }
 
   // The readySound setting changed (main.ts watches it).
   setReadySound(enabled: boolean) {
-    for (const chat of this._chats) chat.setReadySound(enabled);
+    for (const chat of this._chats)
+      this._safe(chat, (c) => c.setReadySound(enabled));
   }
 
   // The permissionSound setting changed (main.ts watches it).
   setPermissionSound(enabled: boolean) {
-    for (const chat of this._chats) chat.setPermissionSound(enabled);
+    for (const chat of this._chats)
+      this._safe(chat, (c) => c.setPermissionSound(enabled));
   }
 
   // The questionSound setting changed (main.ts watches it).
   setQuestionSound(enabled: boolean) {
-    for (const chat of this._chats) chat.setQuestionSound(enabled);
+    for (const chat of this._chats)
+      this._safe(chat, (c) => c.setQuestionSound(enabled));
   }
 
   // The peer registry (PeerRegistry) changed — peer cards re-name.
   setPeers(peers: PeerInfo[]) {
     this._peers = peers;
-    for (const chat of this._chats) chat.setPeers(peers);
+    for (const chat of this._chats) this._safe(chat, (c) => c.setPeers(peers));
   }
 
   // Server truth changed outside the stream (the provider disable
   // toggle): pull it in every live chat.
   noteVisible() {
-    for (const chat of this._chats) chat.noteVisible();
+    for (const chat of this._chats) this._safe(chat, (c) => c.noteVisible());
   }
 
   dispose() {
@@ -144,7 +149,19 @@ export class ChatHub implements vscode.Disposable {
   }
 
   private _broadcast() {
-    for (const chat of this._chats) this._push(chat, this._state);
+    for (const chat of this._chats)
+      this._safe(chat, (c) => this._push(c, this._state));
+  }
+
+  // One dead page must not abort a fan-out mid-loop: a webview disposed
+  // without its onDidDispose having run yet throws on every push (the
+  // html assignment), and the surviving pages still need the state.
+  private _safe(chat: AppHost, fn: (chat: AppHost) => void) {
+    try {
+      fn(chat);
+    } catch (err) {
+      log.error("chat fan-out failed:", err);
+    }
   }
 
   private _push(chat: AppHost, state: State) {

@@ -13,6 +13,7 @@ export function run(): Promise<void> {
   mocha.addFile(require.resolve("./attachments.js"));
   mocha.addFile(require.resolve("./serverManager.js"));
   mocha.addFile(require.resolve("./commands.js"));
+  mocha.addFile(require.resolve("./chatHub.js"));
   mocha.addFile(require.resolve("./lifecycle.js"));
   return new Promise((resolve, reject) => {
     mocha.run((failures) =>
