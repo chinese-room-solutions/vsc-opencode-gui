@@ -3144,6 +3144,107 @@ describe("an idle over live tools", () => {
   });
 });
 
+describe("one path adopts the server's session statuses", () => {
+  // A running bash tool over a busy session — the hold is keyed on it.
+  const liveTurn = (sid: string): void => {
+    const part: Part = {
+      id: "p1",
+      messageID: "a1",
+      sessionID: sid,
+      type: "tool",
+      tool: "bash",
+      state: {
+        status: "running",
+        time: { start: T0 + 1 },
+        input: { command: "taskkill /T" },
+      },
+    };
+    open(sid, [
+      row("u1", "user", T0),
+      {
+        info: { id: "a1", role: "assistant", time: { created: T0 + 1 } },
+        parts: [part],
+      },
+    ]);
+    setBusy(sid);
+  };
+  const toolStillRunning = (sid: string): boolean =>
+    (findPart(sid, "p1") as { state?: { status?: string } } | undefined)
+      ?.state?.status === "running";
+
+  it("a reconnect resync holds a live-tool session the snapshot calls idle", async () => {
+    const sid = "ad1";
+    liveTurn(sid);
+    let pulls = 0;
+    onApi((call) => {
+      if (call.method !== "GET" || call.path !== "/session/status")
+        return undefined;
+      pulls++;
+      return pulls === 1 ? {} : { [sid]: { type: "busy" } };
+    });
+    dispatchWindowMessage({
+      type: "sse-event",
+      event: { id: "evt_a1", type: "server.connected", data: {} },
+    });
+    await flushEvents();
+    await settle(6);
+    assert.equal(sessionStatus.value[sid]?.type, "busy");
+    assert.ok(toolStillRunning(sid));
+  });
+
+  it("a raced snapshot mid-queue does not fire the next command", async () => {
+    const sid = "ad2";
+    commands.value = [{ name: "foo" }, { name: "bar" }];
+    open(sid, [row("u1", "user", T0)]);
+    setBusy(sid);
+    queueCommand(sid, "/foo");
+    queueCommand(sid, "/bar");
+    assert.equal(queuedTurns.value.length, 2);
+    let pulls = 0;
+    onApi((call) => {
+      if (call.path === `/session/${sid}/command`) return { ok: true };
+      if (call.method === "GET" && call.path === "/session/status") {
+        // First pull: the snapshot predates the fired command's turn.
+        // Later pulls: the verification pull confirms the turn live.
+        return pulls++ === 0 ? {} : { [sid]: { type: "busy" } };
+      }
+      return undefined;
+    });
+    // The first entry drains; the flush flips busy for its turn.
+    await sseFlush("session.idle", { sessionID: sid });
+    await settle(6);
+    assert.equal(callsFor(`/session/${sid}/command`).length, 1);
+    // The first run's turn streamed a live tool part.
+    const part: Part = {
+      id: "p1",
+      messageID: "a1",
+      sessionID: sid,
+      type: "tool",
+      tool: "bash",
+      state: {
+        status: "running",
+        time: { start: T0 + 1 },
+        input: { command: "make" },
+      },
+    };
+    open(sid, [
+      {
+        info: { id: "a1", role: "assistant", time: { created: T0 + 1 } },
+        parts: [part],
+      },
+    ]);
+    // A reconnect resync answers with a snapshot that predates the flip.
+    dispatchWindowMessage({
+      type: "sse-event",
+      event: { id: "evt_a2", type: "server.connected", data: {} },
+    });
+    await flushEvents();
+    await settle(6);
+    assert.equal(callsFor(`/session/${sid}/command`).length, 1);
+    assert.equal(queuedTurns.value.length, 1);
+  });
+});
+
 describe("session.error", () => {
   it("surfaces the failure and retires the turn", async () => {
     const sid = "se1";

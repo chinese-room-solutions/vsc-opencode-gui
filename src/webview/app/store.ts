@@ -678,7 +678,9 @@ async function refreshBase(): Promise<void> {
       fetchConfig(configDocs),
     ]);
   if (gen !== generation) return;
-  if (statuses) sessionStatus.value = statuses;
+  // Same adoption body as the poll: hold, settles, echo retirement — a
+  // wholesale replace would let a raced snapshot read as idle.
+  if (statuses) adoptStatuses(statuses);
   if (page) {
     // Merge, not replace: the fetch is a snapshot that can predate a
     // session created while it was in flight (a "+" clicked during boot) —
@@ -3760,10 +3762,10 @@ let statusesAdopted = false;
 // the connection looked healthy) survives tab switches because only
 // messages re-pull on mount — this reconciles the map on every remount.
 // Mid-turn races are safe: the server publishes session.status on every
-// change, so the stream re-establishes busy within one event.
-export async function refreshStatuses(): Promise<void> {
-  const statuses = await fetchSessionStatus();
-  if (!statuses) return;
+// change, so the stream re-establishes busy within one event. refreshBase
+// adopts through the same body — a wholesale replace there would drop the
+// live-tool hold and let the queue flush read a raced snapshot as idle.
+function adoptStatuses(statuses: Record<string, SessionStatus>): void {
   // Absence over a session that is mid-tool is not yet idle truth: hold
   // its busy entry and its settle behind one verification pull — a raced
   // map gap must not freeze live rows into false idle. Confirmed absence
@@ -3795,8 +3797,13 @@ export async function refreshStatuses(): Promise<void> {
     if (st.type === "idle" && !hasQueued(sid) && !postedRows.has(sid))
       dropPending(sid);
   }
-  for (const sid of held)
-    verifiedIdle(sid, () => setIdle(sid));
+  for (const sid of held) verifiedIdle(sid, () => setIdle(sid));
+}
+
+export async function refreshStatuses(): Promise<void> {
+  const statuses = await fetchSessionStatus();
+  if (!statuses) return;
+  adoptStatuses(statuses);
 }
 
 export async function refreshMessages(id: string): Promise<void> {
