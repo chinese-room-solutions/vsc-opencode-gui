@@ -138,13 +138,16 @@ function withGuiConfig(existing: string | undefined): string {
   }
 }
 
+// The user's global config root, honoring XDG_CONFIG_HOME like the
+// server's own config resolution.
+function configHome(): string {
+  return process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
+}
+
 // Skills are discovered at boot, so both installs run BEFORE the server
-// spawns; the skill directory honors XDG_CONFIG_HOME like the server's own
-// config resolution. Write only when the content differs.
+// spawns. Write only when the content differs.
 function skillDir(name: string): string {
-  const configRoot =
-    process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
-  return path.join(configRoot, "opencode", "skills", name);
+  return path.join(configHome(), "opencode", "skills", name);
 }
 
 function installSkill(name: string, content: string): void {
@@ -928,15 +931,15 @@ export class ServerManager {
     return undefined;
   }
 
-  // Write a subagent markdown file per connected model to
-  // ~/.config/opencode/agents/ so the server exposes every model as a
-  // callable subagent. Returns true if files were added/changed/removed
-  // and the server needs a restart to pick them up.
+  // Write a subagent markdown file per connected model to the global
+  // agents folder (configHome/opencode/agents) so the server exposes
+  // every model as a callable subagent. Returns true if files were
+  // added/changed/removed and the server needs a restart to pick them up.
   async syncModelAgents(): Promise<boolean> {
     const models = await this.listProviders();
     if (!models) return false;
 
-    const agentsDir = path.join(os.homedir(), ".config", "opencode", "agents");
+    const agentsDir = path.join(configHome(), "opencode", "agents");
     try {
       await fs.promises.mkdir(agentsDir, { recursive: true });
     } catch {
@@ -1079,10 +1082,7 @@ export class ServerManager {
   // The global opencode config dir the server reads (providers are
   // disabled there — see disabledProviders.ts).
   private _configRoot(): string {
-    return path.join(
-      process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config"),
-      "opencode",
-    );
+    return path.join(configHome(), "opencode");
   }
 
   // The provider denylist as the server sees it: v1 serves the merged
