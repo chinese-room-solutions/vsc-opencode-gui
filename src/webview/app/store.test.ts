@@ -1996,6 +1996,34 @@ describe("ghost turns after a stop (5185f17)", () => {
     assert.equal(callsFor(`/session/${sid}/abort`).length, 2);
     assert.ok(stoppedPrompts.value.has("u_ghost"));
   });
+  it("a fired command's own row is not a ghost turn", async () => {
+    const sid = "gh2";
+    sessions.value = [sessRow(sid)];
+    commands.value = [{ name: "start" }];
+    open(sid, [
+      {
+        info: { id: "u0", role: "user", time: { created: T0 } },
+        parts: [textPart("u0:text", "u0", sid, "hi")],
+      },
+    ]);
+    setBusy(sid);
+    await stopSession(sid);
+    assert.equal(callsFor(`/session/${sid}/abort`).length, 1);
+    // A /start fired inside the ghost watch's 10s window: its durable
+    // template row arrives with the watch still armed. The claim entry
+    // must exist first, so the run starts before the row lands.
+    const run = runSlashCommand(sid, "/start");
+    await settle(2);
+    await sseFlush("message.updated", {
+      sessionID: sid,
+      info: { id: "msg_t9", role: "user", time: { created: T0 + 9 } },
+    });
+    await settle(2);
+    // Not aborted as a ghost, and the cmd: echo retired by the claim.
+    assert.equal(callsFor(`/session/${sid}/abort`).length, 1);
+    assert.equal(listOf(sid).some((m) => m.info.id.startsWith("cmd:")), false);
+    await run;
+  });
 });
 
 // 443203b

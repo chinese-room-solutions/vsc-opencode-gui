@@ -2550,6 +2550,16 @@ function applyEvent(event: ServerEvent): void {
           const left = (postedRows.get(sid) ?? 1) - 1;
           if (left > 0) postedRows.set(sid, left);
           else postedRows.delete(sid);
+        } else if (unseen && !postedRows.has(sid) && commandRuns.has(sid)) {
+          // v1's row for a fired command run — same yield as the v2
+          // admitted row: the run's echo retires into the durable record.
+          // Tested before the ghost watch: a command fired inside its
+          // 10s window must claim its echo, not be aborted as a ghost.
+          const run = commandRuns.get(sid);
+          if (run && Date.now() - run.since <= COMMAND_CLAIM_TTL) {
+            commandRuns.delete(sid);
+            removeCommandEcho(sid, run.cid);
+          }
         } else if (
           unseen &&
           ghostWatch.has(sid) &&
@@ -2559,14 +2569,6 @@ function applyEvent(event: ServerEvent): void {
           // server's queued steer firing as a ghost turn — abort it (after
           // the row lands below, so the stop marker finds it).
           queueMicrotask(() => void stopSession(sid));
-        } else if (unseen && !postedRows.has(sid) && commandRuns.has(sid)) {
-          // v1's row for a fired command run — same yield as the v2
-          // admitted row: the run's echo retires into the durable record.
-          const run = commandRuns.get(sid);
-          if (run && Date.now() - run.since <= COMMAND_CLAIM_TTL) {
-            commandRuns.delete(sid);
-            removeCommandEcho(sid, run.cid);
-          }
         }
       }
       // Only known fields ride along: absent tokens/cost must not clobber
