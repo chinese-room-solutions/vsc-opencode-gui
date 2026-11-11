@@ -505,20 +505,32 @@ export class AppHost implements vscode.Disposable {
               ),
           );
         }
-        // A fetched URL opens in the system browser.
+        // A fetched URL opens in the system browser. Only http(s) — the
+        // url is model-controlled tool input, so any other scheme is
+        // refused (a file: pill must not open in an OS handler).
         if (message.type === "open-url" && typeof message.url === "string") {
-          vscode.env.openExternal(vscode.Uri.parse(message.url)).then(
-            (opened) => {
-              if (!opened)
-                vscode.window.showErrorMessage(
-                  `Could not open ${message.url}.`,
-                );
-            },
-            (err: unknown) =>
-              vscode.window.showErrorMessage(
-                `Could not open ${message.url}: ${err instanceof Error ? err.message : String(err)}`,
-              ),
-          );
+          try {
+            const uri = vscode.Uri.parse(message.url);
+            const scheme = uri.scheme.toLowerCase();
+            if (scheme === "http" || scheme === "https") {
+              vscode.env.openExternal(uri).then(
+                (opened) => {
+                  if (!opened)
+                    vscode.window.showErrorMessage(
+                      `Could not open ${message.url}.`,
+                    );
+                },
+                (err: unknown) =>
+                  vscode.window.showErrorMessage(
+                    `Could not open ${message.url}: ${err instanceof Error ? err.message : String(err)}`,
+                  ),
+              );
+            } else {
+              log.warn(`refused to open link with scheme ${scheme}`);
+            }
+          } catch (err) {
+            log.warn("could not parse link:", err);
+          }
         }
       }),
     );
