@@ -1279,12 +1279,6 @@ function dropSessionLocal(id: string): void {
   blankChecked.delete(id);
   dropQueued(id);
   disarmGhostWatch(id);
-  interruptedPrompts.value = new Set(
-    [...interruptedPrompts.value].filter((s) => s !== id),
-  );
-  stoppedPrompts.value = new Set(
-    [...stoppedPrompts.value].filter((s) => s !== id),
-  );
   loadingMessages.delete(id);
   loadingOlder.delete(id);
   postedRows.delete(id);
@@ -3728,17 +3722,6 @@ export function hostMessage(msg: unknown) {
   // Host command (openContextSummary): toggle the ring's context panel.
   if (m.type === "toggle-context") {
     setPopover(popover.value === "ctx" ? undefined : "ctx");
-  }
-  // Host navigation targets "/session/{id}"; an id the server doesn't
-  // know (when the list is loaded) falls back to home — a session
-  // panel's not-found card. The navigator host owns no route: navigate
-  // there sets a signal nobody renders and persists nothing.
-  if (m.type === "navigate" && typeof m.path === "string") {
-    const id = /^\/session\/(.+)$/.exec(m.path)?.[1];
-    const known =
-      sessions.value.length === 0 || sessions.value.some((s) => s.id === id);
-    if (id && known) navigate({ view: "session", id });
-    else navigate({ view: "home" });
   }
 }
 

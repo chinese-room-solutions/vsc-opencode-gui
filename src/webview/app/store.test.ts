@@ -4887,13 +4887,6 @@ describe("hostMessage routing", () => {
     );
     sessions.value = [];
   });
-  it("navigate maps /session/{id} and bounces unknown ids home", () => {
-    sessions.value = [sessRow("nav1")];
-    hostMessage({ type: "navigate", path: "/session/nav1" });
-    assert.deepEqual(route.value, { view: "session", id: "nav1" });
-    hostMessage({ type: "navigate", path: "/session/unknown" });
-    assert.deepEqual(route.value, { view: "home" });
-  });
   it("toggle-context flips the panel without errors", () => {
     hostMessage({ type: "toggle-context" });
     hostMessage({ type: "toggle-context" });

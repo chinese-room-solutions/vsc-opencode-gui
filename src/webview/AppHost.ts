@@ -774,16 +774,13 @@ export class AppHost implements vscode.Disposable {
   private _renderCurrentState() {
     const webview = this._webview;
     if (!webview) return;
-    const html = this._html(webview);
-    // Assigning .html re-navigates the page: a re-render with unchanged
-    // state (attach sequencing, hub state settling) must not reload the
-    // app out from under the user. Only a changed document reloads.
-    if (this._lastHtml.get(webview) === html) return;
-    this._lastHtml.set(webview, html);
-    webview.html = html;
+    // Assigning .html re-navigates the page — every call does, on
+    // purpose: each render re-bakes the current state into a fresh
+    // document, and crash-reload relies on exactly that to reboot a
+    // crashed page with clean module state. Never gate this on an
+    // html equality check (the nonce differs every time anyway).
+    webview.html = this._html(webview);
   }
-
-  private _lastHtml = new WeakMap<vscode.Webview, string>();
 
   private _html(webview: vscode.Webview): string {
     const error = this._error;
