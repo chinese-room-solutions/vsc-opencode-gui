@@ -2519,37 +2519,16 @@ describe("v2 SSE → pipeline translation", () => {
   });
 
   it("maps session facts: permissions, forms, creation, usage, retry", () => {
-    // session.permissions {sessionID, permissions[]} → one ask per row.
-    assert.deepEqual(
-      translateV2Event(
-        ev("session.permissions", {
-          sessionID: "s",
-          permissions: [
-            {
-              id: "per_1",
-              action: "bash",
-              resources: ["rm -rf /"],
-              save: ["bash"],
-              source: { type: "tool", messageID: "m", callID: "c" },
-            },
-          ],
-        }),
-      ),
-      [
-        {
-          id: "evt_x",
-          type: "permission.v2.asked",
-          data: {
-            id: "per_1",
-            sessionID: "s",
-            action: "bash",
-            resources: ["rm -rf /"],
-            save: ["bash"],
-            source: { type: "tool", messageID: "m", callID: "c" },
-          },
-        },
+    // session.permissions carries a ruleset (rows of action/resource/
+    // effect), not asks — no translation exists, so it rides through
+    // untouched (the store ignores unknown types).
+    const rules = ev("session.permissions", {
+      sessionID: "s",
+      permissions: [
+        { action: "bash", resource: "rm -rf /", effect: "deny" },
       ],
-    );
+    });
+    assert.deepEqual(translateV2Event(rules), [rules]);
     // form.created {sessionID, form} → the v1 question shape.
     const asked = translateV2Event(
       ev("form.created", {
@@ -2946,7 +2925,8 @@ describe("v2 turn through the store (recorded frame sequence)", () => {
     const sid = "v2asks";
     sessions.value = [sessRow(sid, { title: "Real title", cost: 1 })];
 
-    // The v2-shaped bare event must dock like session.permissions does.
+    // The v2-shaped bare event must dock through the v2 ask case (it
+    // shares its name with the v1 event, whose normalizer would drop it).
     v2sse("permission.asked", {
       id: "pr_9",
       sessionID: sid,

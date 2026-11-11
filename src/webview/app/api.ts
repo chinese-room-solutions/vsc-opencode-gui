@@ -556,9 +556,8 @@ export async function fetchSessionPermissions(
 }
 
 // Pending asks, both dialects: v2 GETs /api/permission/request ({data}
-// envelope, same row shape the session.permissions event carries); v1
-// GETs the global /permission list. Asks made while the page was closed
-// are recovered from here.
+// envelope of Permission.Request rows); v1 GETs the global /permission
+// list. Asks made while the page was closed are recovered from here.
 export async function fetchPendingPermissions(): Promise<
   PermissionRequest[] | undefined
 > {

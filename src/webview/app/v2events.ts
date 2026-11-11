@@ -63,8 +63,6 @@ interface V2Data {
   // merged call+result blob; `resultState` pre-2.1)
   native?: Record<string, unknown> | null;
   resultState?: Record<string, unknown> | null;
-  // session.permissions
-  permissions?: unknown;
   // form.created
   form?: {
     id?: string;
@@ -396,12 +394,11 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
       );
     }
     // --- asks: permissions and forms dock like the v1 pipeline's ---
-    // v2 asks ride two channels: the per-turn `session.permissions` list
-    // AND a bare `permission.asked` with the v2 shape (same schema the
-    // official client docks). Both map to permission.v2.asked — the dock
-    // dedupes by id. Unmapped, the store's v1 `permission.asked` case
-    // would dock it with the v1 normalizer and reply on the dropped v1
-    // route.
+    // v2 asks ride one channel: a bare `permission.asked` with the v2
+    // shape (the schema the official client docks) — it maps onto
+    // permission.v2.asked, the dock dedupes by id. Unmapped, the store's
+    // v1 `permission.asked` case would dock it with the v1 normalizer and
+    // reply on the dropped v1 route.
     case "permission.asked":
       return d.id
         ? [
@@ -415,23 +412,6 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
             }),
           ]
         : [];
-    // session.permissions {sessionID, permissions[]} — each row is an ask;
-    // the store's permission.v2.asked case normalizes and docks it.
-    case "session.permissions": {
-      if (!Array.isArray(d.permissions)) return [];
-      return (d.permissions as V2Data[])
-        .filter((r) => typeof r?.id === "string")
-        .map((r) =>
-          synth("permission.v2.asked", {
-            id: r.id,
-            sessionID: r.sessionID ?? sid,
-            action: r.action,
-            resources: r.resources ?? [],
-            save: r.save ?? [],
-            source: r.source,
-          }),
-        );
-    }
     // form.created {sessionID, form:{id, title, fields}} — v2's question
     // channel, mapped onto the v1 question shape the dock renders.
     case "form.created": {
