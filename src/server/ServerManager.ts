@@ -340,8 +340,8 @@ export class ServerManager {
       this._apiBaseUrl = `http://localhost:${parsed.port}`;
       // Poll until the probes are conclusive: a freshly-printed URL can
       // predate the routes being ready (early-init v2 answers with the SPA
-      // fallback), and a wrong verdict is sticky — cached per origin and
-      // baked into the webview page for this server's whole lifetime.
+      // fallback), and a wrong verdict is sticky — it is baked into the
+      // webview page for this server's whole lifetime.
       const dialect = await awaitDialect(
         this._apiBaseUrl,
         serverAuthHeaders(),

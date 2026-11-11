@@ -165,7 +165,7 @@ describe("dialect detection (probe logic)", () => {
       "v1",
     );
   });
-  it("detectDialect probes health first, then config; caches per origin", async () => {
+  it("detectDialect probes health first, then config; a fresh call re-probes", async () => {
     const origin = `http://cache-${Math.random().toString(36).slice(2)}:1`;
     const { calls, fetch } = fetchScript({
       "/api/health": { status: 404 },
@@ -173,10 +173,15 @@ describe("dialect detection (probe logic)", () => {
     });
     assert.equal(await detectDialect(origin, {}, fetch), "v2");
     assert.deepEqual(calls, [`${origin}/api/health`, `${origin}/api/config`]);
-    // Cached: the second detection makes no new calls.
-    calls.length = 0;
+    // No cache: the second detection probes both routes again, so a
+    // restarted server on the same origin answers fresh.
     assert.equal(await detectDialect(origin, {}, fetch), "v2");
-    assert.equal(calls.length, 0);
+    assert.deepEqual(calls, [
+      `${origin}/api/health`,
+      `${origin}/api/config`,
+      `${origin}/api/health`,
+      `${origin}/api/config`,
+    ]);
   });
   it("skips the config probe when health already answered v1", async () => {
     const origin = `http://v1-${Math.random().toString(36).slice(2)}:1`;
@@ -216,8 +221,8 @@ describe("dialect detection (probe logic)", () => {
     };
     const { calls, fetch } = fetchScript(replies);
     assert.equal(await detectDialect(origin, {}, fetch), "v1");
-    // The routes come up between the calls: a re-detection must re-probe
-    // (an "unknown" was never written to the cache) and see v2.
+    // The routes come up between the calls: a re-detection re-probes and
+    // sees v2.
     replies["/api/config"] = { status: 200, json: [] };
     assert.equal(await detectDialect(origin, {}, fetch), "v2");
     assert.ok(calls.length >= 4, "the second detection probed again");
