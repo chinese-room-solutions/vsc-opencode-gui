@@ -152,6 +152,52 @@ describe("stuck", () => {
       assert.equal(marksOf(sid)?.parts["p1"], undefined);
     });
 
+    it("an identical re-pull is not turn activity", () => {
+      const sid = "sk15";
+      busySession(sid);
+      open(sid, [
+        {
+          info: { id: "m1", role: "assistant", time: { created: T0 } },
+          parts: [
+            {
+              id: "t1",
+              messageID: "m1",
+              sessionID: sid,
+              type: "text",
+              text: "Working",
+            } as Part,
+          ],
+        },
+      ]);
+      setNow(T0 + 100);
+      runStuckTick(); // first sight seeds the turn clock
+      assert.equal(marksOf(sid), undefined);
+      // The open-session backstop re-pulls while busy: a fresh status
+      // object and a fresh list of fresh rows with identical content.
+      // Neither is activity — the clock must survive them.
+      busySession(sid);
+      open(sid, [
+        {
+          info: { id: "m1", role: "assistant", time: { created: T0 } },
+          parts: [
+            {
+              id: "t1",
+              messageID: "m1",
+              sessionID: sid,
+              type: "text",
+              text: "Working",
+            } as Part,
+          ],
+        },
+      ]);
+      setNow(T0 + 600);
+      runStuckTick();
+      assert.equal(marksOf(sid), undefined);
+      setNow(T0 + 1_200);
+      runStuckTick();
+      assert.deepEqual(marksOf(sid)?.turn, { since: T0 + 100 });
+    });
+
     it("an idle session clears its marks", () => {
       const sid = "sk5";
       busySession(sid);

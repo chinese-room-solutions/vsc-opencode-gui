@@ -166,15 +166,31 @@ export type QueuedTurn = {
   kind: "prompt" | "command";
   text: string;
   files?: ComposerFile[];
+  // The composer's file-finder verdicts riding this prompt (see
+  // MentionVerdicts) — the flush filters with the same map the send had.
+  verdicts?: MentionVerdicts;
   // The durable echo's row id, for a queued command — the run retires
   // exactly this row when it completes.
   echoCid?: string;
 };
 export const queuedTurns = signal<QueuedTurn[]>([]);
 
+// The composer's file-finder verdicts per resolved path: true = the
+// server's finder vouched for the path, false = it names no such file.
+// A prompt whose @token has a negative verdict sends that token as plain
+// text — v2 rejects the whole POST when an attachment is unreadable.
+export type MentionVerdicts = ReadonlyMap<string, boolean>;
+
 function dropQueued(id: string): void {
-  if (queuedTurns.value.some((q) => q.id === id))
-    queuedTurns.value = queuedTurns.value.filter((q) => q.id !== id);
+  const gone = queuedTurns.value.filter((q) => q.id === id);
+  if (!gone.length) return;
+  queuedTurns.value = queuedTurns.value.filter((q) => q.id !== id);
+  // A dropped entry never fired, so its queue-time echo reads as a sent
+  // command that never ran — and an orphaned /compact echo shifts the
+  // oldest-with-oldest pairing onto the next real run. Take it with the
+  // entry (only the user-driven take-back also restores the composer).
+  for (const q of gone)
+    if (q.kind === "command" && q.echoCid) removeCommandEcho(id, q.echoCid);
 }
 
 export function hasQueued(id: string): boolean {
@@ -193,6 +209,25 @@ export function hasQueued(id: string): boolean {
 const ghostWatch = new Map<string, number>();
 const GHOST_WATCH_MS = 10_000;
 const postedRows = new Map<string, number>();
+
+// A failed v2 prompt keeps its client id so a resend of the same content
+// is idempotent server-side (see promptSession). Matched on exact body +
+// files — a reused id under edited text would make the server return the
+// old row and swallow the new prompt — and consumed on use.
+const failedPrompts = new Map<
+  string,
+  { pid: string; body: string; files: ComposerFile[] }
+>();
+
+const sameFiles = (a: ComposerFile[], b: ComposerFile[]): boolean =>
+  JSON.stringify(a) === JSON.stringify(b);
+
+// SessionMessage ids must start "msg_" — the server validates the prefix.
+function mintPromptId(): string {
+  const b = new Uint8Array(8);
+  crypto.getRandomValues(b);
+  return `msg_oc${[...b].map((n) => n.toString(16).padStart(2, "0")).join("")}`;
+}
 
 function armGhostWatch(id: string): void {
   const prev = ghostWatch.get(id);
@@ -391,7 +426,7 @@ function scheduleMsgRetry(id: string): void {
   const state = { timer: 0, tries: 0 };
   const fire = () => {
     state.tries++;
-    if (route.value.view === "session" && route.value.id === id)
+    if (routeSessionId() === id)
       void refreshMessages(id).then(() => {
         const r = msgRetries.get(id);
         if (r && r === state) {
@@ -428,6 +463,13 @@ export function messagesFor(
 // carries its own id, so it lands right even if another tab is front).
 // Keyed: nothing leaks into another session's transcript. Cleared on the
 // next attempt in the same session.
+// The session whose composer feedback (banners, drafts, attachment chips,
+// retry pulls) belongs on screen: the child when a sub-agent view is
+// open, else the route session.
+function routeSessionId(): string | undefined {
+  const r = route.value;
+  return r.view === "session" ? (r.child ?? r.id) : undefined;
+}
 export const sendError = signal<{ for?: string; text: string } | undefined>(
   undefined,
 );
@@ -454,12 +496,7 @@ export function setSendError(
   sendError.value =
     text === undefined
       ? undefined
-      : {
-          for:
-            forSession ??
-            (route.value.view === "session" ? route.value.id : undefined),
-          text,
-        };
+      : { for: forSession ?? routeSessionId(), text };
   if (sendError.value !== undefined) {
     sendErrorTimer = window.setTimeout(() => {
       sendError.value = undefined;
@@ -681,7 +718,9 @@ async function refreshBase(): Promise<void> {
       fetchConfig(configDocs),
     ]);
   if (gen !== generation) return;
-  if (statuses) sessionStatus.value = statuses;
+  // Same adoption body as the poll: hold, settles, echo retirement — a
+  // wholesale replace would let a raced snapshot read as idle.
+  if (statuses) adoptStatuses(statuses);
   if (page) {
     // Merge, not replace: the fetch is a snapshot that can predate a
     // session created while it was in flight (a "+" clicked during boot) —
@@ -1386,10 +1425,7 @@ function commitRevertCut(id: string, revertID: string): void {
 export async function resolveFileRef(path: string): Promise<string> {
   if (path.includes("/")) return path;
   const base = (p: string) => p.replace(/\\/g, "/").split("/").pop() ?? "";
-  const sid =
-    route.value.view === "session"
-      ? (route.value.child ?? route.value.id)
-      : undefined;
+  const sid = routeSessionId();
   // Most recently touched wins — the model cites what it just read.
   let touched: string | undefined;
   const list = sid ? messagesBySession.value.get(sid) : undefined;
@@ -2079,6 +2115,10 @@ function upsertSession(info: Session): void {
   guardVariant(info.id, info.model);
 }
 
+// Per session, the clock time of the last stream event applied: a fetch
+// dispatched before it reads as older than the stream (see refreshMessages).
+const lastEventAt = new Map<string, number>();
+
 function applyEvent(event: ServerEvent): void {
   const data = event.data as {
     sessionID?: string;
@@ -2130,6 +2170,7 @@ function applyEvent(event: ServerEvent): void {
     partID?: string;
     field?: string;
   };
+  if (data.sessionID) lastEventAt.set(data.sessionID, Date.now());
   switch (event.type) {
     // Both carry the full session row; "created" is the only signal for a
     // session made outside this window (the local send path upserts itself).
@@ -2536,6 +2577,16 @@ function applyEvent(event: ServerEvent): void {
           const left = (postedRows.get(sid) ?? 1) - 1;
           if (left > 0) postedRows.set(sid, left);
           else postedRows.delete(sid);
+        } else if (unseen && !postedRows.has(sid) && commandRuns.has(sid)) {
+          // v1's row for a fired command run — same yield as the v2
+          // admitted row: the run's echo retires into the durable record.
+          // Tested before the ghost watch: a command fired inside its
+          // 10s window must claim its echo, not be aborted as a ghost.
+          const run = commandRuns.get(sid);
+          if (run && Date.now() - run.since <= COMMAND_CLAIM_TTL) {
+            commandRuns.delete(sid);
+            removeCommandEcho(sid, run.cid);
+          }
         } else if (
           unseen &&
           ghostWatch.has(sid) &&
@@ -2545,14 +2596,6 @@ function applyEvent(event: ServerEvent): void {
           // server's queued steer firing as a ghost turn — abort it (after
           // the row lands below, so the stop marker finds it).
           queueMicrotask(() => void stopSession(sid));
-        } else if (unseen && !postedRows.has(sid) && commandRuns.has(sid)) {
-          // v1's row for a fired command run — same yield as the v2
-          // admitted row: the run's echo retires into the durable record.
-          const run = commandRuns.get(sid);
-          if (run && Date.now() - run.since <= COMMAND_CLAIM_TTL) {
-            commandRuns.delete(sid);
-            removeCommandEcho(sid, run.cid);
-          }
         }
       }
       // Only known fields ride along: absent tokens/cost must not clobber
@@ -3694,40 +3737,42 @@ export function hostMessage(msg: unknown) {
   // then the host's content sniff stamp (text), then the active model's
   // input modalities — and a refused pick is surfaced once rather than sent
   // as a binary blob the endpoint would "read" into the context as raw
-  // bytes. The pick lands on the session composer that asked; with no
-  // session on screen there is no composer to land on.
-  if (m.type === "files-picked" && Array.isArray(m.files) && route.value.view === "session") {
-    const target = route.value.id;
-    const rows = (m.files as ComposerFile[]).filter(
-      (f) => !!f && typeof f.uri === "string" && typeof f.name === "string",
-    );
-    const input = attachInputs(target);
-    let unsupported = 0;
-    let notForModel = 0;
-    const ok = rows.filter((f) => {
-      const mime = chipMime(f);
-      if (mime === undefined) unsupported++;
-      else if (!attachAllowed(mime, input)) notForModel++;
-      else return true;
-      return false;
-    });
-    const refused = unsupported + notForModel;
-    if (refused)
-      setSendError(
-        `${refused} file${refused > 1 ? "s" : ""} not attached (${
-          [
-            unsupported &&
-              (unsupported > 1 ? `${unsupported} unsupported type` : "unsupported type"),
-            notForModel &&
-              (notForModel > 1
-                ? `${notForModel} not supported by this model`
-                : "not supported by this model"),
-          ]
-            .filter(Boolean)
-            .join(", ")
-        }).`,
+  // bytes. The pick lands on the composer of the session on screen — the
+  // child when a sub-agent view is open; with no session, no composer.
+  if (m.type === "files-picked" && Array.isArray(m.files)) {
+    const target = routeSessionId();
+    if (target !== undefined) {
+      const rows = (m.files as ComposerFile[]).filter(
+        (f) => !!f && typeof f.uri === "string" && typeof f.name === "string",
       );
-    addComposerFiles(target, ok);
+      const input = attachInputs(target);
+      let unsupported = 0;
+      let notForModel = 0;
+      const ok = rows.filter((f) => {
+        const mime = chipMime(f);
+        if (mime === undefined) unsupported++;
+        else if (!attachAllowed(mime, input)) notForModel++;
+        else return true;
+        return false;
+      });
+      const refused = unsupported + notForModel;
+      if (refused)
+        setSendError(
+          `${refused} file${refused > 1 ? "s" : ""} not attached (${
+            [
+              unsupported &&
+                (unsupported > 1 ? `${unsupported} unsupported type` : "unsupported type"),
+              notForModel &&
+                (notForModel > 1
+                  ? `${notForModel} not supported by this model`
+                  : "not supported by this model"),
+            ]
+              .filter(Boolean)
+              .join(", ")
+          }).`,
+        );
+      addComposerFiles(target, ok);
+    }
   }
   // The host snapshotted a pasted attachment: hand the path to the waiting
   // attach (requestAttachmentSnapshot) so the chip is born with it. The rid
@@ -3773,10 +3818,10 @@ let statusesAdopted = false;
 // the connection looked healthy) survives tab switches because only
 // messages re-pull on mount — this reconciles the map on every remount.
 // Mid-turn races are safe: the server publishes session.status on every
-// change, so the stream re-establishes busy within one event.
-export async function refreshStatuses(): Promise<void> {
-  const statuses = await fetchSessionStatus();
-  if (!statuses) return;
+// change, so the stream re-establishes busy within one event. refreshBase
+// adopts through the same body — a wholesale replace there would drop the
+// live-tool hold and let the queue flush read a raced snapshot as idle.
+function adoptStatuses(statuses: Record<string, SessionStatus>): void {
   // Absence over a session that is mid-tool is not yet idle truth: hold
   // its busy entry and its settle behind one verification pull — a raced
   // map gap must not freeze live rows into false idle. Confirmed absence
@@ -3808,8 +3853,13 @@ export async function refreshStatuses(): Promise<void> {
     if (st.type === "idle" && !hasQueued(sid) && !postedRows.has(sid))
       dropPending(sid);
   }
-  for (const sid of held)
-    verifiedIdle(sid, () => setIdle(sid));
+  for (const sid of held) verifiedIdle(sid, () => setIdle(sid));
+}
+
+export async function refreshStatuses(): Promise<void> {
+  const statuses = await fetchSessionStatus();
+  if (!statuses) return;
+  adoptStatuses(statuses);
 }
 
 export async function refreshMessages(id: string): Promise<void> {
@@ -3828,6 +3878,10 @@ export async function refreshMessages(id: string): Promise<void> {
     // button reloads them), and a covering page honestly reports "no more"
     // — the cursor no-downgrade below keeps the button from flickering.
     const shown = messagesBySession.value.get(id)?.length ?? 0;
+    // Clock at dispatch: a stream event applied from here to the merge
+    // proves the turn outlived this snapshot, whatever the status map
+    // says when the fetch lands.
+    const beganAt = Date.now();
     const [page, legacy] = await Promise.all([
       fetchMessages(id, shown > MESSAGE_PAGE ? { size: shown } : undefined),
       fetchLegacyMessages(id),
@@ -3981,7 +4035,8 @@ export async function refreshMessages(id: string): Promise<void> {
     const stored = new Map(
       messagesBySession.value.get(id)?.map((m) => [m.info.id, m]) ?? [],
     );
-    const working = sessionWorking(id);
+    const working =
+      sessionWorking(id) || (lastEventAt.get(id) ?? 0) >= beganAt;
     mutateMessages(id, () =>
       visible.map((m) => {
         const old = stored.get(m.info.id);
@@ -3992,7 +4047,39 @@ export async function refreshMessages(id: string): Promise<void> {
           if (isText(q)) oldByKind.set(q.type, [...(oldByKind.get(q.type) ?? []), q]);
         const kindSeen = new Map<string, number>();
         const parts = m.parts.map((p) => {
-          if (!isText(p)) return p;
+          if (!isText(p)) {
+            // A fetch can resolve behind the stream: it started while the
+            // turn ran and landed after its terminal events, or the
+            // durable store simply lacks what the stream patched in. A
+            // live twin that already finished while this copy still runs
+            // stays finished — otherwise settleDeadTools would re-error
+            // what the stream just completed. Either way the live copy's
+            // metadata keys (a subagent part's child binding) fill the
+            // gaps this copy has.
+            const was = old.parts.find((q) => q.id === p.id);
+            if (!was || isText(was)) return p;
+            const live = was as ToolPart;
+            const durable = p as ToolPart;
+            const done = (s?: string) => s === "completed" || s === "error";
+            if (done(live.state?.status) && !done(durable.state?.status)) {
+              merged = true;
+              return was;
+            }
+            const meta = live.state?.metadata;
+            const st = durable.state;
+            if (
+              meta &&
+              st &&
+              Object.keys(meta).some((k) => !(k in (st.metadata ?? {})))
+            ) {
+              merged = true;
+              return {
+                ...durable,
+                state: { ...st, metadata: { ...meta, ...st.metadata } },
+              };
+            }
+            return p;
+          }
           const k = kindSeen.get(p.type) ?? 0;
           kindSeen.set(p.type, k + 1);
           const was =
@@ -4154,8 +4241,16 @@ export async function loadOlderMessages(id: string): Promise<boolean> {
       const take = pool.splice(Math.max(0, pool.length - OLDER_PAGE));
       if (pool.length === 0) olderPool.delete(id);
       mutateMessages(id, (list) => {
-        const have = new Set(list.map((m) => m.info.id));
-        return [...take.filter((m) => !have.has(m.info.id)), ...list];
+        // Merge by id and sort, not blind-prepend: the pool holds
+        // pre-window rows of every vintage (v2 pages and legacy
+        // compaction rows alike) while the cursor walk prepends
+        // strictly-older pages first — pool rows newer than a walked
+        // page must slot below it, not above.
+        const merged = new Map(list.map((m) => [m.info.id, m]));
+        for (const m of take) {
+          if (!merged.has(m.info.id)) merged.set(m.info.id, m);
+        }
+        return [...merged.values()].sort(byCreated);
       });
       return true;
     }
@@ -4381,6 +4476,7 @@ export async function sendPrompt(
   target: string,
   text: string,
   files: ComposerFile[] = [],
+  verdicts?: MentionVerdicts,
 ): Promise<void> {
   const body = text.trim();
   if (!body) return;
@@ -4395,7 +4491,7 @@ export async function sendPrompt(
     appendPending(id, body, files);
     queuedTurns.value = [
       ...queuedTurns.value,
-      { id, kind: "prompt", text: body, files },
+      { id, kind: "prompt", text: body, files, verdicts },
     ];
     // The queue entry owns the attachments from here — the composer's
     // chips go now (a take-back hands them back); postPrompt's clear on
@@ -4420,7 +4516,7 @@ export async function sendPrompt(
   clearComposerFiles(id);
   // The send owns the attachments from here — the composer's chips go now
   // (a failed POST hands them back).
-  await postPrompt(id, body, files);
+  await postPrompt(id, body, files, verdicts);
 }
 
 // A failed POST gives the text back to the composer. The store-level
@@ -4433,8 +4529,7 @@ export async function sendPrompt(
 function restoreFailedDraft(id: string, body: string): void {
   const existing = getDraft(id).replace(/\s+$/, "");
   putDraft(id, existing ? `${existing}\n\n${body}` : body);
-  if (route.value.view === "session" && route.value.id === id)
-    insertComposerText(body);
+  if (routeSessionId() === id) insertComposerText(body);
 }
 
 // POST a prompt and adopt its turn: optimistic busy, the model/agent
@@ -4446,24 +4541,49 @@ async function postPrompt(
   id: string,
   body: string,
   files: ComposerFile[],
+  verdicts?: MentionVerdicts,
 ): Promise<void> {
   sessionStatus.value = { ...sessionStatus.value, [id]: { type: "busy" } };
+  // A v2 retry of a failed send reuses its minted id (idempotent server
+  // side); anything else clears the record — the newer send supersedes it.
+  const failed = failedPrompts.get(id);
+  const retry =
+    failed !== undefined &&
+    dialect() === "v2" &&
+    failed.body === body &&
+    sameFiles(failed.files, files);
+  failedPrompts.delete(id);
+  const pid = retry ? failed.pid : mintPromptId();
   // Mention tokens resolve against the session's directory (the
   // server-side file host of the parts).
   const base =
     sessions.value.find((s) => s.id === id)?.location?.directory ||
     currentDir.value ||
     "";
+  const mentions = parseMentions(
+    body,
+    base,
+    agents.value
+      .filter((a) => !a.hidden && a.mode !== "primary")
+      .map((a) => a.name),
+  );
+  // An @token the finder named no file for rides as plain text — v2
+  // rejects the whole POST over one unreadable attachment. Positive and
+  // unverified tokens attach as before (Enter can beat the finder's
+  // 200ms debounce, so unknown cannot stand in for negative).
   const parts = [
     { type: "text" as const, text: body },
     ...attachmentParts(files),
-    ...parseMentions(
-      body,
-      base,
-      agents.value
-        .filter((a) => !a.hidden && a.mode !== "primary")
-        .map((a) => a.name),
-    ),
+    ...(verdicts
+      ? mentions.filter((p) => {
+          if (p.type !== "file" || !p.source) return true;
+          const path = p.source.path;
+          return (
+            (verdicts.get(path) ?? verdicts.get(path.replace(/[\\/]+$/, ""))) !==
+            false
+          );
+        })
+      : mentions),
   ];
   const sel = currentSelection(id);
   // v2 has no per-turn agent/model on the prompt body — the switches are
@@ -4495,7 +4615,13 @@ async function postPrompt(
     else postedRows.delete(id);
   };
   postedRows.set(id, (postedRows.get(id) ?? 0) + 1);
-  const sent = await promptSession(id, parts, agent, model);
+  const sent = await promptSession(
+    id,
+    parts,
+    agent,
+    model,
+    dialect() === "v2" ? pid : undefined,
+  );
   if (!sent.ok) {
     unpost();
     // A failed send is a take-back, not a send: the echo reads as sent
@@ -4509,6 +4635,7 @@ async function postPrompt(
     if (!hasLiveTools(id))
       sessionStatus.value = { ...sessionStatus.value, [id]: { type: "idle" } };
     setSendError(withReason("The message could not be sent", sent.error));
+    if (dialect() === "v2") failedPrompts.set(id, { pid, body, files });
   } else {
     // A v1 pick rode this prompt's body; the row converges on its turn.
     if (dialect() === "v1") v1Picks.delete(id);
@@ -4734,7 +4861,12 @@ export async function runSlashCommand(
 ): Promise<void> {
   const m = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
   const name = m?.[1];
-  if (!name) return;
+  if (!name) {
+    // The line never parses as a command — hand it back, or the composer
+    // (already cleared) loses it silently.
+    if (!echoed) restoreFailedDraft(target, text.trim());
+    return;
+  }
   if (name === "compact") {
     await runCompact(target, echoed, echoCid);
     return;
@@ -4752,6 +4884,9 @@ export async function runSlashCommand(
     return;
   }
   if (!commands.value.some((c) => c.name === name)) {
+    // Unknown here means the queue pre-check missed or the registry
+    // changed — the user still typed it, so the text goes back.
+    if (!echoed) restoreFailedDraft(target, text.trim());
     setSendError(`Unknown command /${name}.`);
     return;
   }
@@ -4820,6 +4955,9 @@ export async function runSlashCommand(
     sessionStatus.value = { ...sessionStatus.value, [id]: { type: "idle" } };
     dropPending(id);
     if (cid) removeCommandEcho(id, cid);
+    // Idle truth: nothing fired server-side, so the line returns to the
+    // composer (the busy early-return above keeps it — that turn runs).
+    if (!echoed) restoreFailedDraft(target, text.trim());
     setSendError(`The command /${name} could not be run.`);
   } else {
     // The command turn's rows land in the legacy store; pull the durable
@@ -4882,7 +5020,7 @@ effect(() => {
     // place in the conversation.
     if (hit.echoCid) restampCommandEcho(hit.id, hit.echoCid);
     void runSlashCommand(hit.id, hit.text, true, hit.echoCid);
-  } else void postPrompt(hit.id, hit.text, hit.files ?? []);
+  } else void postPrompt(hit.id, hit.text, hit.files ?? [], hit.verdicts);
 });
 
 // Permission docks. Request ids this client answered; a session-open fetch

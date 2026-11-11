@@ -140,6 +140,29 @@ test("an expanded pill docks as its clamped twin", async ({ page }) => {
   }
 });
 
+test("a collapsed pill keeps its Show more toggle", async ({ page }) => {
+  const rig = await startRig({ env: rigEnv() });
+  try {
+    await page.goto(rig.url);
+    await page.waitForSelector(".msgs .turn .msg.user", { timeout: 15_000 });
+    const pill = page.locator(".turn .msg.user", { hasText: "Question 2:" }).first();
+    await pill.locator(".clamp-toggle").click();
+    await expect(pill.locator(".user-text.expanded")).toBeVisible();
+    // A stray DOM mutation inside the box fires the measure observer: the
+    // expanded box does not overflow, and that reading must not survive
+    // the collapse.
+    await pill.locator(".user-text").evaluate((el) => {
+      el.appendChild(document.createTextNode(""));
+    });
+    await pill.locator(".clamp-toggle").click();
+    const toggle = pill.locator(".clamp-toggle");
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveText("Show more");
+  } finally {
+    rig.stop();
+  }
+});
+
 test("the successor's arrival pushes the pinned twin out", async ({ page }) => {
   const rig = await startRig({ env: rigEnv() });
   try {
@@ -191,6 +214,40 @@ test("the successor's arrival pushes the pinned twin out", async ({ page }) => {
     }, offs.t9 + 1);
     await expect(bar).toContainText("Question 9:");
     expect(Math.abs(await edge())).toBeLessThanOrEqual(1);
+  } finally {
+    rig.stop();
+  }
+});
+
+test("the bar docks a manual /compact trigger as its literal", async ({ page }) => {
+  const rig = await startRig({ env: rigEnv() });
+  try {
+    await page.goto(rig.url);
+    await page.waitForSelector(".msgs .turn .msg.user", { timeout: 15_000 });
+    // A manual compaction joins the transcript mid-way, as one would in a
+    // session that kept working after the fold.
+    await fetch(`${rig.api}/__control/compaction`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ afterTurn: 11, text: "Turns 1-11 folded away." }),
+    });
+    const trigger = page.locator(".turn .msg.user", { hasText: "/compact" });
+    await expect(trigger).toHaveCount(1);
+    // The turn settles first: the summary lands right behind the trigger
+    // row, and its follow-to-bottom would outrun a too-early scroll.
+    await expect(page.locator(".compacted-summary")).toContainText("manual");
+    // Scroll the trigger just past the edge: the boundary is inclusive,
+    // so one pixel plus a nudge docks it.
+    await page.locator(".msgs").evaluate((n, el) => {
+      const top =
+        el.getBoundingClientRect().top -
+        n.getBoundingClientRect().top +
+        n.scrollTop;
+      n.scrollTop = top + 2;
+    }, await trigger.elementHandle());
+    const bar = page.locator(".pin-bar .pin-mirror");
+    await expect(bar).toBeVisible();
+    await expect(bar).toContainText("/compact");
   } finally {
     rig.stop();
   }

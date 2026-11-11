@@ -64,6 +64,9 @@ function memo<P>(
 ) {
   return class Memoed extends Component<P> {
     shouldComponentUpdate(nextProps: Readonly<P>) {
+      // @preact/signals sets __$f bit 1 when a signal read during render
+      // changed — honor it or those reads never repaint memoized turns.
+      if (((this as { __$f?: number }).__$f ?? 0) & 1) return true;
       return !same(this.props, nextProps);
     }
     render() {
@@ -457,6 +460,14 @@ function ClampedText(props: {
 }) {
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
+  // The measure observer reads these through refs: its closure is created
+  // once, and expanded can only be true after overflows was (the toggle
+  // requires it), so skipping the measure while expanded keeps the stored
+  // truth — collapsing (a class swap, not an observed mutation) re-shows
+  // the toggle instead of losing it.
+  const expandedRef = useRef(false);
+  expandedRef.current = expanded;
+  const overflowsRef = useRef(false);
   const boxRef = useRef<HTMLDivElement | null>(null);
   // The async tokenize swap can flip overflow after the view came to rest:
   // the toggle line then grows this box wherever it sits. When that lands
@@ -480,11 +491,13 @@ function ClampedText(props: {
     const el = boxRef.current;
     if (!el) return;
     const measure = () => {
+      if (expandedRef.current) return;
       const over = el.scrollHeight > el.clientHeight + 1;
-      if (over && !overflows) {
+      if (over && !overflowsRef.current) {
         const sc = el.closest(".msgs");
         if (sc) grew.current = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
       }
+      overflowsRef.current = over;
       setOverflows(over);
     };
     measure();
@@ -1084,7 +1097,7 @@ function CompactedTurnImpl(props: {
           trigger row; the fold below tells the outcome. Auto-compactions
           are the server's own doing, not a sent message. */}
       {!auto && (
-        <div class="msg user">
+        <div class="msg user" data-pin-compact="1">
           <div class="user-pill">
             <div class="markdown msg-text user-text">/compact</div>
           </div>

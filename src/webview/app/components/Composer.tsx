@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "preact/hooks";
 import type { JSX } from "preact";
-import { attachAllowed, attachMime, chipMime, extOf, findFiles, isText, sniffsText, type SessionStatus } from "../api";
+import { attachAllowed, attachMime, chipMime, droppedFileRefs, extOf, findFiles, isText, sniffsText, type SessionStatus } from "../api";
 import { postToHost, openFile, openExternal } from "../host";
 import { atTrigger, mentionTokens, resolve, type MentionToken } from "../mentions";
 import {
@@ -382,9 +382,13 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
   const savedDraft = useRef<{ text: string; caret: number } | undefined>(
     undefined,
   );
+  // A paste's attach is async (sniff/read/snapshot); a send fired before it
+  // lands must wait, so in-flight attaches chain here and send awaits them.
+  const attaching = useRef<Promise<void> | undefined>(undefined);
   useEffect(() => {
     setHistIndex(undefined);
     savedDraft.current = undefined;
+    attaching.current = undefined;
   }, [props.sessionId]);
   const resetSweep = () => {
     setHistIndex(undefined);
@@ -721,13 +725,25 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
     setSlashQuery(undefined);
   };
 
-  const send = () => {
+  const attach = (files: File[]) => {
+    const p = attachFiles(props.sessionId, files).then(() => {}, () => {});
+    attaching.current = attaching.current
+      ? Promise.all([attaching.current, p]).then(() => {}, () => {})
+      : p;
+  };
+
+  const send = async () => {
+    // Enter may beat a just-fired paste: wait out the attach, then read the
+    // box and the file list fresh — the render-scope files is stale after
+    // the await, and the refusal gate must see the chip that just landed.
+    await attaching.current;
     const el = ref.current;
     const text = el?.value ?? "";
     // Busy stays sendable — prompts are steered into the running turn by
     // the server (delivered as the next one); commands have no server
     // queue, so they're held client-side and fire when the turn ends.
     if (!el || !text.trim()) return;
+    const files = composerFilesFor(draftKey);
     // Restored chips (and a model switched after attach) bypassed the
     // attach-time gate — re-check before the text leaves the field, so a
     // refusal leaves text and chips in place to fix. Commands carry no
@@ -763,7 +779,7 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
     } else if (text.startsWith("/")) {
       void runSlashCommand(props.sessionId, text);
     } else {
-      void sendPrompt(props.sessionId, text, files);
+      void sendPrompt(props.sessionId, text, files, findCache.current);
     }
   };
 
@@ -779,7 +795,7 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
     const files = Array.from(e.clipboardData?.files ?? []);
     if (files.length === 0) return;
     e.preventDefault();
-    void attachFiles(props.sessionId, files);
+    attach(files);
   };
 
   // File drops are captured at window level: anything dropped over the chat
@@ -819,7 +835,7 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
       const dt = e.dataTransfer;
       const files = Array.from(dt?.files ?? []);
       if (files.length > 0) {
-        void attachFiles(props.sessionId, files);
+        attach(files);
         return;
       }
       let urls: string[] = [];
@@ -833,11 +849,43 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
           .split(/\r?\n/)
           .filter((l: string) => l && !l.startsWith("#"));
       }
-      const refs = urls.map((u) => ({
-        uri: u,
-        name: decodeURIComponent(u.split("/").pop() ?? "file"),
-      }));
-      if (refs.length > 0) addComposerFiles(draftKey, refs);
+      // Remote windows hand out vscode-remote:// / vscode-vfs:// URIs the
+      // server cannot read — translate them to the file paths they name,
+      // refuse the rest, then apply the attach gate like files-picked.
+      const { refs, refused: unreadable } = droppedFileRefs(urls);
+      const input = attachInputs(draftKey);
+      let unsupported = 0;
+      let notForModel = 0;
+      const ok = refs.filter((f) => {
+        const mime = chipMime(f);
+        if (mime === undefined) unsupported++;
+        else if (!attachAllowed(mime, input)) notForModel++;
+        else return true;
+        return false;
+      });
+      const refused = unreadable + unsupported + notForModel;
+      if (refused)
+        setSendError(
+          `${refused} file${refused > 1 ? "s" : ""} not attached (${
+            [
+              unreadable &&
+                (unreadable > 1
+                  ? `${unreadable} not a local file`
+                  : "not a local file"),
+              unsupported &&
+                (unsupported > 1
+                  ? `${unsupported} unsupported type`
+                  : "unsupported type"),
+              notForModel &&
+                (notForModel > 1
+                  ? `${notForModel} not supported by this model`
+                  : "not supported by this model"),
+            ]
+              .filter(Boolean)
+              .join(", ")
+          }).`,
+        );
+      if (ok.length > 0) addComposerFiles(draftKey, ok);
     };
     window.addEventListener("dragover", onOver);
     window.addEventListener("dragleave", onLeave);
@@ -925,8 +973,10 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
       // The image preview floats over everything; dismiss it first — even
       // focused on the editor, Esc must not stop a turn underneath it.
       // (The Lightbox's window keydown does the closing; this editor
-      // handler fires before it and must just stand down.)
-      if (imgPreview.value) return;
+      // handler fires before it and must just stand down.) The same holds
+      // while an IME composition is live: cancelling it must not stop the
+      // turn or steal focus either.
+      if (e.isComposing || imgPreview.value) return;
       // Esc stops a running turn (Claude Code parity) — the zhipuai
       // endpoint's empty-step loops keep a dead turn busy with no way out
       // but the stop button. Idle, it drops focus back to the editor.
@@ -990,7 +1040,7 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
     }
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
-      send();
+      void send();
     }
   };
 
@@ -1146,6 +1196,7 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
             spellcheck={false}
             placeholder="Ask anything, / for commands, @ for context..."
             onInput={(e) => {
+              resetSweep();
               resize(e.currentTarget);
               syncText(e.currentTarget);
               putDraft(draftKey, e.currentTarget.value);
@@ -1218,7 +1269,7 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
               class="comp-send"
               title="Send"
               aria-label="Send"
-              onClick={send}
+              onClick={() => void send()}
             >
               <ArrowUpIcon />
             </button>

@@ -108,6 +108,7 @@ import {
   providerColors,
   setProjectColor,
   setSelection,
+  setSendError,
   status,
   stepUsage,
   stopSession,
@@ -126,6 +127,7 @@ import {
   attachmentPreviewForget,
 } from "./store";
 import { setDialect } from "./api";
+import { mentionTokens } from "./mentions";
 import type { ChatMessage, Status } from "./store";
 import { clampPartText, isTruncatedPart, PART_TEXT_CAP, streamingArg } from "./api";
 import type {
@@ -704,6 +706,127 @@ describe("a working session's live-only parts ride a resync pull", () => {
   });
 });
 
+// A re-pull must not undo newer live events: the fetch can start while the
+// turn streams and resolve after its terminal events, so the snapshot can
+// be behind parts the stream already settled or bound.
+describe("a re-pull never undoes newer live events", () => {
+  it("a completed tool stays completed when the snapshot still says running", async () => {
+    const sid = "rl1";
+    open(sid, [
+      {
+        info: { id: "m1", role: "assistant", time: { created: T0 } },
+        parts: [
+          {
+            id: "t1",
+            messageID: "m1",
+            sessionID: sid,
+            type: "tool",
+            tool: "read",
+            state: { status: "completed", input: { filePath: "a.ts" }, output: "ok" },
+          },
+        ],
+      },
+    ]);
+    onApi(
+      messageMock(sid, { data: [], cursor: {} }, [
+        {
+          info: { id: "m1", role: "assistant", time: { created: T0 } },
+          parts: [
+            {
+              id: "t1",
+              messageID: "m1",
+              sessionID: sid,
+              type: "tool",
+              tool: "read",
+              state: { status: "running", input: { filePath: "a.ts" } },
+            },
+          ],
+        },
+      ]),
+    );
+    await refreshMessages(sid);
+    const kept = findPart(sid, "t1") as
+      | (Part & { state?: { status?: string; error?: string } })
+      | undefined;
+    assert.equal(kept?.state?.status, "completed");
+    assert.equal(kept?.state?.error, undefined);
+  });
+
+  it("an event inside the fetch's flight keeps live-only parts on an idle map", async () => {
+    const sid = "rl2";
+    open(sid, [row("m1", "assistant", T0)]);
+    // Frozen clock: the event and the pull share one tick, so the event
+    // stamp reads as the fetch's flight (a snapshot behind the stream).
+    setNow(T0);
+    const read = {
+      id: "t1",
+      messageID: "m1",
+      sessionID: sid,
+      type: "tool",
+      tool: "read",
+      state: { status: "completed", input: { filePath: "a.ts" }, output: "ok" },
+    };
+    await sseFlush("message.part.updated", { sessionID: sid, part: read });
+    assert.equal(findPart(sid, "t1")?.type, "tool");
+    onApi(
+      messageMock(sid, { data: [], cursor: {} }, [
+        { info: { id: "m1", role: "assistant", time: { created: T0 } }, parts: [] },
+      ]),
+    );
+    await refreshMessages(sid);
+    const kept = findPart(sid, "t1") as
+      | (Part & { state?: { status?: string } })
+      | undefined;
+    assert.equal(kept?.state?.status, "completed");
+  });
+
+  it("a live part's metadata binding survives the re-pull that lacks it", async () => {
+    const sid = "rl3";
+    setBusy(sid);
+    open(sid, [
+      {
+        info: { id: "m1", role: "assistant", time: { created: T0 } },
+        parts: [
+          {
+            id: "t1",
+            messageID: "m1",
+            sessionID: sid,
+            type: "tool",
+            tool: "task",
+            state: {
+              status: "running",
+              input: {},
+              metadata: { sessionID: "child-1" },
+            },
+          },
+        ],
+      },
+    ]);
+    onApi(
+      messageMock(sid, { data: [], cursor: {} }, [
+        {
+          info: { id: "m1", role: "assistant", time: { created: T0 } },
+          parts: [
+            {
+              id: "t1",
+              messageID: "m1",
+              sessionID: sid,
+              type: "tool",
+              tool: "task",
+              state: { status: "running", input: {} },
+            },
+          ],
+        },
+      ]),
+    );
+    await refreshMessages(sid);
+    const kept = findPart(sid, "t1") as
+      | (Part & { state?: { metadata?: Record<string, unknown> } })
+      | undefined;
+    assert.equal(kept?.state?.metadata?.sessionID, "child-1");
+  });
+});
+
 // A steer admitted mid-turn lands its user row while the turn still
 // streams; the live sweep must not treat it as the turn boundary (the
 // streaming row's Thinking label would freeze into "Thought" until the
@@ -1140,6 +1263,50 @@ describe("transcript windowing and Load older (5185f17)", () => {
     assert.equal(messagesCursor.value.get(sid), undefined);
     assert.equal(listOf(sid).length, 150);
   });
+
+  it("pool rows merge by time under walked cursor pages", async () => {
+    const sid = "w3";
+    // The v2 newest page fills the window; its cursor's page hands back 30
+    // older rows and no next; the legacy pool holds two rows newer than
+    // those walked pages but older than the window head — rows that only
+    // ever met in one fixture once cursor and pool mixed.
+    const v2p = Array.from({ length: 50 }, (_, i) => ({
+      id: `v${200 + i}`,
+      type: i % 2 === 0 ? "user" : "assistant",
+      time: { created: T0 + (200 + i) * 10 },
+      text: i % 2 === 0 ? `q${200 + i}` : undefined,
+    }));
+    const walked = Array.from({ length: 30 }, (_, i) => ({
+      id: `o${100 + i}`,
+      type: i % 2 === 0 ? "user" : "assistant",
+      time: { created: T0 + (100 + i) * 10 },
+      text: i % 2 === 0 ? `q${100 + i}` : undefined,
+    }));
+    const legacy = [
+      row("l1", "user", T0 + 1_500),
+      row("l2", "assistant", T0 + 1_600),
+    ];
+    onApi(
+      messageMock(sid, (call: ApiCall) => {
+        if (call.path.includes("cursor=c5"))
+          return { data: walked, cursor: {} };
+        return { data: v2p, cursor: { next: "c5" } };
+      }, legacy),
+    );
+    await refreshMessages(sid);
+    // Walk: the walked page lands, the cursor exhausts, the walk ends.
+    assert.equal(await loadOlderMessages(sid), true);
+    assert.equal(messagesCursor.value.get(sid), undefined);
+    // The pool drains under the merge: l1/l2 slot between the o* rows and
+    // the window by their created time, not blindly above the walk.
+    assert.equal(await loadOlderMessages(sid), true);
+    const ids = listOf(sid).map((m) => m.info.id);
+    assert.equal(ids.length, 82);
+    assert.deepEqual(ids.slice(0, 30), walked.map((r) => r.id));
+    assert.deepEqual(ids.slice(30, 32), ["l1", "l2"]);
+    assert.deepEqual(ids.slice(32), v2p.map((r) => r.id));
+    assert.equal(await loadOlderMessages(sid), false);
+  });
 });
 
 // 50cba2d
@@ -1486,6 +1653,65 @@ describe("queued turns apply in publish order (0382677)", () => {
   });
 });
 
+describe("a dead-end slash command keeps its text", () => {
+  it("an unknown command restores the draft and inserts it on screen", async () => {
+    const sid = "sl1";
+    commands.value = [{ name: "foo" }];
+    navigate({ view: "session", id: sid });
+    const seqBefore = composerInsert.value?.seq ?? 0;
+    await runSlashCommand(sid, "/nope now");
+    assert.equal(sendError.value?.text, "Unknown command /nope.");
+    assert.equal(getDraft(sid), "/nope now");
+    assert.deepEqual(composerInsert.value, {
+      text: "/nope now",
+      seq: seqBefore + 1,
+      replace: false,
+    });
+    navigate({ view: "home" });
+  });
+  it("a failed dispatch restores the draft when the server reads idle", async () => {
+    const sid = "sl2";
+    commands.value = [{ name: "foo" }];
+    onApi((call) =>
+      call.path === `/session/${sid}/command` ? API_FAIL : undefined,
+    );
+    await runSlashCommand(sid, "/foo go");
+    assert.equal(sendError.value?.text, "The command /foo could not be run.");
+    assert.equal(getDraft(sid), "/foo go");
+    assert.equal(listOf(sid).some((m) => m.info.id.startsWith("cmd:")), false);
+  });
+  it("a failed dispatch that reads busy keeps the echo and restores nothing", async () => {
+    const sid = "sl3";
+    commands.value = [{ name: "foo" }];
+    onApi((call) => {
+      if (call.path === `/session/${sid}/command`) return API_FAIL;
+      if (call.path === "/session/status") return { [sid]: { type: "busy" } };
+      return undefined;
+    });
+    await runSlashCommand(sid, "/foo go");
+    assert.equal(sendError.value, undefined);
+    assert.equal(getDraft(sid), "");
+    assert.ok(listOf(sid).some((m) => m.info.id.startsWith("cmd:")));
+  });
+  it("a slash line that is no command keeps its text", async () => {
+    const sid = "sl4";
+    await runSlashCommand(sid, "/ hi");
+    assert.equal(sendError.value, undefined);
+    assert.equal(getDraft(sid), "/ hi");
+  });
+  it("a queued run of an unknown command leaves the composer alone", async () => {
+    const sid = "sl5";
+    commands.value = [{ name: "foo" }];
+    navigate({ view: "session", id: sid });
+    const seqBefore = composerInsert.value?.seq ?? 0;
+    await runSlashCommand(sid, "/nope", true, "cmd:x");
+    assert.equal(sendError.value?.text, "Unknown command /nope.");
+    assert.equal(getDraft(sid), "");
+    assert.equal(composerInsert.value?.seq, seqBefore);
+    navigate({ view: "home" });
+  });
+});
+
 describe("composer attachment persistence", () => {
   const KEY = "opencode.attachments";
   const reset = async () => {
@@ -1781,6 +2007,34 @@ describe("ghost turns after a stop (5185f17)", () => {
     await settle(2);
     assert.equal(callsFor(`/session/${sid}/abort`).length, 2);
     assert.ok(stoppedPrompts.value.has("u_ghost"));
+  });
+  it("a fired command's own row is not a ghost turn", async () => {
+    const sid = "gh2";
+    sessions.value = [sessRow(sid)];
+    commands.value = [{ name: "start" }];
+    open(sid, [
+      {
+        info: { id: "u0", role: "user", time: { created: T0 } },
+        parts: [textPart("u0:text", "u0", sid, "hi")],
+      },
+    ]);
+    setBusy(sid);
+    await stopSession(sid);
+    assert.equal(callsFor(`/session/${sid}/abort`).length, 1);
+    // A /start fired inside the ghost watch's 10s window: its durable
+    // template row arrives with the watch still armed. The claim entry
+    // must exist first, so the run starts before the row lands.
+    const run = runSlashCommand(sid, "/start");
+    await settle(2);
+    await sseFlush("message.updated", {
+      sessionID: sid,
+      info: { id: "msg_t9", role: "user", time: { created: T0 + 9 } },
+    });
+    await settle(2);
+    // Not aborted as a ghost, and the cmd: echo retired by the claim.
+    assert.equal(callsFor(`/session/${sid}/abort`).length, 1);
+    assert.equal(listOf(sid).some((m) => m.info.id.startsWith("cmd:")), false);
+    await run;
   });
 });
 
@@ -3095,6 +3349,107 @@ describe("an idle over live tools", () => {
   });
 });
 
+describe("one path adopts the server's session statuses", () => {
+  // A running bash tool over a busy session — the hold is keyed on it.
+  const liveTurn = (sid: string): void => {
+    const part: Part = {
+      id: "p1",
+      messageID: "a1",
+      sessionID: sid,
+      type: "tool",
+      tool: "bash",
+      state: {
+        status: "running",
+        time: { start: T0 + 1 },
+        input: { command: "taskkill /T" },
+      },
+    };
+    open(sid, [
+      row("u1", "user", T0),
+      {
+        info: { id: "a1", role: "assistant", time: { created: T0 + 1 } },
+        parts: [part],
+      },
+    ]);
+    setBusy(sid);
+  };
+  const toolStillRunning = (sid: string): boolean =>
+    (findPart(sid, "p1") as { state?: { status?: string } } | undefined)
+      ?.state?.status === "running";
+
+  it("a reconnect resync holds a live-tool session the snapshot calls idle", async () => {
+    const sid = "ad1";
+    liveTurn(sid);
+    let pulls = 0;
+    onApi((call) => {
+      if (call.method !== "GET" || call.path !== "/session/status")
+        return undefined;
+      pulls++;
+      return pulls === 1 ? {} : { [sid]: { type: "busy" } };
+    });
+    dispatchWindowMessage({
+      type: "sse-event",
+      event: { id: "evt_a1", type: "server.connected", data: {} },
+    });
+    await flushEvents();
+    await settle(6);
+    assert.equal(sessionStatus.value[sid]?.type, "busy");
+    assert.ok(toolStillRunning(sid));
+  });
+
+  it("a raced snapshot mid-queue does not fire the next command", async () => {
+    const sid = "ad2";
+    commands.value = [{ name: "foo" }, { name: "bar" }];
+    open(sid, [row("u1", "user", T0)]);
+    setBusy(sid);
+    queueCommand(sid, "/foo");
+    queueCommand(sid, "/bar");
+    assert.equal(queuedTurns.value.length, 2);
+    let pulls = 0;
+    onApi((call) => {
+      if (call.path === `/session/${sid}/command`) return { ok: true };
+      if (call.method === "GET" && call.path === "/session/status") {
+        // First pull: the snapshot predates the fired command's turn.
+        // Later pulls: the verification pull confirms the turn live.
+        return pulls++ === 0 ? {} : { [sid]: { type: "busy" } };
+      }
+      return undefined;
+    });
+    // The first entry drains; the flush flips busy for its turn.
+    await sseFlush("session.idle", { sessionID: sid });
+    await settle(6);
+    assert.equal(callsFor(`/session/${sid}/command`).length, 1);
+    // The first run's turn streamed a live tool part.
+    const part: Part = {
+      id: "p1",
+      messageID: "a1",
+      sessionID: sid,
+      type: "tool",
+      tool: "bash",
+      state: {
+        status: "running",
+        time: { start: T0 + 1 },
+        input: { command: "make" },
+      },
+    };
+    open(sid, [
+      {
+        info: { id: "a1", role: "assistant", time: { created: T0 + 1 } },
+        parts: [part],
+      },
+    ]);
+    // A reconnect resync answers with a snapshot that predates the flip.
+    dispatchWindowMessage({
+      type: "sse-event",
+      event: { id: "evt_a2", type: "server.connected", data: {} },
+    });
+    await flushEvents();
+    await settle(6);
+    assert.equal(callsFor(`/session/${sid}/command`).length, 1);
+    assert.equal(queuedTurns.value.length, 1);
+  });
+});
+
 describe("session.error", () => {
   it("surfaces the failure and retires the turn", async () => {
     const sid = "se1";
@@ -3134,6 +3489,24 @@ describe("session.error", () => {
     });
     assert.equal(sendError.value, undefined);
   });
+  it("a turn error takes the queued command's echo with the entry", async () => {
+    const sid = "se4";
+    open(sid, [row("u1", "user", T0)]);
+    setBusy(sid);
+    queueCommand(sid, "/compact");
+    const cid = queuedTurns.value[0].echoCid ?? "";
+    assert.ok(findRow(sid, cid));
+    await sseFlush("session.error", {
+      sessionID: sid,
+      error: { name: "RetryError", data: { message: "boom" } },
+    });
+    assert.equal(queuedTurns.value.length, 0);
+    assert.equal(findRow(sid, cid), undefined);
+    assert.deepEqual(
+      JSON.parse(localStorageStub.getItem(`opencode-cmd-${sid}`) ?? "null"),
+      [],
+    );
+  });
 });
 
 describe("stop and interrupt", () => {
@@ -3157,6 +3530,56 @@ describe("stop and interrupt", () => {
     await stopSession(sid);
     assert.equal(sendError.value?.text, "Could not interrupt the session.");
     assert.equal(stoppedPrompts.value.has("u1"), false);
+  });
+  it("a stop takes the queued command's echo with the entry", async () => {
+    const sid = "st3";
+    open(sid, [row("u1", "user", T0)]);
+    setBusy(sid);
+    queueCommand(sid, "/compact");
+    const cid = queuedTurns.value[0].echoCid ?? "";
+    assert.ok(findRow(sid, cid));
+    await stopSession(sid);
+    assert.equal(queuedTurns.value.length, 0);
+    assert.equal(findRow(sid, cid), undefined);
+    assert.deepEqual(
+      JSON.parse(localStorageStub.getItem(`opencode-cmd-${sid}`) ?? "null"),
+      [],
+    );
+  });
+  it("the dropped echo never resurrects, and a later run pairs with its own row", async () => {
+    const sid = "st4";
+    open(sid, [row("u1", "user", T0)]);
+    setBusy(sid);
+    queueCommand(sid, "/compact");
+    const dropped = queuedTurns.value[0].echoCid ?? "";
+    await stopSession(sid);
+    // Reload path: the fetch re-splices stored echoes — the dropped one
+    // must be gone from storage, or it comes back from the dead.
+    onApi(messageMock(sid, { data: [], cursor: {} }, []));
+    await refreshMessages(sid);
+    assert.equal(findRow(sid, dropped), undefined);
+    // A later real run: exactly its own echo is up.
+    setBusy(sid);
+    queueCommand(sid, "/compact");
+    const live = queuedTurns.value[0].echoCid ?? "";
+    assert.ok(findRow(sid, live));
+    onApi(
+      messageMock(sid, { data: [], cursor: {} }, [
+        {
+          info: { id: "srv_c", role: "user", time: { created: Date.now() } },
+          parts: [textPart("srv_c:0", "srv_c", sid, "/compact")],
+        },
+      ]),
+    );
+    await refreshMessages(sid);
+    // The durable row claims the live echo — had the dropped one
+    // survived, oldest-with-oldest would have fed it the row instead and
+    // left the live echo hanging.
+    assert.equal(findRow(sid, live), undefined);
+    assert.equal(
+      listOf(sid).some((m) => m.info.id.startsWith("cmd:")),
+      false,
+    );
   });
 });
 
@@ -3998,6 +4421,180 @@ describe("sendPrompt", () => {
     onApi(messageMock(sid, { data: [], cursor: {} }));
     await refreshMessages(sid);
     assert.ok(!findRow(sid, "a9"), "the user-row grace covers user rows only");
+  });
+});
+
+describe("v2 prompt retry ids", () => {
+  it("a failed v2 send's resend POSTs the same id", async () => {
+    setDialect("v2");
+    try {
+      const sid = "pri1";
+      sessions.value = [sessRow(sid, { agent: "build" })];
+      open(sid, []);
+      let fail = true;
+      onApi((call) => {
+        if (call.method === "POST" && call.path === `/api/session/${sid}/prompt`)
+          return fail
+            ? API_FAIL
+            : {
+                data: {
+                  id: "usr_ok",
+                  time: { created: Date.now() },
+                  payload: { text: "retry me" },
+                },
+              };
+        return messageMock(sid, { data: [], cursor: {} })(call);
+      });
+      await sendPrompt(sid, "retry me");
+      // The failure is a take-back; the resend POSTs the minted id again so
+      // the server's admission is the same prompt, not a duplicate.
+      assert.equal(getDraft(sid), "retry me");
+      const first = callsFor(`/api/session/${sid}/prompt`).at(-1)!
+        .body as { id?: string };
+      assert.match(first.id ?? "", /^msg_/);
+      fail = false;
+      await sendPrompt(sid, "retry me");
+      const second = callsFor(`/api/session/${sid}/prompt`).at(-1)!
+        .body as { id?: string };
+      assert.equal(second.id, first.id);
+    } finally {
+      setDialect("v1");
+    }
+  });
+  it("an edited resend gets a fresh id", async () => {
+    setDialect("v2");
+    try {
+      const sid = "pri2";
+      sessions.value = [sessRow(sid, { agent: "build" })];
+      open(sid, []);
+      onApi((call) => {
+        if (call.method === "POST" && call.path === `/api/session/${sid}/prompt`)
+          return API_FAIL;
+        return messageMock(sid, { data: [], cursor: {} })(call);
+      });
+      await sendPrompt(sid, "first wording");
+      const first = callsFor(`/api/session/${sid}/prompt`).at(-1)!
+        .body as { id?: string };
+      await sendPrompt(sid, "second wording");
+      const second = callsFor(`/api/session/${sid}/prompt`).at(-1)!
+        .body as { id?: string };
+      assert.notEqual(second.id, first.id);
+    } finally {
+      setDialect("v1");
+    }
+  });
+  it("a failed v1 send's resend carries no id", async () => {
+    const sid = "pri3";
+    sessions.value = [sessRow(sid, { agent: "build" })];
+    open(sid, []);
+    onApi((call) =>
+      call.path.startsWith(`/session/${sid}/prompt_async`) ? API_FAIL : undefined,
+    );
+    await sendPrompt(sid, "v1 retry");
+    await sendPrompt(sid, "v1 retry");
+    for (const c of callsFor(`/session/${sid}/prompt_async`))
+      assert.equal((c.body as { id?: string }).id, undefined);
+  });
+});
+
+describe("confirmed @file mentions", () => {
+  // The composer threads its file-finder verdicts (resolved path → vouched
+  // or not). v2 rejects the whole prompt over one unreadable attachment, so
+  // a token the finder named no file for must ride as plain text — while
+  // vouched and unverified tokens (Enter can beat the finder's debounce)
+  // still attach, and a send without verdicts behaves as before.
+  it("a negative verdict sends the token as text, unknown and positive attach", async () => {
+    setDialect("v2");
+    try {
+      const sid = "mv1";
+      const text = "bump @types/node, read @src/app.ts and @docs/x.md";
+      const base = "C:\\work\\repo";
+      sessions.value = [sessRow(sid, { agent: "build" })];
+      open(sid, []);
+      const tok = (rel: string) =>
+        mentionTokens(text, base, []).find((t) => t.rel === rel)!.path!;
+      onApi((call) => {
+        if (call.method === "POST" && call.path === `/api/session/${sid}/prompt`)
+          return {
+            data: {
+              id: "usr_mv1",
+              time: { created: Date.now() },
+              payload: { text },
+            },
+          };
+        return messageMock(sid, { data: [], cursor: {} })(call);
+      });
+      const verdicts = new Map([
+        [tok("types/node"), false],
+        [tok("docs/x.md"), true],
+      ]);
+      await sendPrompt(sid, text, [], verdicts);
+      const post = callsFor(`/api/session/${sid}/prompt`).at(-1)!
+        .body as { text: string; files?: { uri: string }[] };
+      // The refused token stays in the prompt text as prose.
+      assert.equal(post.text, text);
+      const uris = (post.files ?? []).map((f) => f.uri);
+      assert.equal(uris.some((u) => u.endsWith("/src/app.ts")), true);
+      assert.equal(uris.some((u) => u.endsWith("/docs/x.md")), true);
+      assert.equal(uris.some((u) => u.endsWith("/types/node")), false);
+      // No verdicts = the old behavior: every path-shaped token attaches.
+      await sendPrompt(sid, text);
+      const both = callsFor(`/api/session/${sid}/prompt`).at(-1)!
+        .body as { files?: { uri: string }[] };
+      const bothUris = (both.files ?? []).map((f) => f.uri);
+      assert.equal(bothUris.some((u) => u.endsWith("/src/app.ts")), true);
+      assert.equal(bothUris.some((u) => u.endsWith("/docs/x.md")), true);
+      assert.equal(bothUris.some((u) => u.endsWith("/types/node")), true);
+    } finally {
+      setDialect("v1");
+    }
+  });
+  it("a queued prompt flush filters with the verdicts it was sent with", async () => {
+    setDialect("v2");
+    try {
+      const sid = "mv2";
+      const text = "bump @types/node, read @src/app.ts";
+      const base = "C:\\work\\repo";
+      sessions.value = [sessRow(sid, { agent: "build" })];
+      open(sid, []);
+      const tok = (rel: string) =>
+        mentionTokens(text, base, []).find((t) => t.rel === rel)!.path!;
+      onApi((call) => {
+        if (call.method === "POST" && call.path === `/api/session/${sid}/prompt`)
+          return {
+            data: {
+              id: "usr_mv2",
+              time: { created: Date.now() },
+              payload: { text },
+            },
+          };
+        return messageMock(sid, { data: [], cursor: {} })(call);
+      });
+      // Busy with a held queue: the prompt queues behind it and both flush
+      // head-first on the idle.
+      setBusy(sid);
+      queuedTurns.value = [{ id: sid, kind: "prompt", text: "lead" }];
+      await sendPrompt(sid, text, [], new Map([[tok("types/node"), false]]));
+      const held = queuedTurns.value.find(
+        (q) => q.id === sid && q.kind === "prompt" && q.text === text,
+      );
+      assert.ok(held?.verdicts);
+      await sseFlush("session.idle", { sessionID: sid });
+      await sseFlush("session.idle", { sessionID: sid });
+      assert.equal(
+        queuedTurns.value.some((q) => q.id === sid),
+        false,
+      );
+      // The flush filtered with the map the send carried.
+      const post = callsFor(`/api/session/${sid}/prompt`).at(-1)!
+        .body as { text: string; files?: { uri: string }[] };
+      assert.equal(post.text, text);
+      const uris = (post.files ?? []).map((f) => f.uri);
+      assert.equal(uris.some((u) => u.endsWith("/src/app.ts")), true);
+      assert.equal(uris.some((u) => u.endsWith("/types/node")), false);
+    } finally {
+      setDialect("v1");
+    }
   });
 });
 
@@ -5408,6 +6005,67 @@ describe("transcript load retry (9c1f2e7)", () => {
     await settle();
     assert.equal(failedMsgLoads.value.has("rl2"), false);
     assert.equal(fireExact(2000), 0);
+  });
+});
+
+// The child view mounts its own composer, so the feedback keyed to "the
+// session on screen" must follow the route's child, not its parent id.
+describe("a sub-agent view keeps its own composer feedback", () => {
+  it("a failed send restores the draft into the child composer", async () => {
+    const child = "ca1";
+    open(child, []);
+    const seqBefore = composerInsert.value?.seq ?? 0;
+    navigate({ view: "session", id: "pa1", child });
+    onApi((call) =>
+      call.path.startsWith(`/session/${child}/prompt_async`)
+        ? API_FAIL
+        : undefined,
+    );
+    await sendPrompt(child, "to the child");
+    assert.equal(getDraft(child), "to the child");
+    assert.equal(composerInsert.value?.seq, seqBefore + 1);
+    assert.equal(composerInsert.value?.text, "to the child");
+    // The default banner keys to the child too.
+    assert.equal(sendError.value?.for, child);
+    navigate({ view: "home" });
+  });
+
+  it("setSendError defaults to the child without an explicit session", () => {
+    navigate({ view: "session", id: "pa2", child: "ca2" });
+    setSendError("boom");
+    assert.equal(sendError.value?.for, "ca2");
+    assert.equal(sendError.value?.text, "boom");
+    navigate({ view: "home" });
+  });
+
+  it("files-picked lands its chips on the child composer", () => {
+    providers.value = undefined;
+    const child = "ca3";
+    sessions.value = [sessRow(child, { parentID: "pa3" })];
+    navigate({ view: "session", id: "pa3", child });
+    hostMessage({
+      type: "files-picked",
+      files: [{ uri: "u1", name: "a.png" }],
+    });
+    assert.equal(composerFiles.value[child]?.length, 1);
+    assert.equal(composerFiles.value["pa3"], undefined);
+    sessions.value = [];
+    navigate({ view: "home" });
+  });
+
+  it("a failed child transcript pull retries while the child is on screen", async () => {
+    navigate({ view: "session", id: "pa4", child: "ca4" });
+    onApi(messageMock("ca4", API_FAIL, API_FAIL));
+    await refreshMessages("ca4");
+    assert.equal(failedMsgLoads.value.has("ca4"), true);
+    assert.equal(fireExact(1000), 1); // the child's retry survives the fire
+    await settle();
+    assert.equal(failedMsgLoads.value.has("ca4"), true);
+    // Leaving the screen retires it: the next fire clears instead of pulling.
+    navigate({ view: "home" });
+    assert.equal(fireExact(2000), 1);
+    await settle();
+    assert.equal(failedMsgLoads.value.has("ca4"), false);
   });
 });
 // e4b1c93: v2 writes the prompt's user row only at first step start and

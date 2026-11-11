@@ -555,6 +555,9 @@ setInterval(() => {
 const shellChunks = ["watching for changes...\n", "rebuilt src/main.ts\n"];
 const liveShell = { id: "shl_live_1", command: "npm run watch", status: "running", served: 0 };
 const shellDeletes = [];
+// Permission answers (dock-keys spec): {id, decision, message} per reply,
+// from either dialect's reply route.
+const permReplies = [];
 const shellText = () => shellChunks.slice(0, liveShell.served).join("");
 const shellStartedFrame = () =>
   writeFrame(v2Clients, {
@@ -1088,6 +1091,69 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, { ok: true });
       return;
     }
+    // A manual /compact turn lands live on the v2 wire: the trigger row
+    // (role user, no auto flag), its compaction part, then the summary
+    // row — the shape a real compaction streams, row first, part second.
+    // afterTurn=N stamps it between turn N and N+1, mid-transcript.
+    if (method === "POST" && path === "/__control/compaction") {
+      const body = await readBody(req);
+      const created =
+        typeof body.afterTurn === "number"
+          ? T0 + (body.afterTurn - 1) * 8_000 + 6_000
+          : Date.now();
+      emitV2("message.updated", {
+        sessionID: SESSION_ID,
+        info: { id: "msg_compac_u", role: "user", time: { created } },
+      });
+      emitV2("message.part.updated", {
+        sessionID: SESSION_ID,
+        part: {
+          id: "msg_compac_u:cp",
+          messageID: "msg_compac_u",
+          sessionID: SESSION_ID,
+          type: "compaction",
+        },
+      });
+      emitV2("message.updated", {
+        sessionID: SESSION_ID,
+        info: {
+          id: "msg_compac_a",
+          role: "assistant",
+          agent: "compaction",
+          time: { created: created + 40, completed: created + 90 },
+          model: { id: "fake-model", providerID: "fake" },
+        },
+      });
+      emitV2("message.part.updated", {
+        sessionID: SESSION_ID,
+        part: {
+          id: "msg_compac_a:t",
+          messageID: "msg_compac_a",
+          sessionID: SESSION_ID,
+          type: "text",
+          text: body.text ?? "Older turns folded away.",
+          time: { start: created + 40, end: created + 90 },
+        },
+      });
+      json(res, 200, { ok: true });
+      return;
+    }
+    // A permission ask on the v2 wire: permission.asked carries {id,
+    // sessionID, action} — the shape v2events maps onto the dock. The spec
+    // picks the asking session, so one control can target this tab's
+    // session or another one's.
+    if (method === "POST" && path === "/__control/ask") {
+      const body = await readBody(req);
+      emitV2("permission.asked", {
+        id: body.id ?? "perm_rig1",
+        sessionID: body.sessionID ?? SESSION_ID,
+        action: body.action ?? "bash",
+        resources: Array.isArray(body.resources) ? body.resources : [],
+        save: Array.isArray(body.save) ? body.save : [],
+      });
+      json(res, 200, { ok: true });
+      return;
+    }
     // A shell lifecycle note / restart note on the same envelope — the
     // server's terminal report for a shell run (metadata.source "shell",
     // <shell…> wrapper around the captured bytes) and its restart notice
@@ -1139,6 +1205,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (method === "GET" && path === "/__control/shell") {
       json(res, 200, { deletes: shellDeletes });
+      return;
+    }
+    if (method === "GET" && path === "/__control/perm-replies") {
+      json(res, 200, { replies: permReplies });
       return;
     }
     // Spec levers for the stalled-tool shape: deliver one arg delta to the
@@ -1270,6 +1340,13 @@ const server = http.createServer(async (req, res) => {
               name: "Fake Audio",
               limit: { context: 100_000 },
               capabilities: { input: { text: true, image: false, pdf: false, audio: true, video: false } },
+            },
+            // Third row so picker specs can arrow past a filter (2 rows kept
+            // out of 3).
+            "fake-mini": {
+              name: "Fake Mini",
+              limit: { context: 64_000 },
+              capabilities: { input: { text: true, image: false, pdf: false, audio: false, video: false } },
             },
           },
         }],
@@ -1408,6 +1485,15 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, { id, title: body.title || `New session - ${new Date().toISOString()}`, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: Date.now(), updated: Date.now() }, directory });
       return;
     }
+    // The dock's answer (v2 asks reply on the per-session route): accepted
+    // like the real server would — the app drops the ask optimistically,
+    // but a 404 here would surface the failure banner in rig specs.
+    if ((m = path.match(/^\/api\/session\/([^/]+)\/permission\/([^/]+)\/reply$/))) {
+      const body = await readBody(req);
+      permReplies.push({ id: m[2], decision: body.decision, message: body.message, at: Date.now() });
+      json(res, 200, {});
+      return;
+    }
     if ((m = path.match(/^\/session\/([^/]+)\/prompt_async$/))) {
       const body = await readBody(req);
       if (failNextPrompt) {
@@ -1470,7 +1556,9 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if ((m = path.match(/^\/(permission|question)\/([^/]+)\/(reply|reject)$/))) {
-      await readBody(req);
+      const body = await readBody(req);
+      if (m[1] === "permission")
+        permReplies.push({ id: m[2], decision: body.reply, message: body.message, at: Date.now() });
       json(res, 200, {});
       return;
     }

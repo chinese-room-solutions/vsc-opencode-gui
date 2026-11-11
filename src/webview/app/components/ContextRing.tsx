@@ -11,6 +11,7 @@ import {
 import {
   contextLimit,
   formatDateTime,
+  hasOlder,
   messagesBySession,
   messagesFor,
   modelLabel,
@@ -87,13 +88,17 @@ function lastCompactionAfter(
 }
 
 // Session base: the context every turn starts from (system prompt + tool
-// schemas), calibrated once from the first measured turn — its prompt side
-// is the base plus the user rows before it, and those are text, estimated
-// at ~4 chars/token. Against the base's thousands of tokens the estimate's
-// error is negligible. The prompt side is input + cache (the row's total
-// also counts the turn's own output and reasoning — not context).
+// schemas), calibrated only from provable anchors. The first measured turn
+// of a window that starts mid-conversation is not one — its input still
+// counts every prior turn, so anchoring there reads the whole history as
+// base. Two anchors hold: the newest measured fold (the summary rides the
+// next turn's input), or the session's actual start (the window holds it,
+// no older pages outstanding). The prompt side is input + cache (the row's
+// total also counts the turn's own output and reasoning — not context);
+// user rows stand in for their tokens at ~4 chars/token, negligible
+// against the base's thousands.
 const baseCache = new Map<string, number>();
-function contextBase(id: string, list: ChatMessage[]): number {
+export function contextBase(id: string, list: ChatMessage[]): number {
   // Bounded by live sessions: a long-lived view browsing many sessions
   // must not accumulate entries for closed ones.
   if (baseCache.size > 16)
@@ -101,6 +106,53 @@ function contextBase(id: string, list: ChatMessage[]): number {
       if (!messagesBySession.value.has(k)) baseCache.delete(k);
   const hit = baseCache.get(id);
   if (hit !== undefined) return hit;
+  // Post-compact: the first measured real turn after the newest fold
+  // measures the folded context — base = its prompt side minus the summary
+  // and the user rows between fold and anchor, all in the window by
+  // construction. Before the first post-fold turn lands there is no
+  // anchor: fall through uncached.
+  let fold: ChatMessage | undefined;
+  for (const m of list)
+    if (m.info.agent === "compaction" && m.info.tokens?.output) fold = m;
+  if (fold) {
+    let anchor: ChatMessage | undefined;
+    for (const m of list) {
+      if (m.info.time.created <= fold.info.time.created) continue;
+      if (m.info.role !== "assistant" || m.info.agent === "compaction") continue;
+      const t = m.info.tokens;
+      if (!t || t.input + t.cache.read + t.cache.write <= 0) continue;
+      anchor = m;
+      break;
+    }
+    const at = anchor?.info.tokens;
+    if (!anchor || !at) return 0;
+    let chars = 0;
+    for (const m of list) {
+      if (
+        m.info.role !== "user" ||
+        m.info.time.created <= fold.info.time.created ||
+        m.info.time.created > anchor.info.time.created
+      )
+        continue;
+      for (const p of m.parts) {
+        if (isText(p)) chars += p.text?.length ?? 0;
+      }
+    }
+    const base = Math.max(
+      0,
+      at.input + at.cache.read + at.cache.write -
+        (fold.info.tokens?.output ?? 0) -
+        Math.round(chars / 4),
+    );
+    baseCache.set(id, base);
+    return base;
+  }
+  // No fold: calibrating from the first measured turn is only honest when
+  // the window holds the session's start — otherwise the row's input is
+  // mostly turns this window never saw. No trustworthy anchor leaves 0
+  // (uncached), so the ring's estimates fall back to the pre-compact
+  // total they document.
+  if (hasOlder(id)) return 0;
   let first: ChatMessage | undefined;
   for (const m of list) {
     const t = m.info.tokens;

@@ -31,6 +31,9 @@ export function RenameInput(props: {
         // Keys stop here: containers bind Enter/Space as activation, which
         // would eat spaces mid-name (and navigate the tab mid-edit).
         e.stopPropagation();
+        // An IME composition's commit/cancel keys must not commit or cancel
+        // the rename.
+        if (e.isComposing) return;
         if (e.key === "Enter") commit();
         else if (e.key === "Escape") props.onCancel();
       }}

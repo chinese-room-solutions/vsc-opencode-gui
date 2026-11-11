@@ -12,7 +12,7 @@
 // regardless. opencodeGui.stuckToolSeconds (baked by AppHost) is the
 // threshold; 0 disables detection. opencodeGui.stuckAutoAbortSeconds
 // escalates to an automatic interrupt; 0 (default) keeps it detection-only.
-import { isTaskTool, isTool } from "./api";
+import { isTaskTool, isText, isTool } from "./api";
 import type { Part } from "./api";
 import {
   fmtDur,
@@ -62,12 +62,13 @@ export function setStuckAutoAbort(seconds: number): void {
 }
 
 // Last activity per tool part (session → part → epoch ms) and per session,
-// tracked by diffing what the signals show between ticks: a new list for a
-// session is session activity, and a changed fingerprint of a running part
-// (status, output growth, or streamed-args growth) is that part's activity.
+// tracked by diffing what the signals show between ticks: a changed
+// transcript fingerprint for a session is session activity, and a changed
+// fingerprint of a running part (status, output growth, or streamed-args
+// growth) is that part's activity.
 const toolSeen = new Map<string, Map<string, number>>();
 const sessionSeen = new Map<string, number>();
-const prevLists = new Map<string, ChatMessage[]>();
+const prevLists = new Map<string, string>();
 const prevPrints = new Map<string, Map<string, string>>();
 const prevStatus = new Map<string, unknown>();
 // One auto-abort per stuck episode; reset when silence breaks or the
@@ -79,6 +80,22 @@ const printOf = (p: Part): string =>
   isTool(p) && p.state
     ? `${p.state.status}|${p.state.output?.length ?? 0}|${p.state.inputText?.length ?? 0}`
     : "";
+
+// Content fingerprint of a session's transcript list: row stamps plus
+// tool-part prints and text-part lengths. An identical re-pull mints fresh
+// row and list objects (and the periodic status refresh a fresh busy
+// object), so object identity is no signal — only changed content is.
+const listPrint = (list: ChatMessage[]): string => {
+  let out = "";
+  for (const m of list) {
+    out += `${m.info.id}@${m.info.time.created}@${m.info.time.completed ?? 0},`;
+    for (const p of m.parts) {
+      if (isTool(p)) out += `${printOf(p)},`;
+      else if (isText(p)) out += `t${p.text?.length ?? 0},`;
+    }
+  }
+  return out;
+};
 
 function hasPendingAsk(sid: string): boolean {
   return (
@@ -130,9 +147,17 @@ function stuckTick(): void {
     // and escalation needs the compaction check that transcript provides.
     const list = messagesBySession.value.get(sid);
     if (list === undefined) continue;
-    if (prevStatus.get(sid) !== status) sessionSeen.set(sid, now);
-    prevStatus.set(sid, status);
-    if (prevLists.get(sid) !== list) {
+    // The status object churns identity every refresh (and v2 flips a
+    // live retry to a bare busy on the next active pull) — compare the
+    // class, where busy and retry are one working episode.
+    const statusClass =
+      status?.type === "busy" || status?.type === "retry"
+        ? "working"
+        : (status?.type ?? "idle");
+    if (prevStatus.get(sid) !== statusClass) sessionSeen.set(sid, now);
+    prevStatus.set(sid, statusClass);
+    const transcriptPrint = listPrint(list);
+    if (prevLists.get(sid) !== transcriptPrint) {
       sessionSeen.set(sid, now);
       const prints = prevPrints.get(sid) ?? new Map<string, string>();
       for (const m of list) {
@@ -151,7 +176,7 @@ function stuckTick(): void {
       }
       prevPrints.set(sid, prints);
     }
-    prevLists.set(sid, list);
+    prevLists.set(sid, transcriptPrint);
     // An unanswered ask IS the explanation for the silence — hold the
     // clocks so answering it grants a fresh grace.
     if (hasPendingAsk(sid)) {

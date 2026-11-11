@@ -141,6 +141,36 @@ test("a file over the relay cap is refused and points at the + picker", async ({
   expect(watched.errors).toEqual([]);
 });
 
+// A VS Code-internal drag (explorer) carries no Files — resourceurls hold
+// the URIs. Remote windows hand out vscode-remote:// URIs the server
+// cannot read: they must land as file paths, and web addresses are
+// refused like any other unreadable chip.
+test("a resourceurls drop translates remote URIs and refuses web ones", async ({ page, rig }) => {
+  const watched = watchPage(page);
+  await openSession(page, rig.url);
+  await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.setData(
+      "resourceurls",
+      JSON.stringify([
+        "file:///repo/picks/config.json",
+        "vscode-remote://wsl%2Bubuntu/home/dev/notes.txt",
+        "https://example.com/page",
+      ]),
+    );
+    window.dispatchEvent(new DragEvent("dragover", { dataTransfer: dt, bubbles: true, cancelable: true }));
+    window.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }));
+  });
+  const chip = page.locator(".composer-files .file-chip");
+  await expect(chip).toHaveCount(2);
+  await expect(chip.nth(0).locator(".chip-name")).toHaveText("config.json");
+  await expect(chip.nth(1).locator(".chip-name")).toHaveText("notes.txt");
+  await expect(page.locator(".send-error")).toHaveText(
+    "1 file not attached (not a local file).",
+  );
+  expect(watched.errors).toEqual([]);
+});
+
 // The rig's acquireVsCodeApi stand-in logs non-api host messages to the
 // console as "[host-msg] {json}" — the observable side of a chip click.
 const hostMsgs = (page) => {
@@ -333,5 +363,37 @@ test("a model switch after attach is caught at send, not silently sent", async (
   // Nothing left the composer — no POST at all.
   const calls = await (await fetch(`${rig.api}/__control/prompts`)).json();
   expect(calls.calls).toHaveLength(0);
+  expect(watched.errors).toEqual([]);
+});
+
+test("an Enter fired during a paste's attach still sends the file", async ({ page, rig }) => {
+  const watched = watchPage(page);
+  await openSession(page, rig.url);
+  // Hold the rig's snapshot reply open so the attach is definitely still
+  // in flight when Enter lands — the send must wait it out and post the
+  // chip, not an empty file list with an orphaned chip left behind.
+  await page.evaluate(() => {
+    window.__slowAttach = 400;
+  });
+  await page.fill(".composer textarea", "see this");
+  await page.evaluate(() => {
+    const ta = document.querySelector(".composer textarea");
+    const dt = new DataTransfer();
+    dt.items.add(new File(["%PDF-1.4 fake page"], "raced.pdf", { type: "application/pdf" }));
+    ta.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  await page.press(".composer textarea", "Enter");
+  const fileParts = async () =>
+    (await (await fetch(`${rig.api}/__control/prompts`)).json()).calls
+      .flatMap((c) => c.parts ?? [])
+      .filter((p) => p.type === "file");
+  await expect
+    .poll(fileParts, { timeout: 10_000 })
+    .toHaveLength(1);
+  const part = (await fileParts())[0];
+  // The chip landed before the body was built: the snapshotted path, not
+  // a data URI.
+  expect(part.filename).toBe("raced.pdf");
+  expect(part.url.startsWith("file:///repo/.opencode/attachments/")).toBe(true);
   expect(watched.errors).toEqual([]);
 });

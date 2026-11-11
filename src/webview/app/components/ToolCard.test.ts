@@ -2,7 +2,7 @@
 // holds (streamed args, result metadata, settled title) - the live frame
 // may carry only the metadata (a provider that never streams tool args).
 import assert from "node:assert/strict";
-import { childSessionId, summary } from "./ToolCard";
+import { childSessionId, modelWaitAnchor, summary } from "./ToolCard";
 import type { ToolPart, ToolState } from "../api";
 
 const skill = (state: ToolState): ToolPart => ({
@@ -72,6 +72,39 @@ describe("subagent chip child binding", () => {
     assert.equal(
       childSessionId(task({ sessionId: "ses_a", sessionID: "ses_b" }), "d"),
       "ses_a",
+    );
+  });
+});
+
+describe("model wait anchor", () => {
+  it("a running task part never waits on the model", () => {
+    assert.equal(
+      modelWaitAnchor({
+        id: "p1",
+        messageID: "m1",
+        sessionID: "s1",
+        type: "tool",
+        tool: "task",
+        state: {
+          status: "running",
+          input: { description: "Explore the retry paths", prompt: "go" },
+          time: { start: 1234 },
+        },
+      }),
+      undefined,
+    );
+  });
+  it("a running argless bash part still anchors", () => {
+    assert.equal(
+      modelWaitAnchor({
+        id: "p1",
+        messageID: "m1",
+        sessionID: "s1",
+        type: "tool",
+        tool: "bash",
+        state: { status: "running", time: { start: 1234 } },
+      }),
+      1234,
     );
   });
 });

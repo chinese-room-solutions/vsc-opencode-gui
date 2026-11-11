@@ -5,6 +5,7 @@ import {
   API_HOLD,
   apiFailWith,
   apiLog,
+  callsFor,
   flushEvents,
   onApi,
   dispatchWindowMessage,
@@ -15,6 +16,7 @@ import {
   attachMime,
   attachmentParts,
   chipMime,
+  droppedFileRefs,
   clampPartText,
   clampToolOutput,
   compactSession,
@@ -284,6 +286,33 @@ describe("api", () => {
     });
   });
 
+  describe("droppedFileRefs", () => {
+    it("keeps file urls as-is with their decoded name", () => {
+      const { refs, refused } = droppedFileRefs(["file:///d%3A/proj/notes.txt"]);
+      assert.deepEqual(refs, [{ uri: "file:///d%3A/proj/notes.txt", name: "notes.txt" }]);
+      assert.equal(refused, 0);
+    });
+    it("translates vscode-remote and vscode-vfs to the file path they name", () => {
+      const { refs, refused } = droppedFileRefs([
+        "vscode-remote://wsl%2Bubuntu/home/dev/notes.txt",
+        "vscode-vfs://github/mine/readme.md",
+      ]);
+      assert.deepEqual(refs, [
+        { uri: "file:///home/dev/notes.txt", name: "notes.txt" },
+        { uri: "file:///mine/readme.md", name: "readme.md" },
+      ]);
+      assert.equal(refused, 0);
+    });
+    it("refuses anything the server cannot read", () => {
+      const { refs, refused } = droppedFileRefs([
+        "https://example.com/x.png",
+        "not a url at all",
+      ]);
+      assert.deepEqual(refs, []);
+      assert.equal(refused, 2);
+    });
+  });
+
   describe("sniffsText", () => {
     const enc = new TextEncoder();
     it("accepts empty and plain ascii prefixes", () => {
@@ -404,6 +433,26 @@ describe("api", () => {
       );
       const good = await promptSession("s1", []);
       assert.equal(good.ok, true);
+    });
+    it("the client id rides the v2 body only", async () => {
+      setDialect("v2");
+      try {
+        onApi((call) =>
+          call.path === "/api/session/s1/prompt"
+            ? { data: { id: "usr_v2" } }
+            : undefined,
+        );
+        await promptSession("s1", [{ type: "text", text: "hi" }], undefined, undefined, "msg_oc01");
+        const v2call = callsFor("/api/session/s1/prompt").at(-1)!;
+        assert.equal((v2call.body as { id?: string }).id, "msg_oc01");
+        setDialect("v1");
+        onApi((call) => (call.path === "/session/s1/prompt_async" ? {} : undefined));
+        await promptSession("s1", [{ type: "text", text: "hi" }], undefined, undefined, "msg_oc01");
+        const v1call = callsFor("/session/s1/prompt_async").at(-1)!;
+        assert.equal((v1call.body as { id?: string }).id, undefined);
+      } finally {
+        setDialect("v1");
+      }
     });
   });
 

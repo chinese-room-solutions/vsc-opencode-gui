@@ -60,6 +60,9 @@ function useDockKeys(opts: {
       const t = e.target as HTMLElement | null;
       const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA");
       if (typing && !(e.key === "Escape" && !t.closest(".dock"))) return;
+      // Workbench chords (Ctrl+2 etc.) and IME composition never answer a
+      // dock; Shift+digits already fail the digit branch.
+      if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
       const take = () => {
         e.preventDefault();
         e.stopPropagation();
@@ -108,12 +111,15 @@ function useDockKeys(opts: {
 function PermissionDock(props: { perms: PermissionRequest[] }) {
   const perms = props.perms;
   const [step, setStep] = useState(0);
-  const [messages, setMessages] = useState<string[]>([]);
+  // Redirect drafts keyed by request id: an answer drops its tab and the
+  // survivors shift, so an index-aligned array would show one ask's draft
+  // against another.
+  const [messages, setMessages] = useState<Record<string, string>>({});
   const i = Math.min(step, perms.length - 1);
   const p = perms[i];
-  const message = messages[i] ?? "";
+  const message = messages[p.id] ?? "";
   const setMessage = (m: string) =>
-    setMessages(perms.map((_, k) => (k === i ? m : messages[k] ?? "")));
+    setMessages({ ...messages, [p.id]: m });
   const replies: ("once" | "always" | "reject")[] = p.save.length
     ? ["once", "always", "reject"]
     : ["once", "reject"];
@@ -174,7 +180,7 @@ function PermissionDock(props: { perms: PermissionRequest[] }) {
           value={message}
           onInput={(e) => setMessage(e.currentTarget.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && message.trim()) {
+            if (e.key === "Enter" && !e.isComposing && message.trim()) {
               e.preventDefault();
               fire("reject");
             }
@@ -332,10 +338,10 @@ function QuestionDock(props: { q: QuestionRequest }) {
               )
             }
             onKeyDown={(e) => {
-              if (e.key === "Enter" && custom[step].trim()) {
+              if (e.key === "Enter" && !e.isComposing && custom[step].trim()) {
                 e.preventDefault();
                 advance();
-              } else if (e.key === "Escape") {
+              } else if (e.key === "Escape" && !e.isComposing) {
                 e.preventDefault();
                 void dismissQuestion(q.sessionID, q.id, q.v1 === true);
               }
@@ -384,7 +390,8 @@ export function Docks(props: { sessionId: string }) {
   }, [id]);
   useSignalEffect(() => {
     const pending =
-      pendingPermissions.value.length > 0 || pendingQuestions.value.length > 0;
+      pendingPermissions.value.some((p) => p.sessionID === id) ||
+      pendingQuestions.value.some((q) => q.sessionID === id);
     if (pending && popover.value) setPopover(undefined);
   });
   const perms = pendingPermissions.value.filter((p) => p.sessionID === id);

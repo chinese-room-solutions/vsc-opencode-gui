@@ -95,6 +95,12 @@ function useMenuKeys(
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
   }, [count]);
+  // Filtering (or a mid-open re-list) recomputes `initial` from the active
+  // row; arrow moves change neither dep, so only the row-set reseeds.
+  useEffect(() => {
+    cur.current = initial;
+    setActive(initial);
+  }, [initial, count]);
   return active;
 }
 

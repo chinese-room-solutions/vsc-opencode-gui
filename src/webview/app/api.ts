@@ -2130,6 +2130,37 @@ export function chipMime(f: {
   return attachMime(f.name, "") ?? (f.text ? "text/plain" : undefined);
 }
 
+// Explorer drops arrive as VS Code resource URIs, and in remote windows
+// those carry vscode-remote:// or vscode-vfs:// schemes the server cannot
+// read — it only opens file: URIs, and one unreadable chip kills the whole
+// prompt POST. Translate the readable ones to the file paths they name and
+// count the rest as refused; the caller surfaces one error line instead.
+export function droppedFileRefs(urls: string[]): {
+  refs: { uri: string; name: string }[];
+  refused: number;
+} {
+  const refs: { uri: string; name: string }[] = [];
+  let refused = 0;
+  const last = (s: string) => decodeURIComponent(s.split("/").pop() ?? "file");
+  for (const raw of urls) {
+    let u: URL;
+    try {
+      u = new URL(raw);
+    } catch {
+      refused++;
+      continue;
+    }
+    if (u.protocol === "file:") {
+      refs.push({ uri: raw, name: last(u.pathname) });
+    } else if (u.protocol === "vscode-remote:" || u.protocol === "vscode-vfs:") {
+      refs.push({ uri: `file://${u.pathname}`, name: last(u.pathname) });
+    } else {
+      refused++;
+    }
+  }
+  return { refs, refused };
+}
+
 // v1 message parts we send. Text carries the prompt (mentions stay inline);
 // a file part is an attachment (data-URI) or a mention (file:// url plus a
 // source range pointing back at the "@path" text); an agent part switches
@@ -2222,6 +2253,7 @@ export async function promptSession(
   parts: PromptPart[],
   agent?: string,
   model?: ModelSelection,
+  promptId?: string,
 ): Promise<{ ok: boolean; error?: string; user?: PromptUserRow }> {
   // v2: per-turn agent/model rides the session-scoped switch routes (both
   // wire-verified). Callers only pass a selection that differs from the
@@ -2259,9 +2291,17 @@ export async function promptSession(
       .map((p) => p.text)
       .join("");
     const body = v2PromptBody(parts, text);
+    // A client id makes a resend of the same prompt idempotent: the relay's
+    // timeout can admit a prompt whose reply never lands, and the server
+    // answers a repeated id with its existing admission (the reply row
+    // carries our id either way).
     const res = await sendJson<{
       data?: { id?: string; time?: { created?: number }; payload?: { text?: string } };
-    }>("POST", `/api/session/${id}/prompt`, body);
+    }>(
+      "POST",
+      `/api/session/${id}/prompt`,
+      promptId ? { ...body, id: promptId } : body,
+    );
     const row = res.ok ? res.data?.data : undefined;
     return {
       ok: res.ok === true,
