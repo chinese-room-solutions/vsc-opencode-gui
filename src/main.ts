@@ -787,11 +787,17 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
       // Blank sessions (created, never messaged) aren't history — the
-      // navigator's rule. Untouched rows only: a fetch can't confirm each
-      // one, and a rename (or any touch) means the user invested
-      // something. Labels never fall back to the raw id.
+      // navigator's rule. Sub-agent sessions are hidden there too:
+      // task-tool spawns carry parentID, and the title suffix catches
+      // async-era v1 spawns without one. Untouched rows only: a fetch
+      // can't confirm each one, and a rename (or any touch) means the
+      // user invested something. Labels never fall back to the raw id.
       const items = sessions
-        .filter((s) => s.title || s.time.updated !== s.time.created)
+        .filter(
+          (s) =>
+            (s.title || s.time.updated !== s.time.created) &&
+            !(s.parentID || / \(@\S+ subagent\)$/.test(s.title)),
+        )
         .sort((a, b) => b.time.updated - a.time.updated)
         .map((s) => ({
           label: sessionTabTitle(s.title),

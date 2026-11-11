@@ -23,6 +23,7 @@ interface SessionSummary {
   id: string;
   title: string;
   time: { created: number; updated: number };
+  parentID?: string;
 }
 
 // Row of GET /session/{id}/diff — the session's file changes as per-file
