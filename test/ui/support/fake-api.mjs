@@ -1088,6 +1088,53 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, { ok: true });
       return;
     }
+    // A manual /compact turn lands live on the v2 wire: the trigger row
+    // (role user, no auto flag), its compaction part, then the summary
+    // row — the shape a real compaction streams, row first, part second.
+    // afterTurn=N stamps it between turn N and N+1, mid-transcript.
+    if (method === "POST" && path === "/__control/compaction") {
+      const body = await readBody(req);
+      const created =
+        typeof body.afterTurn === "number"
+          ? T0 + (body.afterTurn - 1) * 8_000 + 6_000
+          : Date.now();
+      emitV2("message.updated", {
+        sessionID: SESSION_ID,
+        info: { id: "msg_compac_u", role: "user", time: { created } },
+      });
+      emitV2("message.part.updated", {
+        sessionID: SESSION_ID,
+        part: {
+          id: "msg_compac_u:cp",
+          messageID: "msg_compac_u",
+          sessionID: SESSION_ID,
+          type: "compaction",
+        },
+      });
+      emitV2("message.updated", {
+        sessionID: SESSION_ID,
+        info: {
+          id: "msg_compac_a",
+          role: "assistant",
+          agent: "compaction",
+          time: { created: created + 40, completed: created + 90 },
+          model: { id: "fake-model", providerID: "fake" },
+        },
+      });
+      emitV2("message.part.updated", {
+        sessionID: SESSION_ID,
+        part: {
+          id: "msg_compac_a:t",
+          messageID: "msg_compac_a",
+          sessionID: SESSION_ID,
+          type: "text",
+          text: body.text ?? "Older turns folded away.",
+          time: { start: created + 40, end: created + 90 },
+        },
+      });
+      json(res, 200, { ok: true });
+      return;
+    }
     // A permission ask on the v2 wire: permission.asked carries {id,
     // sessionID, action} — the shape v2events maps onto the dock. The spec
     // picks the asking session, so one control can target this tab's

@@ -196,6 +196,40 @@ test("the successor's arrival pushes the pinned twin out", async ({ page }) => {
   }
 });
 
+test("the bar docks a manual /compact trigger as its literal", async ({ page }) => {
+  const rig = await startRig({ env: rigEnv() });
+  try {
+    await page.goto(rig.url);
+    await page.waitForSelector(".msgs .turn .msg.user", { timeout: 15_000 });
+    // A manual compaction joins the transcript mid-way, as one would in a
+    // session that kept working after the fold.
+    await fetch(`${rig.api}/__control/compaction`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ afterTurn: 11, text: "Turns 1-11 folded away." }),
+    });
+    const trigger = page.locator(".turn .msg.user", { hasText: "/compact" });
+    await expect(trigger).toHaveCount(1);
+    // The turn settles first: the summary lands right behind the trigger
+    // row, and its follow-to-bottom would outrun a too-early scroll.
+    await expect(page.locator(".compacted-summary")).toContainText("manual");
+    // Scroll the trigger just past the edge: the boundary is inclusive,
+    // so one pixel plus a nudge docks it.
+    await page.locator(".msgs").evaluate((n, el) => {
+      const top =
+        el.getBoundingClientRect().top -
+        n.getBoundingClientRect().top +
+        n.scrollTop;
+      n.scrollTop = top + 2;
+    }, await trigger.elementHandle());
+    const bar = page.locator(".pin-bar .pin-mirror");
+    await expect(bar).toBeVisible();
+    await expect(bar).toContainText("/compact");
+  } finally {
+    rig.stop();
+  }
+});
+
 test("clicking the docked twin jumps back to its turn", async ({ page }) => {
   const rig = await startRig({ env: rigEnv() });
   try {
