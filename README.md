@@ -59,7 +59,7 @@ In the command palette under **`Open Code:`**.
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `opencodeGui.path` | *(empty)* | opencode CLI path. Empty uses `PATH` |
-| `opencodeGui.port` | `0` | Server port (`0` = random). Changing it resets the chat's saved preferences |
+| `opencodeGui.port` | `0` | Server port (`0` = random) |
 | `opencodeGui.exposeToNetwork` | `false` | Serve on the LAN: `http://opencode.local:<port>` (1.x), `http://<LAN-IP>:<port>` (2.x) |
 | `opencodeGui.codeGlow` | `false` | Neon glow on code tokens |
 | `opencodeGui.codeCopyModifier` | `alt` | Hold it and click a code block or quote to copy it |

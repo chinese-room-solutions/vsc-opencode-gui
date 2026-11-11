@@ -262,10 +262,9 @@ export function activate(context: vscode.ExtensionContext) {
     const sm = new ServerManager();
     wireUnexpectedExit(sm);
     serverManager = sm;
-    // Reuse the stored port so the webview origin (localStorage) survives
-    // restarts and crash-respawns — the stored value tracks any port move
-    // a boot made, so read it (and the other settings) per spawn, not once
-    // at activation. globalState keeps every workspace on the same origin.
+    // Reuse the stored port across restarts and crash-respawns — the
+    // stored value tracks any port move a boot made, so read it (and the
+    // other settings) per spawn, not once at activation.
     const cfg = vscode.workspace.getConfiguration("opencodeGui");
     const userPort = cfg.get<number>("port", 0);
     const port =

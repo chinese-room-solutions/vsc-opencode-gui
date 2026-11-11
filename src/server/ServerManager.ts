@@ -243,8 +243,8 @@ export function normWorktree(p: string): string {
     .replace(/\/+$/, "");
 }
 
-// The single owner of the fallback port pick: the webview origin (and its
-// localStorage) is port-derived, so every spawn site must move the same way.
+// The single owner of the fallback port pick: every spawn site must move
+// the same way.
 export function randomPort(): number {
   return Math.floor(Math.random() * (65535 - 16384 + 1)) + 16384;
 }
@@ -346,8 +346,7 @@ export class ServerManager {
       }
     }
 
-    // Persist the port so we can reuse it next time (preserves webview
-    // localStorage, which is tied to the origin).
+    // Persist the port so we can reuse it next time.
     void context.globalState.update("opencode.serverPort", port);
 
     uninstallSubagentSkill();

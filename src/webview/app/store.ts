@@ -3408,8 +3408,8 @@ interface ComposerFile {
 // Composer text drafts, keyed like attachments (session id). They survive
 // the disruptions of panel life: the session view remounting (the
 // module-level map) and the webview itself reloading (localStorage,
-// same-origin — a server port change resets it). Lives here so a deleted
-// session's draft can be pruned with the rest of its local state.
+// same-origin). Lives here so a deleted session's draft can be pruned
+// with the rest of its local state.
 const DRAFTS_KEY = "opencode.drafts";
 const drafts = new Map<string, string>();
 try {
