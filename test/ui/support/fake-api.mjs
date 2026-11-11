@@ -1334,6 +1334,13 @@ const server = http.createServer(async (req, res) => {
               limit: { context: 100_000 },
               capabilities: { input: { text: true, image: false, pdf: false, audio: true, video: false } },
             },
+            // Third row so picker specs can arrow past a filter (2 rows kept
+            // out of 3).
+            "fake-mini": {
+              name: "Fake Mini",
+              limit: { context: 64_000 },
+              capabilities: { input: { text: true, image: false, pdf: false, audio: false, video: false } },
+            },
           },
         }],
         default: { fake: "fake-model" },
