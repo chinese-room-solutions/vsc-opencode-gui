@@ -1260,6 +1260,50 @@ describe("transcript windowing and Load older (5185f17)", () => {
     assert.equal(messagesCursor.value.get(sid), undefined);
     assert.equal(listOf(sid).length, 150);
   });
+
+  it("pool rows merge by time under walked cursor pages", async () => {
+    const sid = "w3";
+    // The v2 newest page fills the window; its cursor's page hands back 30
+    // older rows and no next; the legacy pool holds two rows newer than
+    // those walked pages but older than the window head — rows that only
+    // ever met in one fixture once cursor and pool mixed.
+    const v2p = Array.from({ length: 50 }, (_, i) => ({
+      id: `v${200 + i}`,
+      type: i % 2 === 0 ? "user" : "assistant",
+      time: { created: T0 + (200 + i) * 10 },
+      text: i % 2 === 0 ? `q${200 + i}` : undefined,
+    }));
+    const walked = Array.from({ length: 30 }, (_, i) => ({
+      id: `o${100 + i}`,
+      type: i % 2 === 0 ? "user" : "assistant",
+      time: { created: T0 + (100 + i) * 10 },
+      text: i % 2 === 0 ? `q${100 + i}` : undefined,
+    }));
+    const legacy = [
+      row("l1", "user", T0 + 1_500),
+      row("l2", "assistant", T0 + 1_600),
+    ];
+    onApi(
+      messageMock(sid, (call: ApiCall) => {
+        if (call.path.includes("cursor=c5"))
+          return { data: walked, cursor: {} };
+        return { data: v2p, cursor: { next: "c5" } };
+      }, legacy),
+    );
+    await refreshMessages(sid);
+    // Walk: the walked page lands, the cursor exhausts, the walk ends.
+    assert.equal(await loadOlderMessages(sid), true);
+    assert.equal(messagesCursor.value.get(sid), undefined);
+    // The pool drains under the merge: l1/l2 slot between the o* rows and
+    // the window by their created time, not blindly above the walk.
+    assert.equal(await loadOlderMessages(sid), true);
+    const ids = listOf(sid).map((m) => m.info.id);
+    assert.equal(ids.length, 82);
+    assert.deepEqual(ids.slice(0, 30), walked.map((r) => r.id));
+    assert.deepEqual(ids.slice(30, 32), ["l1", "l2"]);
+    assert.deepEqual(ids.slice(32), v2p.map((r) => r.id));
+    assert.equal(await loadOlderMessages(sid), false);
+  });
 });
 
 // 50cba2d
