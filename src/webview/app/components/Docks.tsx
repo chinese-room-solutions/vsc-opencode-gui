@@ -384,7 +384,8 @@ export function Docks(props: { sessionId: string }) {
   }, [id]);
   useSignalEffect(() => {
     const pending =
-      pendingPermissions.value.length > 0 || pendingQuestions.value.length > 0;
+      pendingPermissions.value.some((p) => p.sessionID === id) ||
+      pendingQuestions.value.some((q) => q.sessionID === id);
     if (pending && popover.value) setPopover(undefined);
   });
   const perms = pendingPermissions.value.filter((p) => p.sessionID === id);

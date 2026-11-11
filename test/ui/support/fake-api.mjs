@@ -1088,6 +1088,22 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, { ok: true });
       return;
     }
+    // A permission ask on the v2 wire: permission.asked carries {id,
+    // sessionID, action} — the shape v2events maps onto the dock. The spec
+    // picks the asking session, so one control can target this tab's
+    // session or another one's.
+    if (method === "POST" && path === "/__control/ask") {
+      const body = await readBody(req);
+      emitV2("permission.asked", {
+        id: body.id ?? "perm_rig1",
+        sessionID: body.sessionID ?? SESSION_ID,
+        action: body.action ?? "bash",
+        resources: [],
+        save: [],
+      });
+      json(res, 200, { ok: true });
+      return;
+    }
     // A shell lifecycle note / restart note on the same envelope — the
     // server's terminal report for a shell run (metadata.source "shell",
     // <shell…> wrapper around the captured bytes) and its restart notice
