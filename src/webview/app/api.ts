@@ -2253,6 +2253,7 @@ export async function findFiles(
 ): Promise<string[]> {
   if (serverDialect === "v2") {
     const qs = new URLSearchParams({ query, limit: "20" });
+    if (directory) qs.set("location[directory]", directory);
     const body = await getJson<{ data?: unknown[] }>(`/api/fs/find?${qs}`);
     return (body?.data ?? []).map((r) => {
       if (typeof r === "string") return r.replace(/\\/g, "/");

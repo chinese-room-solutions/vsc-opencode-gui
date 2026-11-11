@@ -598,6 +598,15 @@ describe("v2 route/body/envelope translation", () => {
     );
     assert.deepEqual(await findFiles("md"), ["src/a.ts"]);
     assert.match(callsFor("/api/fs/find")[0].path, /^\/api\/fs\/find\?query=md/);
+    assert.ok(
+      !callsFor("/api/fs/find")[0].path.includes("location%5Bdirectory%5D"),
+    );
+    await findFiles("md", "C:\\w\\repo");
+    assert.ok(
+      callsFor("/api/fs/find")[1].path.includes(
+        "location%5Bdirectory%5D=C%3A%5Cw%5Crepo",
+      ),
+    );
   });
 
   it("findFiles keeps legacy string rows and stamps directory slashes", async () => {
