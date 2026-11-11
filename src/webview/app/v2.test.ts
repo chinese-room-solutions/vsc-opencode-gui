@@ -71,11 +71,15 @@ function row(
   return { info: { id, role, time: { created } }, parts: [] };
 }
 
-// v2 form row: one option field, the question text rides the field
-// description (mirrors toField), the field title is the capitalized key.
+// v2 form row (the question tool's ask): the form title is the fixed
+// "Questions", the field mirrors toField — title = the question's header,
+// description = the question text, custom: true. Options are {value,
+// label} pairs (the question tool sends value = label, the schema lets
+// them differ and the reply tests below need the mapping).
 function formRow(
   id: string,
-  title: string,
+  question: string,
+  header: string,
   key: string,
   options: [value: string, label: string][],
   sessionID?: string,
@@ -83,14 +87,14 @@ function formRow(
   return {
     id,
     ...(sessionID !== undefined ? { sessionID } : {}),
-    title,
+    title: "Questions",
     fields: [
       {
         key,
         type: "string",
         custom: true,
-        title: key[0].toUpperCase() + key.slice(1),
-        description: title,
+        title: header,
+        description: question,
         options: options.map(([value, label]) => ({ value, label })),
       },
     ],
@@ -1430,18 +1434,18 @@ describe("v2 transcript normalization (fetchMessages)", () => {
       if (call.path === "/api/session/ses_1/form")
         return {
           data: [
-            formRow("frm_1", "Proceed?", "go", [["yes", "Yes"]]),
+            formRow("frm_1", "Proceed?", "Proceed", "go", [["yes", "Yes"]]),
             // websearch-shaped: no field title, the question is only in
-            // the description.
+            // the description, and custom: false hides the free-text row.
             {
               id: "frm_2",
               sessionID: "ses_1",
-              title: "Questions",
+              title: "Web Search",
               fields: [
                 {
-                  key: "search",
+                  key: "choice",
                   type: "string",
-                  custom: true,
+                  custom: false,
                   description: "Allow OpenCode to search the web",
                   options: [
                     { value: "allow", label: "Allow" },
@@ -1482,7 +1486,8 @@ describe("v2 transcript normalization (fetchMessages)", () => {
     const web = questions?.rows[1];
     assert.equal(web?.id, "frm_2");
     assert.equal(web?.questions[0].question, "Allow OpenCode to search the web");
-    assert.equal(web?.questions[0].header, "search");
+    assert.equal(web?.questions[0].header, "choice");
+    assert.equal(web?.questions[0].custom, false);
     // The reply is always keyed by the field key, values not labels.
     assert.equal(
       await replyQuestion("ses_1", "frm_1", [["Yes"]], false, row),
@@ -2529,13 +2534,14 @@ describe("v2 SSE → pipeline translation", () => {
       ],
     });
     assert.deepEqual(translateV2Event(rules), [rules]);
-    // form.created {sessionID, form} → the v1 question shape.
+    // form.created {form} → the v1 question shape (the event carries only
+    // the Info, whose sessionID names the session).
     const asked = translateV2Event(
       ev("form.created", {
-        sessionID: "s",
         form: formRow(
           "frm_1",
           "Continue?",
+          "Choice",
           "choice",
           [
             ["yes", "Yes"],
@@ -2623,7 +2629,7 @@ describe("v2 SSE → pipeline translation", () => {
     // undock through the v2 cases, not the v1 names they share.
     const askedPerm = translateV2Event(
       ev("permission.asked", {
-        id: "pr_1",
+        id: "per_1",
         sessionID: "s",
         action: "bash",
         resources: ["cat foo"],
@@ -2634,7 +2640,7 @@ describe("v2 SSE → pipeline translation", () => {
         id: "evt_x",
         type: "permission.v2.asked",
         data: {
-          id: "pr_1",
+          id: "per_1",
           sessionID: "s",
           action: "bash",
           resources: ["cat foo"],
@@ -2647,7 +2653,7 @@ describe("v2 SSE → pipeline translation", () => {
       translateV2Event(
         ev("permission.replied", {
           sessionID: "s",
-          requestID: "pr_1",
+          requestID: "per_1",
           reply: "once",
         }),
       )[0].type,
@@ -2928,7 +2934,7 @@ describe("v2 turn through the store (recorded frame sequence)", () => {
     // The v2-shaped bare event must dock through the v2 ask case (it
     // shares its name with the v1 event, whose normalizer would drop it).
     v2sse("permission.asked", {
-      id: "pr_9",
+      id: "per_9",
       sessionID: sid,
       action: "bash",
       resources: ["ls"],
@@ -2936,7 +2942,7 @@ describe("v2 turn through the store (recorded frame sequence)", () => {
     await flushEvents();
     assert.ok(
       (await import("./store")).pendingPermissions.value.some(
-        (p) => p.id === "pr_9" && p.v1 !== true,
+        (p) => p.id === "per_9" && p.v1 !== true,
       ),
     );
 
