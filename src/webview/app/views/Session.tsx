@@ -10,7 +10,6 @@ import {
   StatusStats,
   TurnFooter,
 } from "../components/MessageView";
-import { RenameInput } from "../components/RenameInput";
 import { RowMenu } from "../components/RowMenu";
 import { SessionMenuItems } from "../components/SessionMenuItems";
 import { SubagentMenu } from "../components/SubagentMenu";
@@ -36,7 +35,6 @@ import {
   refreshPermissions,
   refreshQuestions,
   refreshStatuses,
-  renameSession,
   sendError,
   sessionStatus,
   sessionTitle,
@@ -129,12 +127,11 @@ export function Session(props: { sessionId: string; parent?: string }) {
   const restore = useRef(scrollMemo.get(id));
   const st = sessionStatus.value[id];
   const busy = st?.type === "busy";
-  // The view's right-click menu (the session row's commands), its inline
-  // rename field, and the delete confirm.
+  // The view's right-click menu (the session row's commands) and the
+  // delete confirm.
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | undefined>(
     undefined,
   );
-  const [renaming, setRenaming] = useState(false);
   const [confirming, setConfirming] = useState(false);
   // Chromium collapses a text selection as the default action of a
   // right-button mousedown — before contextmenu fires. Remember whether
@@ -735,17 +732,6 @@ export function Session(props: { sessionId: string; parent?: string }) {
       }}
     >
       <div class="chat-head">
-        {renaming && (
-          <RenameInput
-            class="rename-input"
-            title={session?.title ?? ""}
-            onCommit={(title) => {
-              setRenaming(false);
-              void renameSession(id, title);
-            }}
-            onCancel={() => setRenaming(false)}
-          />
-        )}
         {props.parent && (
           <nav class="crumb" aria-label="Sub-session path">
             <button
@@ -1016,7 +1002,7 @@ export function Session(props: { sessionId: string; parent?: string }) {
                 if (row) postToHost({ type: "open-session", id: row.id });
               })
             }
-            onRename={() => setRenaming(true)}
+            onRename={() => postToHost({ type: "rename-session", id })}
             onDelete={() => setConfirming(true)}
           />
         </RowMenu>

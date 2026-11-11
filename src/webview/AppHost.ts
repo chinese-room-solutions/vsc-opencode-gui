@@ -354,6 +354,13 @@ export class AppHost implements vscode.Disposable {
         if (message.type === "open-session" && typeof message.id === "string") {
           void vscode.commands.executeCommand("opencodeGui.openSession", message.id);
         }
+        // The chat's right-click Rename… runs the tab-menu command: the
+        // same top input box, targeted at this tab's session.
+        if (message.type === "rename-session" && typeof message.id === "string") {
+          void vscode.commands.executeCommand("opencodeGui.renameSession", {
+            id: message.id,
+          });
+        }
         // The store's session rows retitle (auto-titler after the first
         // prompt, renames); the tab label follows. The host's command
         // ignores sessions without an open panel.

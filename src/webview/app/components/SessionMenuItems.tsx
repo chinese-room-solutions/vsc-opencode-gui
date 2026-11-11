@@ -41,7 +41,7 @@ export function SessionMenuItems(props: {
           props.onRename();
         }}
       >
-        Rename…
+        Rename Session
       </button>
       <div class="menu-sep" role="separator" />
       <button

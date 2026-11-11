@@ -399,7 +399,12 @@ export function activate(context: vscode.ExtensionContext) {
   const tabMenuTarget = (
     ctx: unknown,
   ): { id: string } | undefined => {
-    const c = ctx as { groupId?: unknown; editorIndex?: unknown } | undefined;
+    const c = ctx as { id?: unknown; groupId?: unknown; editorIndex?: unknown } | undefined;
+    // The webview's right-click posts the id explicitly: hit or miss, no
+    // fallback — a stale id must never rename the active session instead.
+    if (typeof c?.id === "string") {
+      return panels.has(c.id) ? { id: c.id } : undefined;
+    }
     if (typeof c?.groupId === "number" && typeof c.editorIndex === "number") {
       const tab = vscode.window.tabGroups.all.find(
         (g) => g.viewColumn === c.groupId,
