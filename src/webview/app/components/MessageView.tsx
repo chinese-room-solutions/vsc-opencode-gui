@@ -64,6 +64,9 @@ function memo<P>(
 ) {
   return class Memoed extends Component<P> {
     shouldComponentUpdate(nextProps: Readonly<P>) {
+      // @preact/signals sets __$f bit 1 when a signal read during render
+      // changed — honor it or those reads never repaint memoized turns.
+      if (((this as { __$f?: number }).__$f ?? 0) & 1) return true;
       return !same(this.props, nextProps);
     }
     render() {

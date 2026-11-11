@@ -35,6 +35,24 @@ test("an inbound peer note renders live in the open transcript", async ({ page }
     await expect(card).toContainText("Live ping from the peer session.");
     // Unaddressed provenance: the header names the sender endpoint id.
     await expect(card).toContainText("ses_fakesender0000000000000");
+    // Registry renames reach the memoized card through the signal it reads
+    // in render — the header must follow without any prop change.
+    await page.evaluate(() =>
+      window.postMessage(
+        {
+          type: "peers",
+          peers: [
+            {
+              id: "ses_fakesender0000000000000",
+              name: "Renamed peer",
+              title: "Windows build",
+            },
+          ],
+        },
+        "*",
+      ),
+    );
+    await expect(card).toContainText('Peer · Renamed peer · "Windows build"');
     // Still the same view — no reload or session switch happened.
     await expect(page.locator(".msgs .turn").first()).toBeVisible();
   } finally {
