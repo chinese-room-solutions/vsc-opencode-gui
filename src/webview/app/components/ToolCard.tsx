@@ -330,6 +330,9 @@ export function summary(part: ToolPart): string {
 // healthy stream between chunks never flags.
 export function modelWaitAnchor(part: ToolPart): number | undefined {
   if (part.state?.status !== "running") return undefined;
+  // A running task waits on its child session, never on the model's arg
+  // stream — a re-pull wipes the live args text and would mislabel it.
+  if (isTaskTool(part.tool)) return undefined;
   if (part.state.inputText || summary(part)) return undefined;
   const anchor = Math.max(
     part.state.time?.start ?? 0,
