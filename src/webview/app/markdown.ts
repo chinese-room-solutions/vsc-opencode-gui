@@ -475,6 +475,21 @@ function selectionMarkdown(box: HTMLElement): string {
     .trim();
 }
 
+// The clean structural HTML flavor of a selection copy: structure only
+// (paragraphs, pre, code, lists, links) — every style, class, and control
+// element stripped, so a rich paste target applies its own formatting
+// instead of inheriting theme colors or swallowing copy buttons.
+const COPY_STRIP = "style, script, button, svg, .code-copy";
+function cleanSelectionHtml(box: HTMLElement): string {
+  box.querySelectorAll(COPY_STRIP).forEach((el) => el.remove());
+  for (const el of [box, ...box.querySelectorAll("*")]) {
+    for (const attr of [...el.attributes]) {
+      if (attr.name !== "href") el.removeAttribute(attr.name);
+    }
+  }
+  return box.innerHTML;
+}
+
 export function initTranscriptCopy(): void {
   document.addEventListener("copy", (e) => {
     const sel = document.getSelection();
@@ -493,18 +508,23 @@ export function initTranscriptCopy(): void {
     // A copy from inside one code block is raw code — fences and the
     // language tag are noise when the snippet is headed for an editor.
     // Both endpoints inside one pre ⇒ nothing outside it is selected.
+    // Rich targets get the same code wrapped in a bare <pre>, or they
+    // would flow the newlines away.
     if (common?.closest("pre")) {
+      const text = (range.cloneContents().textContent ?? "").replace(/\n+$/, "");
+      const pre = document.createElement("pre");
+      pre.textContent = text;
       e.preventDefault();
-      e.clipboardData?.setData(
-        "text/plain",
-        (range.cloneContents().textContent ?? "").replace(/\n+$/, ""),
-      );
+      e.clipboardData?.setData("text/plain", text);
+      e.clipboardData?.setData("text/html", pre.outerHTML);
       return;
     }
     const box = document.createElement("div");
     box.appendChild(range.cloneContents());
+    // Plain targets paste markdown; rich targets paste clean structure.
     e.preventDefault();
     e.clipboardData?.setData("text/plain", selectionMarkdown(box));
+    e.clipboardData?.setData("text/html", cleanSelectionHtml(box));
   });
 }
 

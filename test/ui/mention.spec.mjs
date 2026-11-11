@@ -284,6 +284,12 @@ test("the mirror matches the textarea's metrics and the textarea paints transpar
   });
   expect(same.metrics).toBe(true);
   expect(same.color).toBe("rgba(0, 0, 0, 0)");
-  expect(same.caret).not.toBe("rgba(0, 0, 0, 0)");
+  // The native caret is transparent by design (styles.css): no div can
+  // mirror the textarea's internal caret layout exactly, so the mirror
+  // paints its own (.mirror-caret) once focused with text to measure.
+  expect(same.caret).toBe("rgba(0, 0, 0, 0)");
   expect(same.mirrorPointer).toBe("none");
+  await page.locator(".composer textarea").click();
+  await page.keyboard.type("x");
+  await expect(page.locator(".mirror-caret")).toBeVisible();
 });

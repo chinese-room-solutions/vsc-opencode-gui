@@ -111,9 +111,14 @@ test("user message copy button copies the prompt", async ({ page }) => {
 });
 
 test("tool output copy button preserves newlines", async ({ page }) => {
-  await page.locator(".tool-row.expander").first().click();
+  // The Shell row's OUT (the seeded fixture's first tool turn also carries
+  // file-tool rows above the shell in turn order - pin, don't take first).
+  const shell = page
+    .locator(".tool")
+    .filter({ has: page.locator(".tool-name", { hasText: "Shell" }) });
+  await shell.locator(".tool-row.expander").click();
   await sentinel(page);
-  await page.locator('button[aria-label="Copy OUT"]').first().click();
+  await shell.locator('button[aria-label="Copy OUT"]').click();
   expect(await readText(page)).toBe("out/webview/app.js   390.6kb\nDone in 19ms");
 });
 
