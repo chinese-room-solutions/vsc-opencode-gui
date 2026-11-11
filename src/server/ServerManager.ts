@@ -428,6 +428,19 @@ export class ServerManager {
           else args.push("--mdns");
         }
 
+        const childEnv: NodeJS.ProcessEnv = {
+          ...process.env,
+          OPENCODE_CALLER: "vscode",
+          ...(spawnPassword
+            ? { OPENCODE_SERVER_PASSWORD: spawnPassword }
+            : {}),
+          OPENCODE_CONFIG_CONTENT: withGuiConfig(
+            process.env.OPENCODE_CONFIG_CONTENT,
+          ),
+        };
+        // v2's serve prefers an inherited OPENCODE_PASSWORD over our own,
+        // which would 401 every call and read as a v1 dialect — drop it.
+        if (spawnPassword) delete childEnv.OPENCODE_PASSWORD;
         this.serverProcess = spawn(commandLine, args, {
           cwd,
           // Windows: bare "opencode" won't resolve to opencode.cmd without a
@@ -435,16 +448,7 @@ export class ServerManager {
           shell: process.platform === "win32",
           windowsHide: true,
           stdio: "pipe",
-          env: {
-            ...process.env,
-            OPENCODE_CALLER: "vscode",
-            ...(spawnPassword
-              ? { OPENCODE_SERVER_PASSWORD: spawnPassword }
-              : {}),
-            OPENCODE_CONFIG_CONTENT: withGuiConfig(
-              process.env.OPENCODE_CONFIG_CONTENT,
-            ),
-          },
+          env: childEnv,
         });
         this._spawnedPort = port;
 

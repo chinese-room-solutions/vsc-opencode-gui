@@ -7,12 +7,13 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { ServerManager, normWorktree } from "../server/ServerManager";
 import { ChatHub } from "../webview/ChatHub";
+import { serverAuthHeaders, setSpawnedServerPassword } from "../server/serverAuth";
 
 // Runs inside the extension host (see lifecycle.ts for the harness). Covers
 // ServerManager directly, complementing lifecycle.ts's end-to-end runs:
 // argv/path handling, attach-vs-spawn on a live port, the lease/store
 // bookkeeping, and dispose's kill path. Real `opencode serve` boots are
-// allowed but kept to three; every manager lands in `managers` so a failure
+// allowed but kept to four; every manager lands in `managers` so a failure
 // cannot leak a child past the suite.
 
 const managers: ServerManager[] = [];
@@ -99,6 +100,29 @@ async function boot(
   return { sm, hub, store };
 }
 
+// Sets env vars for the duration of fn and restores the ambient values
+// after — the extension host process env is shared by every suite.
+async function withEnv(
+  vars: Record<string, string | undefined>,
+  fn: () => Promise<void>,
+): Promise<void> {
+  const prev = Object.entries(vars).map(
+    ([k]) => [k, process.env[k]] as const,
+  );
+  try {
+    for (const [k, v] of Object.entries(vars)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    await fn();
+  } finally {
+    for (const [k, v] of prev) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+}
+
 suite("opencode ServerManager", function () {
   test("normWorktree folds separators, drive case, and trailing slashes", function () {
     assert.strictEqual(normWorktree("c:\\foo\\bar\\"), "C:/foo/bar");
@@ -107,6 +131,28 @@ suite("opencode ServerManager", function () {
     assert.strictEqual(normWorktree("C:/MiXeD/Case"), "C:/MiXeD/Case");
     assert.strictEqual(normWorktree("c:\\"), "C:");
     assert.strictEqual(normWorktree("/home/x///"), "/home/x");
+  });
+
+  test("serverAuthHeaders prefers the spawned password, then OPENCODE_PASSWORD", async function () {
+    // The module state leaks across tests, so pin it here and below.
+    setSpawnedServerPassword(undefined);
+    await withEnv(
+      { OPENCODE_PASSWORD: "inherited", OPENCODE_SERVER_PASSWORD: "legacy" },
+      async () => {
+        assert.strictEqual(
+          serverAuthHeaders().authorization,
+          "Basic " + Buffer.from("opencode:inherited").toString("base64"),
+          "v2's order: an inherited OPENCODE_PASSWORD wins",
+        );
+        setSpawnedServerPassword("ours");
+        assert.strictEqual(
+          serverAuthHeaders().authorization,
+          "Basic " + Buffer.from("opencode:ours").toString("base64"),
+          "our spawned server's password wins",
+        );
+        setSpawnedServerPassword(undefined);
+      },
+    );
   });
 
   test("a missing configured binary errors out instead of hanging", async function () {
@@ -226,6 +272,33 @@ suite("opencode ServerManager", function () {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
     await sm.dispose();
+  });
+
+  test("an inherited OPENCODE_PASSWORD does not break the spawned server", async function () {
+    let sm: ServerManager | undefined;
+    let url = "";
+    try {
+      await withEnv({ OPENCODE_PASSWORD: "wrong" }, async () => {
+        const booted = await boot(await freePort());
+        sm = booted.sm;
+        // v2 would otherwise prefer the inherited password, 401 every
+        // call, and bake a v1 dialect for the server's lifetime.
+        url = await waitForUrl(booted.hub);
+        let sessions: unknown;
+        for (let i = 0; i < 6 && !Array.isArray(sessions); i++) {
+          sessions = await booted.sm.listSessions();
+          if (!Array.isArray(sessions))
+            await new Promise((r) => setTimeout(r, 500));
+        }
+        assert.ok(
+          Array.isArray(sessions),
+          "listSessions answers despite the inherited password",
+        );
+      });
+    } finally {
+      if (sm) await sm.dispose();
+    }
+    assert.ok(await untilDead(url), "dispose killed the server");
   });
 
   suiteTeardown(async function () {
