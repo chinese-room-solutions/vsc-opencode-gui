@@ -2694,7 +2694,9 @@ export async function unrevertSession(
 // GET /session?directory= (v1) — a project's sessions, unpaged. Only ids
 // are read (project purge). v2 has no directory filter: walk the paginated
 // /api/session list and match rows by their location directory (folded for
-// the compare — separators and drive-letter case).
+// the compare — separators and drive-letter case). Returns undefined when
+// a page fails or the walk hits its page cap — a truncated list must not
+// read as complete.
 export async function fetchProjectSessions(
   directory: string,
 ): Promise<{ id: string }[] | undefined> {
@@ -2704,7 +2706,8 @@ export async function fetchProjectSessions(
     const want = fold(directory);
     const out: { id: string }[] = [];
     let cursor: string | undefined;
-    for (let page = 0; page < 10; page++) {
+    let page = 0;
+    for (; page < 10; page++) {
       const params = new URLSearchParams({ limit: "400" });
       if (cursor) {
         params.set("cursor", cursor);
@@ -2714,13 +2717,17 @@ export async function fetchProjectSessions(
         data?: Session[];
         cursor?: { next?: string };
       }>(`/api/session?${params}`);
-      if (!body) break;
+      if (!body) return undefined;
       for (const s of body.data ?? [])
         if (fold(s.location?.directory) === want) out.push({ id: s.id });
       if ((body.data?.length ?? 0) < 400) break;
       cursor = body.cursor?.next;
       if (!cursor) break;
     }
+    // The walk ran off its page cap — every page was full and carried a
+    // next cursor, so the list is truncated, not complete: refuse like a
+    // failed page (a purge could otherwise strand the unseen sessions).
+    if (page === 10) return undefined;
     return out;
   }
   return getJson<{ id: string }[]>(
