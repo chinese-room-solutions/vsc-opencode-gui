@@ -72,10 +72,33 @@ function themeTokenVars(): Record<string, string> {
   return resolve().vars;
 }
 
-function resolve(): Resolved {
-  const theme = vscode.workspace
+// With window.autoDetectColorScheme the workbench applies a
+// workbench.preferred*ColorTheme per OS scheme while the colorTheme setting
+// value stays put, so read what is actually applied. Empty or placeholder
+// preferred values fall back to colorTheme.
+const PREFERRED_BY_KIND: Partial<Record<vscode.ColorThemeKind, string>> = {
+  [vscode.ColorThemeKind.Light]: "preferredLightColorTheme",
+  [vscode.ColorThemeKind.Dark]: "preferredDarkColorTheme",
+  [vscode.ColorThemeKind.HighContrast]: "preferredHighContrastColorTheme",
+  [vscode.ColorThemeKind.HighContrastLight]:
+    "preferredHighContrastLightColorTheme",
+};
+
+function themeLabel(): string {
+  const setting = vscode.workspace
     .getConfiguration("workbench")
     .get<string>("colorTheme", "");
+  if (!vscode.workspace.getConfiguration("window").get<boolean>("autoDetectColorScheme", false))
+    return setting;
+  const preferred = PREFERRED_BY_KIND[vscode.window.activeColorTheme.kind];
+  const label = preferred
+    ? vscode.workspace.getConfiguration("workbench").get<string>(preferred, "")
+    : "";
+  return label && label !== "default" ? label : setting;
+}
+
+function resolve(): Resolved {
+  const theme = themeLabel();
   const glow = glowEnabled();
   const key = `${theme}|${glow ? "glow" : "flat"}`;
   if (cache?.key === key) return cache;

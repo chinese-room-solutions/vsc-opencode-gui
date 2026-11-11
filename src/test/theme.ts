@@ -31,6 +31,13 @@ suite("opencode theme", function () {
   const origGlow = vscode.workspace
     .getConfiguration("opencodeGui")
     .get<boolean>("codeGlow", false);
+  const origAutoDetect = vscode.workspace
+    .getConfiguration("window")
+    .get<boolean>("autoDetectColorScheme", false);
+  // Filled by the auto-detect test: the preferred key for the host's scheme
+  // and its setting value before the test ran.
+  let preferredKey = "";
+  let origPreferred = "";
 
   test("glowShadow handles 3, 4, 6, and 8-digit hex", function () {
     assert.strictEqual(
@@ -126,6 +133,41 @@ suite("opencode theme", function () {
     assert.strictEqual(themeStyle(), "");
   });
 
+  test("an auto-detected scheme reads the preferred theme, not colorTheme", async function () {
+    // The preferred setting must match the host's actual scheme — the
+    // workbench only applies the one for activeColorTheme.kind.
+    const kind = vscode.window.activeColorTheme.kind;
+    preferredKey =
+      kind === vscode.ColorThemeKind.Light
+        ? "preferredLightColorTheme"
+        : kind === vscode.ColorThemeKind.HighContrast
+          ? "preferredHighContrastColorTheme"
+          : kind === vscode.ColorThemeKind.HighContrastLight
+            ? "preferredHighContrastLightColorTheme"
+            : "preferredDarkColorTheme";
+    origPreferred = vscode.workspace
+      .getConfiguration("workbench")
+      .get<string>(preferredKey, "");
+    const windowCfg = vscode.workspace.getConfiguration("window");
+    const workbenchCfg = vscode.workspace.getConfiguration("workbench");
+    await windowCfg.update(
+      "autoDetectColorScheme",
+      true,
+      vscode.ConfigurationTarget.Global,
+    );
+    await workbenchCfg.update(
+      preferredKey,
+      "oc-test-preferred-theme",
+      vscode.ConfigurationTarget.Global,
+    );
+    invalidateThemeTokens();
+    await until(() => themeKey().startsWith("oc-test-preferred-theme"));
+    assert.ok(
+      !themeKey().includes(origTheme),
+      "the colorTheme value is ignored while auto-detect is on",
+    );
+  });
+
   suiteTeardown(async function () {
     await vscode.workspace
       .getConfiguration("workbench")
@@ -133,6 +175,14 @@ suite("opencode theme", function () {
     await vscode.workspace
       .getConfiguration("opencodeGui")
       .update("codeGlow", origGlow, vscode.ConfigurationTarget.Global);
+    await vscode.workspace
+      .getConfiguration("window")
+      .update("autoDetectColorScheme", origAutoDetect, vscode.ConfigurationTarget.Global);
+    if (preferredKey) {
+      await vscode.workspace
+        .getConfiguration("workbench")
+        .update(preferredKey, origPreferred || undefined, vscode.ConfigurationTarget.Global);
+    }
     invalidateThemeTokens();
   });
 });

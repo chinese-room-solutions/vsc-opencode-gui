@@ -10,7 +10,7 @@
     "url": "https://github.com/chinese-room-solutions/vsc-opencode-gui.git"
   },
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.92.0"
   },
   "categories": [
     "Other"
