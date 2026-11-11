@@ -632,10 +632,11 @@ export interface QuestionRequest {
 // returns [] for them — wire-verified 1.18.25). A form row maps onto the
 // v1 question shape the dock renders; the form flag routes its reply to
 // the form endpoints. The /api copy wins on an id collision, so a v2 ask
-// that shows up in both keeps the v2 reply route. On v2 the global leg is
-// skipped — there is no /question route, and the SPA fallback would
-// answer it with HTML (the relay logs that as a failure).
-// Which of the two lists actually loaded rides along: a refresh may only
+// that shows up in both keeps the v2 reply route. On v2 the v1 /question
+// leg stays skipped (no such route — the SPA fallback would answer it
+// with HTML), and a third leg pulls the fixed "global" session's forms:
+// MCP elicitations dock there, so they answer in every session view.
+// Which of the lists actually loaded rides along: a refresh may only
 // retire an ask its own pipeline's list confirmed absent.
 export interface SessionQuestions {
   rows: QuestionRequest[];
@@ -645,15 +646,19 @@ export interface SessionQuestions {
 export async function fetchSessionQuestions(
   id: string,
 ): Promise<SessionQuestions | undefined> {
-  const [v2, global] = await Promise.all([
+  const [v2, global, globalForms] = await Promise.all([
     serverDialect === "v2"
       ? getJson<{ data?: unknown[] }>(`/api/session/${id}/form`)
       : getJson<{ data?: QuestionRequest[] }>(`/api/session/${id}/question`),
     serverDialect === "v2"
       ? Promise.resolve(undefined)
       : getJson<QuestionRequest[]>("/question"),
+    serverDialect === "v2"
+      ? getJson<{ data?: unknown[] }>("/api/session/global/form")
+      : Promise.resolve(undefined),
   ]);
-  if (v2 === undefined && global === undefined) return undefined;
+  if (v2 === undefined && global === undefined && globalForms === undefined)
+    return undefined;
   const v2Rows =
     serverDialect === "v2"
       ? ((Array.isArray((v2 as { data?: unknown[] })?.data)
@@ -668,8 +673,15 @@ export async function fetchSessionQuestions(
   const v1Rows = (Array.isArray(global) ? global : [])
     .filter((q) => q.sessionID === id && !seen.has(q.id))
     .map((q) => ({ ...q, v1: true }));
+  const globalRows = (
+    Array.isArray((globalForms as { data?: unknown[] })?.data)
+      ? (globalForms as { data: unknown[] }).data
+      : []
+  )
+    .map((f) => formToQuestion(f as Record<string, unknown>, "global"))
+    .filter((q): q is QuestionRequest => !!q && !seen.has(q.id));
   return {
-    rows: [...v2Rows, ...v1Rows],
+    rows: [...v2Rows, ...v1Rows, ...globalRows],
     v2Loaded: v2 !== undefined,
     globalLoaded: global !== undefined,
   };

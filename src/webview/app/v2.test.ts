@@ -49,11 +49,14 @@ import type { FilePart, Session } from "./api";
 import { translateV2Event } from "./v2events";
 import { judgeDialect, detectDialect, awaitDialect } from "../../server/dialect";
 import {
+  answerQuestion,
   commands,
   init,
   messagesBySession,
+  pendingQuestions,
   providers,
   refreshProvidersIfStale,
+  refreshQuestions,
   resyncFromServer,
   resetBaseRetryForTest,
   sendPrompt,
@@ -1579,6 +1582,85 @@ describe("v2 transcript normalization (fetchMessages)", () => {
       callsFor("/api/session/ses_1/form/frm_typ/reply")[1].body,
       { answer: { count: "abc", total: 7, confirm: false } },
     );
+  });
+
+  it("a global (MCP elicitation) form docks in a session view and answers on the global route", async () => {
+    pendingQuestions.value = [];
+    onApi((call) => {
+      if (call.path === "/api/session/ses_1/form") return { data: [] };
+      if (call.path === "/api/session/global/form")
+        return {
+          data: [
+            formRow(
+              "frm_g",
+              "Proceed with the tool?",
+              "Proceed",
+              "go",
+              [["yes", "Yes"]],
+              "global",
+            ),
+          ],
+        };
+      if (call.method === "POST" && call.path === "/api/session/global/form/frm_g/reply")
+        return {};
+      return undefined;
+    });
+    // A missed form.created re-docks from the open session's refresh.
+    await refreshQuestions("ses_1");
+    const docked = pendingQuestions.value.find((q) => q.id === "frm_g")!;
+    assert.equal(docked.sessionID, "global");
+    assert.equal(docked.v1, false);
+    await answerQuestion("global", "frm_g", [["Yes"]]);
+    assert.deepEqual(
+      callsFor("/api/session/global/form/frm_g/reply")[0].body,
+      { answer: { go: "yes" } },
+    );
+    assert.equal(callsFor("/api/session/ses_1/form/frm_g/reply").length, 0);
+    assert.equal(pendingQuestions.value.length, 0);
+  });
+
+  it("a form listed on both the session and global legs keeps the session copy", async () => {
+    onApi((call) => {
+      if (call.path === "/api/session/ses_1/form")
+        return {
+          data: [
+            formRow("frm_g", "Proceed?", "Proceed", "go", [["yes", "Yes"]], "ses_1"),
+          ],
+        };
+      if (call.path === "/api/session/global/form")
+        return {
+          data: [
+            formRow("frm_g", "Proceed?", "Proceed", "go", [["yes", "Yes"]], "global"),
+          ],
+        };
+      return undefined;
+    });
+    const questions = await fetchSessionQuestions("ses_1");
+    assert.equal(questions?.rows.length, 1);
+    assert.equal(questions?.rows[0].sessionID, "ses_1");
+  });
+
+  it("a failed global form list leaves a docked elicitation docked", async () => {
+    pendingQuestions.value = [];
+    v2sse("form.created", {
+      form: formRow(
+        "frm_g",
+        "Proceed with the tool?",
+        "Proceed",
+        "go",
+        [["yes", "Yes"]],
+        "global",
+      ),
+    });
+    await flushEvents();
+    assert.equal(pendingQuestions.value.some((q) => q.id === "frm_g"), true);
+    onApi((call) => {
+      if (call.path === "/api/session/ses_1/form") return { data: [] };
+      if (call.path === "/api/session/global/form") return API_FAIL;
+      return undefined;
+    });
+    await refreshQuestions("ses_1");
+    assert.equal(pendingQuestions.value.some((q) => q.id === "frm_g"), true);
   });
 
   it("fetchSessionStatus reads the active record's keys; fetchAgents keeps display labels", async () => {

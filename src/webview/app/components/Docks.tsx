@@ -388,7 +388,11 @@ export function Docks(props: { sessionId: string }) {
     if (pending && popover.value) setPopover(undefined);
   });
   const perms = pendingPermissions.value.filter((p) => p.sessionID === id);
-  const asks = pendingQuestions.value.filter((q) => q.sessionID === id);
+  // "global" is the server's escape hatch for MCP elicitations — they carry
+  // no session, so they dock in every session view.
+  const asks = pendingQuestions.value.filter(
+    (q) => q.sessionID === id || q.sessionID === "global",
+  );
   if (perms.length === 0 && asks.length === 0) return null;
   return (
     <div class="docks">
