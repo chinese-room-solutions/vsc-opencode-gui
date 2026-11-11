@@ -79,7 +79,7 @@ function cmdlineForPort(port: number): string {
       "-NoProfile",
       "-c",
       `Get-CimInstance Win32_Process -Filter "Name='opencode.exe'" | ` +
-        `Where-Object { $_.CommandLine -like '*serve --port ${port}*' } | ` +
+        `Where-Object { $_.CommandLine -match 'serve --port ${port}( |$)' } | ` +
         `Select-Object -ExpandProperty CommandLine`,
     ],
     { encoding: "utf8", timeout: 20_000, windowsHide: true },

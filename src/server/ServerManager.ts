@@ -619,7 +619,7 @@ export class ServerManager {
               "-NoProfile",
               "-c",
               `Get-CimInstance Win32_Process -Filter "Name='opencode.exe'" | ` +
-                `Where-Object { $_.CommandLine -like '*serve --port ${port}*' } | ` +
+                `Where-Object { $_.CommandLine -match 'serve --port ${port}( |$)' } | ` +
                 `ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`,
             ],
             { windowsHide: true, timeout: 5000 },
@@ -647,7 +647,7 @@ export class ServerManager {
       proc.kill();
     if (port && sweep && process.platform !== "win32") {
       try {
-        await execFile("pkill", ["-f", `serve --port ${port}`], {
+        await execFile("pkill", ["-f", `serve --port ${port}( |$)`], {
           timeout: 5000,
         });
       } catch {
