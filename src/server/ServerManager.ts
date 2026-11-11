@@ -290,6 +290,8 @@ export class ServerManager {
   private _spawnedPort: number | undefined;
   private _leaseTimer: NodeJS.Timeout | undefined;
   private _leaseCtx: vscode.ExtensionContext | undefined;
+  // Health poll for an attached (not spawned) server; see _startDeathWatch.
+  private _watchTimer: NodeJS.Timeout | undefined;
   private _markReady!: () => void;
   // Dialect of the attached server (probe-based, works for spawn and
   // attach); undefined until detected.
@@ -381,6 +383,11 @@ export class ServerManager {
       // (no per-host probe) and picks the pump set from it.
       hub.setServerUrl(this._apiBaseUrl, dialect);
       this._startLease(context, Number(parsed.port));
+      // The spawned child watches itself (its exit event drives the
+      // respawn); an attached server is someone else's, and its death
+      // fires no event here.
+      if (this._spawnedPort === undefined)
+        this._startDeathWatch(this._apiBaseUrl, hub);
     };
 
     // Check if a server from the previous session is still running on this
@@ -607,6 +614,7 @@ export class ServerManager {
     ServerManager._live.delete(this);
     if (this.bootTimer) clearTimeout(this.bootTimer);
     this.bootTimer = undefined;
+    this._stopDeathWatch();
     setSpawnedServerPassword(undefined);
     // The per-port secret survives dispose: a future host re-attaches to
     // a child that outlives this window.
@@ -726,6 +734,37 @@ export class ServerManager {
     write();
     this._leaseTimer = setInterval(write, 30_000);
     this._leaseTimer.unref?.();
+  }
+
+  // A 30s health poll for a server this manager did not spawn (another
+  // window's, or the user's own): its death fires no exit event here, and
+  // the event pumps would reconnect forever in silence. Three consecutive
+  // failures stop the poll and surface the loss — respawning someone
+  // else's server is never right. (The spawned path is excluded: its exit
+  // handler already owns death, and a poll here could fire mid-respawn.)
+  private _startDeathWatch(
+    baseUrl: string,
+    hub: ChatHub,
+    intervalMs = 30_000,
+  ): void {
+    let failures = 0;
+    this._watchTimer = setInterval(() => {
+      void this.isServerAlive(baseUrl).then((alive) => {
+        if (this._watchTimer === undefined) return;
+        failures = alive ? 0 : failures + 1;
+        if (failures < 3) return;
+        this._stopDeathWatch();
+        hub.setError(
+          "The opencode server this window attached to is gone. Restart it, then reload the window.",
+        );
+      });
+    }, intervalMs);
+    this._watchTimer.unref?.();
+  }
+
+  private _stopDeathWatch(): void {
+    if (this._watchTimer) clearInterval(this._watchTimer);
+    this._watchTimer = undefined;
   }
 
   // Port of the spawned `opencode serve` (0/undefined before boot, or when

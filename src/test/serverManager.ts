@@ -1,5 +1,6 @@
 import * as assert from "assert";
 import * as net from "net";
+import * as http from "http";
 import { spawnSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
@@ -276,10 +277,81 @@ suite("opencode ServerManager", function () {
       secrets.has(key),
       "the re-attach consumed nothing: the secret stays for the next host",
     );
+    // Spawned children watch themselves through their exit event; the
+    // attached orphan gets the health poll.
+    const watchOf = (m: ServerManager) =>
+      (m as unknown as { _watchTimer?: NodeJS.Timeout })._watchTimer;
+    assert.strictEqual(watchOf(a.sm), undefined, "a spawned child is not polled");
+    assert.ok(watchOf(sm), "an attached server is polled");
     await sm.dispose();
     assert.strictEqual((await fetch(url)).status, 200, "attacher spared the orphan");
     await a.sm.dispose();
     assert.ok(await untilDead(url), "the spawner's dispose killed the orphan");
+  });
+
+  test("a dead attached server surfaces after the poll gives up, no respawn", async function () {
+    const port = await freePort();
+    const cwd = vscode.workspace.workspaceFolders![0].uri.fsPath;
+    // A v1-flavored fake: enough JSON for isServerAlive, servesWorkspace,
+    // and the dialect probe to conclude.
+    const fake = http.createServer((req, res) => {
+      const json = (body: unknown) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(body));
+      };
+      const url = req.url ?? "";
+      if (url.startsWith("/api/health")) json({ healthy: true });
+      else if (url.startsWith("/project/current")) json({ worktree: cwd });
+      else if (url.startsWith("/api/session")) json([]);
+      else {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end("{}");
+      }
+    });
+    await new Promise<void>((r) => fake.listen(port, "127.0.0.1", () => r()));
+    const hub = new ChatHub();
+    const sm = new ServerManager();
+    managers.push(sm);
+    const { ctx } = fakeContext();
+    await sm.start(hub, ctx, port);
+    assert.strictEqual(
+      await waitForUrl(hub, 30_000),
+      `http://localhost:${port}`,
+      "attached to the fake, nothing spawned",
+    );
+    const internal = sm as unknown as {
+      _watchTimer: NodeJS.Timeout | undefined;
+      _startDeathWatch: (base: string, hub: ChatHub, ms?: number) => void;
+    };
+    assert.ok(internal._watchTimer, "the attach started the poll");
+    // The real poll is 30s with three strikes — same logic at test speed.
+    clearInterval(internal._watchTimer);
+    internal._startDeathWatch(`http://localhost:${port}`, hub, 100);
+    fake.closeAllConnections();
+    await new Promise<void>((r) => fake.close(() => r()));
+    const deadline = Date.now() + 30_000;
+    for (;;) {
+      const s = hub.state;
+      if (s.kind === "error") {
+        assert.strictEqual(
+          s.message,
+          "The opencode server this window attached to is gone. Restart it, then reload the window.",
+        );
+        break;
+      }
+      assert.ok(
+        Date.now() < deadline,
+        "the death watch never surfaced the loss",
+      );
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.strictEqual(
+      internal._watchTimer,
+      undefined,
+      "the poll stopped once the error landed",
+    );
+    assert.strictEqual(sm.serverPort, port, "nothing was respawned");
+    await sm.dispose();
   });
 
   test("exposeToNetwork binds all interfaces on v2 and dials localhost", async function () {
