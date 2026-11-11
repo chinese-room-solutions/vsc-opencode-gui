@@ -779,7 +779,7 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
     } else if (text.startsWith("/")) {
       void runSlashCommand(props.sessionId, text);
     } else {
-      void sendPrompt(props.sessionId, text, files);
+      void sendPrompt(props.sessionId, text, files, findCache.current);
     }
   };
 

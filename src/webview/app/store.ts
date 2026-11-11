@@ -165,11 +165,20 @@ export type QueuedTurn = {
   kind: "prompt" | "command";
   text: string;
   files?: ComposerFile[];
+  // The composer's file-finder verdicts riding this prompt (see
+  // MentionVerdicts) — the flush filters with the same map the send had.
+  verdicts?: MentionVerdicts;
   // The durable echo's row id, for a queued command — the run retires
   // exactly this row when it completes.
   echoCid?: string;
 };
 export const queuedTurns = signal<QueuedTurn[]>([]);
+
+// The composer's file-finder verdicts per resolved path: true = the
+// server's finder vouched for the path, false = it names no such file.
+// A prompt whose @token has a negative verdict sends that token as plain
+// text — v2 rejects the whole POST when an attachment is unreadable.
+export type MentionVerdicts = ReadonlyMap<string, boolean>;
 
 function dropQueued(id: string): void {
   const gone = queuedTurns.value.filter((q) => q.id === id);
@@ -4453,6 +4462,7 @@ export async function sendPrompt(
   target: string,
   text: string,
   files: ComposerFile[] = [],
+  verdicts?: MentionVerdicts,
 ): Promise<void> {
   const body = text.trim();
   if (!body) return;
@@ -4467,7 +4477,7 @@ export async function sendPrompt(
     appendPending(id, body, files);
     queuedTurns.value = [
       ...queuedTurns.value,
-      { id, kind: "prompt", text: body, files },
+      { id, kind: "prompt", text: body, files, verdicts },
     ];
     // The queue entry owns the attachments from here — the composer's
     // chips go now (a take-back hands them back); postPrompt's clear on
@@ -4492,7 +4502,7 @@ export async function sendPrompt(
   clearComposerFiles(id);
   // The send owns the attachments from here — the composer's chips go now
   // (a failed POST hands them back).
-  await postPrompt(id, body, files);
+  await postPrompt(id, body, files, verdicts);
 }
 
 // A failed POST gives the text back to the composer. The store-level
@@ -4517,6 +4527,7 @@ async function postPrompt(
   id: string,
   body: string,
   files: ComposerFile[],
+  verdicts?: MentionVerdicts,
 ): Promise<void> {
   sessionStatus.value = { ...sessionStatus.value, [id]: { type: "busy" } };
   // A v2 retry of a failed send reuses its minted id (idempotent server
@@ -4535,16 +4546,30 @@ async function postPrompt(
     sessions.value.find((s) => s.id === id)?.location?.directory ||
     currentDir.value ||
     "";
+  const mentions = parseMentions(
+    body,
+    base,
+    agents.value
+      .filter((a) => !a.hidden && a.mode !== "primary")
+      .map((a) => a.name),
+  );
+  // An @token the finder named no file for rides as plain text — v2
+  // rejects the whole POST over one unreadable attachment. Positive and
+  // unverified tokens attach as before (Enter can beat the finder's
+  // 200ms debounce, so unknown cannot stand in for negative).
   const parts = [
     { type: "text" as const, text: body },
     ...attachmentParts(files),
-    ...parseMentions(
-      body,
-      base,
-      agents.value
-        .filter((a) => !a.hidden && a.mode !== "primary")
-        .map((a) => a.name),
-    ),
+    ...(verdicts
+      ? mentions.filter((p) => {
+          if (p.type !== "file" || !p.source) return true;
+          const path = p.source.path;
+          return (
+            (verdicts.get(path) ?? verdicts.get(path.replace(/[\\/]+$/, ""))) !==
+            false
+          );
+        })
+      : mentions),
   ];
   const sel = currentSelection(id);
   // v2 has no per-turn agent/model on the prompt body — the switches are
@@ -4981,7 +5006,7 @@ effect(() => {
     // place in the conversation.
     if (hit.echoCid) restampCommandEcho(hit.id, hit.echoCid);
     void runSlashCommand(hit.id, hit.text, true, hit.echoCid);
-  } else void postPrompt(hit.id, hit.text, hit.files ?? []);
+  } else void postPrompt(hit.id, hit.text, hit.files ?? [], hit.verdicts);
 });
 
 // Permission docks. Request ids this client answered; a session-open fetch

@@ -125,6 +125,7 @@ import {
   attachmentPreviewForget,
 } from "./store";
 import { setDialect } from "./api";
+import { mentionTokens } from "./mentions";
 import type { ChatMessage, Status } from "./store";
 import { clampPartText, isTruncatedPart, PART_TEXT_CAP, streamingArg } from "./api";
 import type {
@@ -4482,6 +4483,107 @@ describe("v2 prompt retry ids", () => {
     await sendPrompt(sid, "v1 retry");
     for (const c of callsFor(`/session/${sid}/prompt_async`))
       assert.equal((c.body as { id?: string }).id, undefined);
+  });
+});
+
+describe("confirmed @file mentions", () => {
+  // The composer threads its file-finder verdicts (resolved path → vouched
+  // or not). v2 rejects the whole prompt over one unreadable attachment, so
+  // a token the finder named no file for must ride as plain text — while
+  // vouched and unverified tokens (Enter can beat the finder's debounce)
+  // still attach, and a send without verdicts behaves as before.
+  it("a negative verdict sends the token as text, unknown and positive attach", async () => {
+    setDialect("v2");
+    try {
+      const sid = "mv1";
+      const text = "bump @types/node, read @src/app.ts and @docs/x.md";
+      const base = "C:\\work\\repo";
+      sessions.value = [sessRow(sid, { agent: "build" })];
+      open(sid, []);
+      const tok = (rel: string) =>
+        mentionTokens(text, base, []).find((t) => t.rel === rel)!.path!;
+      onApi((call) => {
+        if (call.method === "POST" && call.path === `/api/session/${sid}/prompt`)
+          return {
+            data: {
+              id: "usr_mv1",
+              time: { created: Date.now() },
+              payload: { text },
+            },
+          };
+        return messageMock(sid, { data: [], cursor: {} })(call);
+      });
+      const verdicts = new Map([
+        [tok("types/node"), false],
+        [tok("docs/x.md"), true],
+      ]);
+      await sendPrompt(sid, text, [], verdicts);
+      const post = callsFor(`/api/session/${sid}/prompt`).at(-1)!
+        .body as { text: string; files?: { uri: string }[] };
+      // The refused token stays in the prompt text as prose.
+      assert.equal(post.text, text);
+      const uris = (post.files ?? []).map((f) => f.uri);
+      assert.equal(uris.some((u) => u.endsWith("/src/app.ts")), true);
+      assert.equal(uris.some((u) => u.endsWith("/docs/x.md")), true);
+      assert.equal(uris.some((u) => u.endsWith("/types/node")), false);
+      // No verdicts = the old behavior: every path-shaped token attaches.
+      await sendPrompt(sid, text);
+      const both = callsFor(`/api/session/${sid}/prompt`).at(-1)!
+        .body as { files?: { uri: string }[] };
+      const bothUris = (both.files ?? []).map((f) => f.uri);
+      assert.equal(bothUris.some((u) => u.endsWith("/src/app.ts")), true);
+      assert.equal(bothUris.some((u) => u.endsWith("/docs/x.md")), true);
+      assert.equal(bothUris.some((u) => u.endsWith("/types/node")), true);
+    } finally {
+      setDialect("v1");
+    }
+  });
+  it("a queued prompt flush filters with the verdicts it was sent with", async () => {
+    setDialect("v2");
+    try {
+      const sid = "mv2";
+      const text = "bump @types/node, read @src/app.ts";
+      const base = "C:\\work\\repo";
+      sessions.value = [sessRow(sid, { agent: "build" })];
+      open(sid, []);
+      const tok = (rel: string) =>
+        mentionTokens(text, base, []).find((t) => t.rel === rel)!.path!;
+      onApi((call) => {
+        if (call.method === "POST" && call.path === `/api/session/${sid}/prompt`)
+          return {
+            data: {
+              id: "usr_mv2",
+              time: { created: Date.now() },
+              payload: { text },
+            },
+          };
+        return messageMock(sid, { data: [], cursor: {} })(call);
+      });
+      // Busy with a held queue: the prompt queues behind it and both flush
+      // head-first on the idle.
+      setBusy(sid);
+      queuedTurns.value = [{ id: sid, kind: "prompt", text: "lead" }];
+      await sendPrompt(sid, text, [], new Map([[tok("types/node"), false]]));
+      const held = queuedTurns.value.find(
+        (q) => q.id === sid && q.kind === "prompt" && q.text === text,
+      );
+      assert.ok(held?.verdicts);
+      await sseFlush("session.idle", { sessionID: sid });
+      await sseFlush("session.idle", { sessionID: sid });
+      assert.equal(
+        queuedTurns.value.some((q) => q.id === sid),
+        false,
+      );
+      // The flush filtered with the map the send carried.
+      const post = callsFor(`/api/session/${sid}/prompt`).at(-1)!
+        .body as { text: string; files?: { uri: string }[] };
+      assert.equal(post.text, text);
+      const uris = (post.files ?? []).map((f) => f.uri);
+      assert.equal(uris.some((u) => u.endsWith("/src/app.ts")), true);
+      assert.equal(uris.some((u) => u.endsWith("/types/node")), false);
+    } finally {
+      setDialect("v1");
+    }
   });
 });
 
