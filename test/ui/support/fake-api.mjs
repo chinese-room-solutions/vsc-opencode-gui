@@ -1145,8 +1145,8 @@ const server = http.createServer(async (req, res) => {
         id: body.id ?? "perm_rig1",
         sessionID: body.sessionID ?? SESSION_ID,
         action: body.action ?? "bash",
-        resources: [],
-        save: [],
+        resources: Array.isArray(body.resources) ? body.resources : [],
+        save: Array.isArray(body.save) ? body.save : [],
       });
       json(res, 200, { ok: true });
       return;
@@ -1476,6 +1476,14 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const id = `ses_${Date.now()}`;
       json(res, 200, { id, title: body.title || `New session - ${new Date().toISOString()}`, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: Date.now(), updated: Date.now() }, directory });
+      return;
+    }
+    // The dock's answer (v2 asks reply on the per-session route): accepted
+    // like the real server would — the app drops the ask optimistically,
+    // but a 404 here would surface the failure banner in rig specs.
+    if ((m = path.match(/^\/api\/session\/([^/]+)\/permission\/([^/]+)\/reply$/))) {
+      await readBody(req);
+      json(res, 200, {});
       return;
     }
     if ((m = path.match(/^\/session\/([^/]+)\/prompt_async$/))) {

@@ -108,12 +108,15 @@ function useDockKeys(opts: {
 function PermissionDock(props: { perms: PermissionRequest[] }) {
   const perms = props.perms;
   const [step, setStep] = useState(0);
-  const [messages, setMessages] = useState<string[]>([]);
+  // Redirect drafts keyed by request id: an answer drops its tab and the
+  // survivors shift, so an index-aligned array would show one ask's draft
+  // against another.
+  const [messages, setMessages] = useState<Record<string, string>>({});
   const i = Math.min(step, perms.length - 1);
   const p = perms[i];
-  const message = messages[i] ?? "";
+  const message = messages[p.id] ?? "";
   const setMessage = (m: string) =>
-    setMessages(perms.map((_, k) => (k === i ? m : messages[k] ?? "")));
+    setMessages({ ...messages, [p.id]: m });
   const replies: ("once" | "always" | "reject")[] = p.save.length
     ? ["once", "always", "reject"]
     : ["once", "reject"];
