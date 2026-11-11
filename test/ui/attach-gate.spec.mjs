@@ -335,3 +335,35 @@ test("a model switch after attach is caught at send, not silently sent", async (
   expect(calls.calls).toHaveLength(0);
   expect(watched.errors).toEqual([]);
 });
+
+test("an Enter fired during a paste's attach still sends the file", async ({ page, rig }) => {
+  const watched = watchPage(page);
+  await openSession(page, rig.url);
+  // Hold the rig's snapshot reply open so the attach is definitely still
+  // in flight when Enter lands — the send must wait it out and post the
+  // chip, not an empty file list with an orphaned chip left behind.
+  await page.evaluate(() => {
+    window.__slowAttach = 400;
+  });
+  await page.fill(".composer textarea", "see this");
+  await page.evaluate(() => {
+    const ta = document.querySelector(".composer textarea");
+    const dt = new DataTransfer();
+    dt.items.add(new File(["%PDF-1.4 fake page"], "raced.pdf", { type: "application/pdf" }));
+    ta.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  await page.press(".composer textarea", "Enter");
+  const fileParts = async () =>
+    (await (await fetch(`${rig.api}/__control/prompts`)).json()).calls
+      .flatMap((c) => c.parts ?? [])
+      .filter((p) => p.type === "file");
+  await expect
+    .poll(fileParts, { timeout: 10_000 })
+    .toHaveLength(1);
+  const part = (await fileParts())[0];
+  // The chip landed before the body was built: the snapshotted path, not
+  // a data URI.
+  expect(part.filename).toBe("raced.pdf");
+  expect(part.url.startsWith("file:///repo/.opencode/attachments/")).toBe(true);
+  expect(watched.errors).toEqual([]);
+});

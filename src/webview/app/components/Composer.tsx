@@ -382,9 +382,13 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
   const savedDraft = useRef<{ text: string; caret: number } | undefined>(
     undefined,
   );
+  // A paste's attach is async (sniff/read/snapshot); a send fired before it
+  // lands must wait, so in-flight attaches chain here and send awaits them.
+  const attaching = useRef<Promise<void> | undefined>(undefined);
   useEffect(() => {
     setHistIndex(undefined);
     savedDraft.current = undefined;
+    attaching.current = undefined;
   }, [props.sessionId]);
   const resetSweep = () => {
     setHistIndex(undefined);
@@ -721,13 +725,25 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
     setSlashQuery(undefined);
   };
 
-  const send = () => {
+  const attach = (files: File[]) => {
+    const p = attachFiles(props.sessionId, files).then(() => {}, () => {});
+    attaching.current = attaching.current
+      ? Promise.all([attaching.current, p]).then(() => {}, () => {})
+      : p;
+  };
+
+  const send = async () => {
+    // Enter may beat a just-fired paste: wait out the attach, then read the
+    // box and the file list fresh — the render-scope files is stale after
+    // the await, and the refusal gate must see the chip that just landed.
+    await attaching.current;
     const el = ref.current;
     const text = el?.value ?? "";
     // Busy stays sendable — prompts are steered into the running turn by
     // the server (delivered as the next one); commands have no server
     // queue, so they're held client-side and fire when the turn ends.
     if (!el || !text.trim()) return;
+    const files = composerFilesFor(draftKey);
     // Restored chips (and a model switched after attach) bypassed the
     // attach-time gate — re-check before the text leaves the field, so a
     // refusal leaves text and chips in place to fix. Commands carry no
@@ -779,7 +795,7 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
     const files = Array.from(e.clipboardData?.files ?? []);
     if (files.length === 0) return;
     e.preventDefault();
-    void attachFiles(props.sessionId, files);
+    attach(files);
   };
 
   // File drops are captured at window level: anything dropped over the chat
@@ -819,7 +835,7 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
       const dt = e.dataTransfer;
       const files = Array.from(dt?.files ?? []);
       if (files.length > 0) {
-        void attachFiles(props.sessionId, files);
+        attach(files);
         return;
       }
       let urls: string[] = [];
@@ -990,7 +1006,7 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
     }
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
-      send();
+      void send();
     }
   };
 
@@ -1219,7 +1235,7 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
               class="comp-send"
               title="Send"
               aria-label="Send"
-              onClick={send}
+              onClick={() => void send()}
             >
               <ArrowUpIcon />
             </button>
