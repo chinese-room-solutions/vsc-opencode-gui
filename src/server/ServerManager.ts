@@ -1026,9 +1026,16 @@ export class ServerManager {
         },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       });
-      if (!res.ok) return undefined;
+      if (!res.ok) {
+        // 404 is how a dead session answers (isBlankSession, sessionTitle
+        // and sessionMessages probe them on purpose) — expected, quiet.
+        if (res.status !== 404)
+          log.warn(`request failed: ${method} ${path} HTTP ${res.status}`);
+        return undefined;
+      }
       return (await res.json()) as T;
-    } catch {
+    } catch (err) {
+      log.warn(`request failed: ${method} ${path}`, err);
       return undefined;
     }
   }
@@ -1060,8 +1067,11 @@ export class ServerManager {
         },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       });
+      if (!res.ok)
+        log.warn(`request failed: ${method} ${path} HTTP ${res.status}`);
       return res.ok;
-    } catch {
+    } catch (err) {
+      log.warn(`request failed: ${method} ${path}`, err);
       return false;
     }
   }
