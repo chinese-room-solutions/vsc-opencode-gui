@@ -5,10 +5,11 @@
 // each tick instead of hooking it, so it stays a drop-in. Pending parts
 // never flag (they include tools waiting on a permission/question, and those
 // asks gate escalation too), and compaction turns are excluded wholesale —
-// aborting the summary turn would wedge the session. Detection is headless:
-// running tool cards show their own elapsed-on-hover, the composer's Stop
-// interrupts, and nothing is sent into the session. The marks feed only the
-// opt-in auto-abort. opencodeGui.stuckToolSeconds (baked by AppHost) is the
+// aborting the summary turn would wedge the session. Nothing is sent into
+// the session — abort only, no follow-up prompt. The marks feed the
+// transcript's Interrupt chip and the opt-in auto-abort: running tool cards
+// show their own elapsed-on-hover and the composer's Stop interrupts
+// regardless. opencodeGui.stuckToolSeconds (baked by AppHost) is the
 // threshold; 0 disables detection. opencodeGui.stuckAutoAbortSeconds
 // escalates to an automatic interrupt; 0 (default) keeps it detection-only.
 import { isTaskTool, isTool } from "./api";

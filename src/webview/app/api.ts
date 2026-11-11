@@ -1987,15 +1987,6 @@ export async function createSession(
     : { error: res?.error };
 }
 
-// POST /session/{id}/prompt_async — the v1 pipeline, what every native
-// surface (TUI, web app) runs turns on. The v2 /api/session/{id}/prompt
-// writes the new session_message store, which nothing else reads: compaction
-// (POST /session/{id}/summarize) summarizes the legacy store only, so v2
-// sessions compacted to an empty "(none)" template and folded nothing. v1
-// accepts fire-and-forget (204); rows and deltas stream on GET /event. The
-// model rides along explicitly — prompt_async's own default resolution can
-// land on a model the account can't run (observed: zai-coding-plan
-// glm-5.3-highspeed → 429). A file part carries mime/url/filename.
 export function extOf(name: string): string {
   const i = name.lastIndexOf(".");
   return i > 0 ? name.slice(i + 1).toLowerCase() : "";
@@ -2227,6 +2218,12 @@ export async function promptSession(
         : {}),
     };
   }
+  // POST /session/{id}/prompt_async — the v1 pipeline, what every native
+  // surface (TUI, web app) runs turns on. Fire-and-forget (204): rows and
+  // deltas stream on GET /event. The model rides along explicitly —
+  // prompt_async's own default resolution can land on a model the account
+  // can't run (observed: zai-coding-plan glm-5.3-highspeed → 429). A file
+  // part carries mime/url/filename.
   const body = {
     parts,
     ...(agent ? { agent } : {}),

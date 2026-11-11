@@ -281,7 +281,7 @@
             "type": "number",
             "default": 0,
             "minimum": 0,
-            "description": "Seconds after the stuck mark before the turn is interrupted automatically and the agent is nudged. 0 (default) only offers the manual Interrupt chip."
+            "description": "Seconds after the stuck mark before the turn is interrupted automatically. 0 (default) only offers the manual Interrupt chip."
           }
         }
       }
