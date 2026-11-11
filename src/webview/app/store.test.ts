@@ -1611,17 +1611,24 @@ describe("attachment snapshot bridge", () => {
     const uri = "data:image/png;base64,AA";
     const p = requestAttachmentSnapshot("ses_x", uri, "dot.png", "image/png");
     await settle();
-    assert.deepEqual(hostPosted[hostPosted.length - 1], {
-      type: "save-attachment",
-      sessionId: "ses_x",
-      uri,
-      name: "dot.png",
-      mime: "image/png",
-    });
+    // The request still carries the bytes (uri), the reply pairs by rid.
+    const rid = (hostPosted.at(-1) as { rid?: unknown }).rid;
+    assert.equal(typeof rid, "string");
+    assert.deepEqual(
+      { ...(hostPosted.at(-1) as object), rid: "<rid>" },
+      {
+        type: "save-attachment",
+        sessionId: "ses_x",
+        rid: "<rid>",
+        uri,
+        name: "dot.png",
+        mime: "image/png",
+      },
+    );
     hostMessage({
       type: "attachment-saved",
       sessionId: "ses_x",
-      from: uri,
+      rid: rid as string,
       path: "file:///w/.opencode/attachments/ses_x/1-dot.png",
     });
     // The composer swaps the chip's uri for this path (attachFiles).
@@ -1633,8 +1640,10 @@ describe("attachment snapshot bridge", () => {
     await settle();
     assert.equal(fireExact(2000), 1);
     assert.equal(await p, undefined);
-    // A late reply finds no waiter — nothing throws, nothing resolves twice.
-    hostMessage({ type: "attachment-saved", from: uri, path: "file:///late" });
+    // A late reply (this request's rid, gone from the map) finds no waiter —
+    // nothing throws, nothing resolves twice.
+    const rid = (hostPosted.at(-1) as { rid?: unknown }).rid;
+    hostMessage({ type: "attachment-saved", rid: rid as string, path: "file:///late" });
     assert.equal(await p, undefined);
   });
 });

@@ -3504,24 +3504,28 @@ effect(() => {
 });
 // Attach-time snapshot bridge: the composer asks for a pasted
 // attachment's disk path, the host's "attachment-saved" reply resolves.
-// Times out to undefined so a lost reply can't wedge an attach (the chip
-// then keeps its data URI — inert but sendable).
+// Correlation is by minted rid, not the uri — a same-URI double-paste
+// would otherwise share one waiter. Times out to undefined so a lost
+// reply can't wedge an attach (the chip then keeps its data URI — inert
+// but sendable).
 const snapshotWaiters = new Map<string, (path: string) => void>();
+let snapSeq = 0;
 export function requestAttachmentSnapshot(
   sessionId: string,
   uri: string,
   name: string,
   mime: string,
 ): Promise<string | undefined> {
-  postToHost({ type: "save-attachment", sessionId, uri, name, mime });
+  const rid = `snap:${++snapSeq}`;
+  postToHost({ type: "save-attachment", sessionId, rid, uri, name, mime });
   return new Promise((resolve) => {
     const done = (path: string | undefined) => {
       clearTimeout(t);
-      snapshotWaiters.delete(uri);
+      snapshotWaiters.delete(rid);
       resolve(path);
     };
     const t = window.setTimeout(() => done(undefined), 2000);
-    snapshotWaiters.set(uri, (path) => done(path));
+    snapshotWaiters.set(rid, (path) => done(path));
   });
 }
 
@@ -3591,13 +3595,13 @@ export function hostMessage(msg: unknown) {
     modifier?: string;
     enabled?: boolean;
     peers?: unknown;
-    from?: string;
     sessionId?: string;
     dialect?: string;
     url?: string;
     kind?: string;
     seconds?: number;
     colors?: unknown;
+    rid?: string;
   };
   // The webview became visible again: events streamed while VS Code had
   // it suspended were lost — pull truth.
@@ -3726,13 +3730,14 @@ export function hostMessage(msg: unknown) {
     addComposerFiles(target, ok);
   }
   // The host snapshotted a pasted attachment: hand the path to the waiting
-  // attach (requestAttachmentSnapshot) so the chip is born with it.
+  // attach (requestAttachmentSnapshot) so the chip is born with it. The rid
+  // pairs the reply with its request — the uri never crosses back.
   if (
     m.type === "attachment-saved" &&
-    typeof m.from === "string" &&
+    typeof m.rid === "string" &&
     typeof m.path === "string"
   ) {
-    snapshotWaiters.get(m.from)?.(m.path);
+    snapshotWaiters.get(m.rid)?.(m.path);
   }
   // The host relayed a previewable url for a sent chip (attachmentPreview).
   if (

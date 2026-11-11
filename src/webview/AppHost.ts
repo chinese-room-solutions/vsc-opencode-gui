@@ -463,9 +463,11 @@ export class AppHost implements vscode.Disposable {
         // Composer paste/drop: snapshot a non-image data-URI attachment to
         // disk now, so the chip is click-to-open and the prompt can carry a
         // file:// url instead of the base64 payload. Best effort — on any
-        // failure no reply comes and the chip keeps its data URI.
+        // failure no reply comes and the chip keeps its data URI. The reply
+        // pairs by the page's rid, the uri (the bytes) is never echoed back.
         if (
           message.type === "save-attachment" &&
+          typeof message.rid === "string" &&
           typeof message.uri === "string" &&
           typeof message.name === "string" &&
           typeof message.sessionId === "string"
@@ -485,7 +487,7 @@ export class AppHost implements vscode.Disposable {
                 this._post({
                   type: "attachment-saved",
                   sessionId: message.sessionId,
-                  from: message.uri,
+                  rid: message.rid,
                   path: vscode.Uri.file(file).toString(true),
                 });
             } catch (err) {

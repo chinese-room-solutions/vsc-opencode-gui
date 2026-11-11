@@ -37,7 +37,7 @@ const BUILTIN_COMMANDS = [
 ];
 
 // File attach from paste/drop, mirroring the opencode web app: images, pdf,
-// audio/video and text-ish files become data-URI file parts; the 10 MB cap
+// audio/video and text-ish files become data-URI file parts, the 50 MB cap
 // keeps a paste from wedging the postMessage relay. attachMime is the gate
 // and the payload type — the data URL's own prefix gets restamped, since
 // Windows gives text files an empty blob type and FileReader then writes
