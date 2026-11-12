@@ -2,7 +2,7 @@ import "./setup.test";
 import { strict as assert } from "node:assert";
 import { metas, hostPosted } from "./setup.test";
 import { hostKind } from "./host";
-import { navigate, restoreRoute, route } from "./router";
+import { escapeChildRoute, navigate, restoreRoute, route } from "./router";
 
 describe("router", () => {
   afterEach(() => {
@@ -29,6 +29,24 @@ describe("router", () => {
       id: "s2",
       child: "sub9",
     });
+  });
+  it("escapeChildRoute leaves a child drill-down for its parent", () => {
+    navigate({ view: "session", id: "s5", child: "sub1" });
+    hostPosted.length = 0;
+    assert.equal(escapeChildRoute(), true);
+    assert.deepEqual(route.value, { view: "session", id: "s5" });
+    assert.deepEqual(hostPosted.at(-1), {
+      type: "route-changed",
+      route: { view: "session", id: "s5" },
+    });
+  });
+  it("escapeChildRoute is a no-op outside a child drill-down", () => {
+    navigate({ view: "session", id: "s6" });
+    assert.equal(escapeChildRoute(), false);
+    assert.deepEqual(route.value, { view: "session", id: "s6" });
+    navigate({ view: "home" });
+    assert.equal(escapeChildRoute(), false);
+    assert.deepEqual(route.value, { view: "home" });
   });
   it("degrades a malformed meta to home", () => {
     metas.set("opencode-route", "{not json");

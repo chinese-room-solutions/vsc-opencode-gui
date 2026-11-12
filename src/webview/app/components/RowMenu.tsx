@@ -24,7 +24,13 @@ export function RowMenu(props: {
   useEffect(() => {
     const close = () => props.onClose();
     const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") props.onClose();
+      // Marks the key claimed: a bubble-phase window listener (the child
+      // drill-down's Esc-to-parent) yields to any handler that
+      // preventDefaults, so one Esc closes the menu and nothing else.
+      if (e.key === "Escape") {
+        e.preventDefault();
+        props.onClose();
+      }
     };
     window.addEventListener("blur", close);
     window.addEventListener("resize", close);

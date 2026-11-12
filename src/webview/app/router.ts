@@ -24,6 +24,16 @@ export function navigate(next: Route): void {
   persist();
 }
 
+// Esc in a child drill-down returns to the parent session — the
+// breadcrumb's move. Reads the live route, so a call from a deferred
+// timer after the view moved on is a no-op.
+export function escapeChildRoute(): boolean {
+  const r = route.value;
+  if (r.view !== "session" || !r.child) return false;
+  navigate({ view: "session", id: r.id });
+  return true;
+}
+
 // Boot restore from the opencode-route meta AppHost baked into the page.
 // A session panel opens straight into its session, child drill-down
 // included; the navigator ignores the meta — it renders its own lists.

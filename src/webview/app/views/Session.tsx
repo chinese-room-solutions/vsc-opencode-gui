@@ -43,7 +43,7 @@ import {
   stoppedPrompts,
   releaseTranscript,
 } from "../store";
-import { navigate, route } from "../router";
+import { escapeChildRoute, navigate, route } from "../router";
 import type { ChatMessage } from "../store";
 
 // A turn is one prompt plus everything answering it. The v2 rows are flat
@@ -107,6 +107,25 @@ export function Session(props: { sessionId: string; parent?: string }) {
     void refreshMessages(id);
     void refreshStatuses();
   }, [id]);
+
+  // Esc leaves a child drill-down: back to the parent, the breadcrumb's
+  // move. Every Esc-claiming surface (popover, picker, dock, lightbox,
+  // row menu, the composer's own Esc work) marks its event with
+  // preventDefault — some after this listener runs — so the decision
+  // defers past the dispatch: navigate only when nobody claimed the key.
+  // Contract for new Esc claimants: preventDefault, or the child pops
+  // back under you.
+  useEffect(() => {
+    if (!props.parent) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.isComposing) return;
+      window.setTimeout(() => {
+        if (!e.defaultPrevented) escapeChildRoute();
+      });
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [props.parent]);
 
   // Follow new content only while the reader is already near the bottom.
   const scroller = useRef<HTMLDivElement>(null);
