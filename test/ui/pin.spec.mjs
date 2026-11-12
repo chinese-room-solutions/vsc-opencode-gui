@@ -116,8 +116,9 @@ test("an expanded pill docks as its clamped twin", async ({ page }) => {
     await page.goto(rig.url);
     await page.waitForSelector(".msgs .turn .msg.user", { timeout: 15_000 });
     // Turn 2's prompt is the long one. Expanding it jumps it to the top
-    // (reading mode, in view); nudging past docks the pin — as the folded
-    // form: the twin is a header, the reading surface is the real pill.
+    // (reading mode, in view). Reading into it docks nothing over the
+    // text; once the whole row scrolled past, the pin docks — as the
+    // folded form: the twin is a header, the reading surface is the pill.
     const pill = page.locator(".turn .msg.user", { hasText: "Question 2:" }).first();
     await pill.locator(".clamp-toggle").click();
     await expect(pill.locator(".user-text.expanded")).toBeVisible();
@@ -125,6 +126,12 @@ test("an expanded pill docks as its clamped twin", async ({ page }) => {
     await msgs.evaluate((n) => {
       n.scrollTop += 30;
     });
+    await page.waitForTimeout(300);
+    await expect(page.locator(".pin-bar")).toHaveCount(0);
+    await msgs.evaluate((n, row) => {
+      n.scrollTop +=
+        row.getBoundingClientRect().bottom - n.getBoundingClientRect().top + 2;
+    }, await pill.elementHandle());
     const bar = page.locator(".pin-bar .pin-mirror");
     await expect(bar).toBeVisible();
     await expect(bar).toContainText("Question 2:");

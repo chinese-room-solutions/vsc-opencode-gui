@@ -50,6 +50,10 @@ const shellMode = process.env.FAKE_API_SHELL === "1";
 // FAKE_API_SKILL=1 appends a completed skill tool call to the last turn:
 // the pill names the skill (input.name, metadata.name, or the title).
 const skillMode = process.env.FAKE_API_SKILL === "1";
+// FAKE_API_LONG_P1=1 appends turn 2's long tail to turn 1's prompt too —
+// a long FIRST pill, the sub-agent spawn-prompt shape (expand-at-the-
+// origin pin repros need an expandable pill at the transcript origin).
+const longP1 = process.env.FAKE_API_LONG_P1 === "1";
 // FAKE_API_GHOST=1 seeds a dead turn's fingerprint: the last assistant
 // row holds a bash tool part still status "running" with an old start
 // stamp (what the v2 store keeps when a turn dies without terminal tool
@@ -152,7 +156,8 @@ for (let i = 1; i <= SEED_TURNS; i++) {
   const userText =
     `Question ${i}: ${filler(i * 3, 1)}` +
     // Turn 2's prompt runs long: the pin bar specs fold and expand it.
-    (i === 2 ? `\n\n${filler(2, 6)}` : "") +
+    // FAKE_API_LONG_P1 gives turn 1 the same tail (long first pill).
+    (i === 2 || (longP1 && i === 1) ? `\n\n${filler(2, 6)}` : "") +
     (i === SEED_TURNS ? " Tune @src/retry.ts please" : "") +
     (i === SEED_TURNS - 1 ? " Browse @docs/ too" : "") +
     // Turn 9's prompt mentions an image the server inlined as a data:

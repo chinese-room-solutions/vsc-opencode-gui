@@ -232,6 +232,14 @@ export function Session(props: { sessionId: string; parent?: string }) {
         i++;
       } else break;
     }
+    // An expanded pill is the reading surface: its clamped twin would
+    // cover the text, so it docks only once the whole row scrolled past.
+    if (
+      hit &&
+      hit.el.querySelector(".user-text.expanded") &&
+      hit.el.getBoundingClientRect().bottom > el.getBoundingClientRect().top + 0.5
+    )
+      hit = undefined;
     const mid =
       hit === undefined
         ? undefined

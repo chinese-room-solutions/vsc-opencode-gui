@@ -548,6 +548,9 @@ function ClampedText(props: {
         } else {
           scroller.scrollTop = f.top + (el.getBoundingClientRect().height - f.box);
         }
+        // The pill's form changes the pin bar's ruling, and a jump of 0px
+        // fires no scroll event: have the bar re-read it.
+        scroller.dispatchEvent(new Event("scroll"));
       }
     }
   }, [props.text, expanded]);
