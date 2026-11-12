@@ -274,6 +274,36 @@ suite("opencode GUI commands", function () {
     }
   });
 
+  test("tab menu delete routes to the app's own confirm, not a native modal", async function () {
+    // The custom confirm is webview DOM (unreachable from the harness);
+    // what this pins: with a live panel for the clicked session the
+    // command reveals that panel and hands the confirm to the app — it
+    // must NOT open the native modal, which would block this run forever.
+    if (api.panels.ids().length < 2) {
+      await vscode.commands.executeCommand("opencodeGui.newSession");
+      await until(() => api.panels.ids().length >= 2);
+    }
+    await until(() => api.panels.ids().every((id) => tabFor(id) !== undefined));
+    const active = api.panels.target();
+    assert.ok(active, "an active session panel");
+    const clicked = api.panels.ids().find((id) => id !== active.id);
+    assert.ok(clicked, "a second, inactive session tab");
+    const clickedIdx = vscode.window.tabGroups.all
+      .flatMap((g) => g.tabs)
+      .findIndex((t) => sessionTabId(t) === clicked);
+    assert.ok(clickedIdx >= 0, "the clicked tab");
+    await vscode.commands.executeCommand(
+      "opencodeGui.deleteSession",
+      vscode.Uri.parse("webview-panel:webview-panel/webview-x"),
+      { groupId: 0, editorIndex: clickedIdx },
+    );
+    // The session's own panel took the confirm and is now revealed. The
+    // dialog itself stays open until a human answers it — harmless here,
+    // the suite tears the window down.
+    await until(() => api.panels.get(clicked!)?.isActive === true);
+    assert.strictEqual(api.panels.get(clicked)?.isActive, true);
+  });
+
   test("tab menu commands: same-index session tabs in two groups resolve to the active group", async function () {
     // The documented corner: the menu's groupId is VS Code's internal id
     // with no public map, so when two groups each hold a session tab at
@@ -301,6 +331,20 @@ suite("opencode GUI commands", function () {
       )!.viewColumn;
       const other =
         vscode.window.tabGroups.all.find((g) => g.viewColumn !== homeColumn)!;
+      // The scratch copy stays in the home group at a position that
+      // depends on which tab was active when it opened; drop it so the
+      // home group holds only session tabs at known indexes (0..n-1) —
+      // the corner below needs a session at the new tab's index.
+      const homeDocTab = vscode.window.tabGroups.all
+        .find((g) => g.viewColumn === homeColumn)!
+        .tabs.find(
+          (t) =>
+            (t.input as { uri?: unknown } | undefined)?.uri instanceof
+              vscode.Uri &&
+            (t.input as { uri: vscode.Uri }).uri.toString() ===
+              doc.uri.toString(),
+        );
+      if (homeDocTab) await vscode.window.tabGroups.close(homeDocTab);
       await vscode.commands.executeCommand(
         vscode.window.tabGroups.all.indexOf(other) === 1
           ? "workbench.action.focusSecondEditorGroup"

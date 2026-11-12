@@ -3627,6 +3627,24 @@ export function insertComposerText(text: string, replace = false): void {
   composerInsert.value = { text, seq: ++insertSeq, replace };
 }
 
+// The host asked this page to confirm a delete (the tab menu's Delete
+// command): the session to remove, shown as the app-level confirm. No
+// other confirm path uses it — the session body and the navigator rows
+// keep their own local dialogs.
+export const confirmDeleteId = signal<string | undefined>(undefined);
+
+// That confirm's Delete button: clear the dialog, run the store's own
+// delete (the same path the session body's confirm takes), and tell the
+// host on success so it closes the session's tab.
+export async function confirmDeleteProceed(): Promise<boolean> {
+  const id = confirmDeleteId.value;
+  confirmDeleteId.value = undefined;
+  if (id === undefined) return false;
+  const ok = await deleteSession(id);
+  if (ok) postToHost({ type: "session-deleted", id });
+  return ok;
+}
+
 // Messages posted from the extension host (AppHost.postMessage).
 export function hostMessage(msg: unknown) {
   const m = msg as {
@@ -3794,6 +3812,12 @@ export function hostMessage(msg: unknown) {
   }
   if (m.type === "new-session") {
     void newSession();
+  }
+  // The tab menu's Delete ran host-side: show the app-level confirm for
+  // the named session (this page may be a different session's — the
+  // dialog's text carries the target's title).
+  if (m.type === "confirm-delete" && typeof m.sessionId === "string") {
+    confirmDeleteId.value = m.sessionId;
   }
   // Host command (openContextSummary): toggle the ring's context panel.
   if (m.type === "toggle-context") {

@@ -1,10 +1,19 @@
 import { Navigator } from "./views/Navigator";
 import { Session } from "./views/Session";
+import { Confirm } from "./components/Confirm";
 import { Lightbox } from "./components/Lightbox";
 import { useEffect } from "preact/hooks";
 import { hostKind, hostSessionId, postToHost } from "./host";
 import { route } from "./router";
-import { status, tabFacts, tabSignalRoot } from "./store";
+import {
+  confirmDeleteId,
+  confirmDeleteProceed,
+  sessionTitle,
+  sessions,
+  status,
+  tabFacts,
+  tabSignalRoot,
+} from "./store";
 import DOMPurify from "dompurify";
 
 // Shell: one content panel filling the host. A session
@@ -41,7 +50,26 @@ export function App() {
         {hostKind.value === "navigator" ? <Navigator /> : <SessionPanel />}
       </main>
       {hostKind.value === "session" && <Lightbox />}
+      <DeleteConfirm />
     </div>
+  );
+}
+
+// The tab menu's Delete lands here rather than in the Session view: the
+// host may ask while this page shows another route (a sub-agent drill), so
+// the dialog lives at the app level and names its target. Same component
+// and wording as the session body's confirm.
+function DeleteConfirm() {
+  const id = confirmDeleteId.value;
+  if (id === undefined) return null;
+  const title = sessionTitle(sessions.value.find((s) => s.id === id), id);
+  return (
+    <Confirm
+      text={<>Delete session “{title}”? This cannot be recovered.</>}
+      dangerLabel="Delete session"
+      onConfirm={() => void confirmDeleteProceed()}
+      onCancel={() => (confirmDeleteId.value = undefined)}
+    />
   );
 }
 

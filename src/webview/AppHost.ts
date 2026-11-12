@@ -207,6 +207,9 @@ export class AppHost implements vscode.Disposable {
   // insert-text texts that arrived before the page's message listener
   // existed (see addToChat); delivered on the first ping.
   private _pendingInserts: string[] = [];
+  // Posts that must not drop in the same boot race (the tab menu's delete
+  // confirm); delivered alongside the inserts.
+  private _pendingConfirms: string[] = [];
   // Last heartbeat from the app; undefined until its first ping (a fresh
   // page pings at boot, so a just-loaded webview never reads as dead).
   private _lastPingAt?: number;
@@ -328,6 +331,10 @@ export class AppHost implements vscode.Disposable {
           const queued = this._pendingInserts;
           this._pendingInserts = [];
           for (const text of queued) this._post({ type: "insert-text", text });
+          const confirms = this._pendingConfirms;
+          this._pendingConfirms = [];
+          for (const id of confirms)
+            this._post({ type: "confirm-delete", sessionId: id });
         }
         // The webview's own console is unreachable from tooling; the app
         // forwards its failure diagnostics here.
@@ -360,6 +367,16 @@ export class AppHost implements vscode.Disposable {
           void vscode.commands.executeCommand("opencodeGui.renameSession", {
             id: message.id,
           });
+        }
+        // The app-level delete confirm (the tab menu's Delete) went
+        // through: the page deleted the session itself; the tab close is
+        // the host's. Distinct from the server's "session.deleted" SSE
+        // event, which reconciles stores, not tabs.
+        if (message.type === "session-deleted" && typeof message.id === "string") {
+          void vscode.commands.executeCommand(
+            "opencodeGui.closeSessionTab",
+            message.id,
+          );
         }
         // The store's session rows retitle (auto-titler after the first
         // prompt, renames); the tab label follows. The host's command
@@ -629,6 +646,16 @@ export class AppHost implements vscode.Disposable {
   // the app creates it and opens its tab).
   newSession() {
     void this._webview?.postMessage({ type: "new-session" });
+  }
+
+  // The tab menu's Delete, resolved host-side: this page shows the
+  // app-level confirm for the session. Same boot-race queue as addToChat.
+  confirmDelete(sessionId: string) {
+    if (this._lastPingAt === undefined) {
+      this._pendingConfirms.push(sessionId);
+      return;
+    }
+    this._post({ type: "confirm-delete", sessionId });
   }
 
   // Hub-fed event stream (ChatHub owns the pumps): one frame, forwarded

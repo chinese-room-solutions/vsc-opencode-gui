@@ -1,6 +1,7 @@
 import { Fragment } from "preact";
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { Composer } from "../components/Composer";
+import { Confirm } from "../components/Confirm";
 import { ContextRing, foldFreedTokens } from "../components/ContextRing";
 import { Docks } from "../components/Docks";
 import {
@@ -979,26 +980,20 @@ export function Session(props: { sessionId: string; parent?: string }) {
         <Composer sessionId={id} status={st} />
       </div>
       {confirming && (
-        <div class="confirm-backdrop" onClick={() => setConfirming(false)}>
-          <div class="confirm" role="dialog" onClick={(e) => e.stopPropagation()}>
-            <div class="confirm-text">
+        <Confirm
+          text={
+            <>
               Delete session “{sessionTitle(session, id)}”? This cannot be
               recovered.
-            </div>
-            <div class="confirm-actions">
-              <button
-                class="confirm-danger"
-                onClick={() => {
-                  setConfirming(false);
-                  void deleteSession(id);
-                }}
-              >
-                Delete session
-              </button>
-              <button onClick={() => setConfirming(false)}>Cancel</button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+          dangerLabel="Delete session"
+          onConfirm={() => {
+            setConfirming(false);
+            void deleteSession(id);
+          }}
+          onCancel={() => setConfirming(false)}
+        />
       )}
       {ctxMenu && (
         <RowMenu x={ctxMenu.x} y={ctxMenu.y} onClose={() => setCtxMenu(undefined)}>

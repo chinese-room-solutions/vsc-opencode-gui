@@ -385,6 +385,20 @@ export function activate(context: vscode.ExtensionContext) {
           panels.setTitle(id, title);
       },
     ),
+    // Close one session's tab: a live panel via dispose, a restored-but-
+    // unclaimed one (no panel yet) straight through the tabs API. Called
+    // by the app-level delete confirm (AppHost's session-deleted).
+    vscode.commands.registerCommand("opencodeGui.closeSessionTab", (id?: unknown) => {
+      if (typeof id !== "string") return;
+      const panel = panels.get(id);
+      if (panel) panel.dispose();
+      else {
+        const tab = vscode.window.tabGroups.all
+          .flatMap((g) => g.tabs)
+          .find((t) => sessionTabId(t) === id);
+        if (tab) void vscode.window.tabGroups.close(tab);
+      }
+    }),
   );
 
   // The old in-app tab menu (pre-editor-tabs) lives again on the native
@@ -480,6 +494,19 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("opencodeGui.deleteSession", async (...args: unknown[]) => {
       const target = tabMenuTarget(args);
       if (!target) return;
+      // The confirm is the app's own dialog, not a native modal: the
+      // session's own panel when it has one (revealed so the dialog shows
+      // there), else whichever panel is on screen — the dialog names the
+      // session. The page deletes on confirm and posts session-deleted,
+      // which closes the tab (see closeSessionTab).
+      const own = panels.has(target.id) ? panels.open(target.id) : undefined;
+      const host = own?.chat ?? panels.target()?.chat;
+      if (host) {
+        host.confirmDelete(target.id);
+        return;
+      }
+      // No live panel to host the dialog (every tab restored but never
+      // activated): the native modal stands in.
       const confirm = await vscode.window.showWarningMessage(
         "Delete this session? Its transcript is removed too.",
         { modal: true, detail: target.id },
@@ -492,16 +519,11 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
       // The webview stores reconcile over SSE (session.deleted); the tab
-      // itself is ours to close — a live panel via dispose, a restored-
-      // but-unclaimed one (no panel yet) straight through the tabs API.
-      const panel = panels.get(target.id);
-      if (panel) panel.dispose();
-      else {
-        const tab = vscode.window.tabGroups.all
-          .flatMap((g) => g.tabs)
-          .find((t) => sessionTabId(t) === target.id);
-        if (tab) void vscode.window.tabGroups.close(tab);
-      }
+      // closes through the shared command.
+      void vscode.commands.executeCommand(
+        "opencodeGui.closeSessionTab",
+        target.id,
+      );
     }),
   );
 

@@ -31,6 +31,8 @@ import {
   commands,
   composerFiles,
   composerInsert,
+  confirmDeleteId,
+  confirmDeleteProceed,
   contextLimit,
   currentDir,
   currentSelection,
@@ -5588,6 +5590,44 @@ describe("hostMessage routing", () => {
     hostMessage({ type: "toggle-context" });
     hostMessage({ type: "toggle-context" });
     assert.equal(sendError.value, undefined);
+  });
+  it("confirm-delete raises the app-level confirm for the named session", () => {
+    hostMessage({ type: "confirm-delete", sessionId: "cx1" });
+    assert.equal(confirmDeleteId.value, "cx1");
+    // A non-string id changes nothing.
+    hostMessage({ type: "confirm-delete", sessionId: 7 });
+    assert.equal(confirmDeleteId.value, "cx1");
+    confirmDeleteId.value = undefined;
+  });
+  it("confirmDeleteProceed deletes, drops the row, and reports session-deleted", async () => {
+    const sid = "cx2";
+    sessions.value = [sessRow(sid)];
+    confirmDeleteId.value = sid;
+    assert.equal(await confirmDeleteProceed(), true);
+    assert.equal(confirmDeleteId.value, undefined);
+    assert.equal(
+      apiLog.some((c) => c.method === "DELETE" && c.path.includes(sid)),
+      true,
+    );
+    assert.equal(
+      hostPosted.some((m) => (m as { type?: string }).type === "session-deleted"),
+      true,
+    );
+    assert.equal(sessions.value.some((s) => s.id === sid), false);
+  });
+  it("confirmDeleteProceed reports nothing when the server rejects", async () => {
+    const sid = "cx3";
+    sessions.value = [sessRow(sid)];
+    onApi((call) =>
+      call.method === "DELETE" && call.path.includes(sid) ? API_FAIL : undefined,
+    );
+    confirmDeleteId.value = sid;
+    assert.equal(await confirmDeleteProceed(), false);
+    assert.equal(confirmDeleteId.value, undefined);
+    assert.equal(
+      hostPosted.some((m) => (m as { type?: string }).type === "session-deleted"),
+      false,
+    );
   });
 });
 

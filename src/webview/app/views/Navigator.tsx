@@ -8,6 +8,7 @@ import type { Session } from "../api";
 import { postToHost } from "../host";
 import { RenameInput } from "../components/RenameInput";
 import { RowMenu } from "../components/RowMenu";
+import { Confirm } from "../components/Confirm";
 import { SessionMenuItems } from "../components/SessionMenuItems";
 import { Swatches } from "../components/Swatches";
 import {
@@ -628,28 +629,20 @@ export function Navigator() {
         </div>
       )}
       {confirming !== undefined && (
-        <div class="confirm-backdrop" onClick={() => setConfirming(undefined)}>
-          <div class="confirm" role="dialog" onClick={(e) => e.stopPropagation()}>
-            <div class="confirm-text">
-              {confirming === "sessions"
-                ? `Delete ${pickedSess.size} session${pickedSess.size === 1 ? "" : "s"}? They cannot be recovered.`
-                : `Delete ${pickedProj.size} project${pickedProj.size === 1 ? "" : "s"} and all their sessions? The sessions cannot be recovered.`}
-            </div>
-            <div class="confirm-actions">
-              <button
-                class="confirm-danger"
-                onClick={() =>
-                  void (confirming === "sessions"
-                    ? deletePickedSessions()
-                    : deletePickedProjects())
-                }
-              >
-                Delete
-              </button>
-              <button onClick={() => setConfirming(undefined)}>Cancel</button>
-            </div>
-          </div>
-        </div>
+        <Confirm
+          text={
+            confirming === "sessions"
+              ? `Delete ${pickedSess.size} session${pickedSess.size === 1 ? "" : "s"}? They cannot be recovered.`
+              : `Delete ${pickedProj.size} project${pickedProj.size === 1 ? "" : "s"} and all their sessions? The sessions cannot be recovered.`
+          }
+          dangerLabel="Delete"
+          onConfirm={() =>
+            void (confirming === "sessions"
+              ? deletePickedSessions()
+              : deletePickedProjects())
+          }
+          onCancel={() => setConfirming(undefined)}
+        />
       )}
     </div>
   );
@@ -806,28 +799,22 @@ function ProjectRow(props: {
         </>
       )}
       {confirming && (
-        <div class="confirm-backdrop" onClick={() => setConfirming(false)}>
-          <div class="confirm" role="dialog" onClick={(e) => e.stopPropagation()}>
-            <div class="confirm-text">
+        <Confirm
+          text={
+            <>
               Delete project “{name}
               {props.disambig ? ` · ${props.disambig}` : ""}” and its{" "}
               {props.count} session{props.count === 1 ? "" : "s"}? The sessions
               cannot be recovered.
-            </div>
-            <div class="confirm-actions">
-              <button
-                class="confirm-danger"
-                onClick={() => {
-                  setConfirming(false);
-                  void purgeProject(props.dir);
-                }}
-              >
-                Delete project
-              </button>
-              <button onClick={() => setConfirming(false)}>Cancel</button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+          dangerLabel="Delete project"
+          onConfirm={() => {
+            setConfirming(false);
+            void purgeProject(props.dir);
+          }}
+          onCancel={() => setConfirming(false)}
+        />
       )}
       {menu && (
         <RowMenu x={menu.x} y={menu.y} onClose={() => setMenu(undefined)}>
@@ -1055,26 +1042,20 @@ function SessionRow(props: {
         </>
       )}
       {confirming && (
-        <div class="confirm-backdrop" onClick={() => setConfirming(false)}>
-          <div class="confirm" role="dialog" onClick={(e) => e.stopPropagation()}>
-            <div class="confirm-text">
+        <Confirm
+          text={
+            <>
               Delete session “{sessionTitle(s, s.id)}”? This cannot be
               recovered.
-            </div>
-            <div class="confirm-actions">
-              <button
-                class="confirm-danger"
-                onClick={() => {
-                  setConfirming(false);
-                  void deleteSession(s.id);
-                }}
-              >
-                Delete session
-              </button>
-              <button onClick={() => setConfirming(false)}>Cancel</button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+          dangerLabel="Delete session"
+          onConfirm={() => {
+            setConfirming(false);
+            void deleteSession(s.id);
+          }}
+          onCancel={() => setConfirming(false)}
+        />
       )}
       {menu && (
         <RowMenu x={menu.x} y={menu.y} onClose={() => setMenu(undefined)}>

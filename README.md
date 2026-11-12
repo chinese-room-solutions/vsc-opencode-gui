@@ -51,7 +51,6 @@ In the command palette under **`Open Code:`**.
 | `Show Session Diff` | The session's working-tree diff |
 | `Toggle Context Breakdown` | Open the context ring's cost and token panel |
 | `Open in Terminal` | Run the opencode TUI in a workspace terminal (its own session) |
-| `Copy Session ID`, `Fork Session`, `Rename Session`, `Delete Session` | Act on the active session, also from its tab's right-click menu |
 | `Restart` | Restart the server, which also repairs a dead chat tab |
 
 ## ⚙️ Settings
