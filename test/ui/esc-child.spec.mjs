@@ -47,3 +47,18 @@ test("Escape cancels an open confirm and keeps the child view", async ({ page, r
   await expect(dialog).toHaveCount(0);
   await expect(page.locator(".crumb-parent")).toHaveCount(1);
 });
+
+test("Enter runs the confirm's danger action", async ({ page, rig }) => {
+  await openChild(page, rig.url);
+  await page.locator(".msgs .turn .msg.user").first().click({ button: "right" });
+  const menu = page.locator(".row-menu");
+  await expect(menu).toBeVisible();
+  await menu.locator('.menu-item:has-text("Delete session")').click();
+  const dialog = page.locator(".confirm-backdrop");
+  await expect(dialog).toHaveCount(1);
+  await settleEffects(page);
+  await page.keyboard.press("Enter");
+  await expect(dialog).toHaveCount(0);
+  // Confirmed, not cancelled: the child's transcript drops from the view.
+  await expect(page.locator(".msgs .turn")).toHaveCount(0);
+});
