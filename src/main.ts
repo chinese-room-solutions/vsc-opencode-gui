@@ -390,38 +390,61 @@ export function activate(context: vscode.ExtensionContext) {
   // The old in-app tab menu (pre-editor-tabs) lives again on the native
   // editor tab: Copy Session ID / Fork / Rename / Delete, contributed to
   // editor/title/context and gated on a session tab being the active
-  // editor (activeWebviewPanelId carries the panel's viewType). The
-  // context arg names the right-clicked tab's group and index, but
-  // groupId is VS Code's internal id — not a view column — so the column
-  // match is a best effort, validated against our own panels; anything
-  // that doesn't line up (and plain palette runs, which pass no arg)
-  // falls back to the active session panel.
-  const tabMenuTarget = (
-    ctx: unknown,
-  ): { id: string } | undefined => {
-    const c = ctx as { id?: unknown; groupId?: unknown; editorIndex?: unknown } | undefined;
+  // editor (activeWebviewPanelId carries the panel's viewType). The menu
+  // calls the command with a leading Uri (the clicked tab's webview
+  // resource) before the context object, so the context is whichever
+  // argument carries one of our shapes: an explicit session id (the
+  // webview's right-click) or the tab menu's {groupId, editorIndex}.
+  // groupId is VS Code's internal id (0-based) with no public map to a
+  // tabGroups entry — so the tab is resolved by its index across groups,
+  // keeping the candidates that are session tabs. Plain palette runs
+  // pass no arg and fall back to the active session panel.
+  const tabMenuTarget = (args: unknown[]): { id: string } | undefined => {
+    const c = args.find(
+      (a): a is Record<string, unknown> =>
+        typeof (a as { editorIndex?: unknown } | undefined)?.editorIndex ===
+          "number" ||
+        typeof (a as { id?: unknown } | undefined)?.id === "string",
+    );
     // The webview's right-click posts the id explicitly: hit or miss, no
     // fallback — a stale id must never rename the active session instead.
     if (typeof c?.id === "string") {
       return panels.has(c.id) ? { id: c.id } : undefined;
     }
-    if (typeof c?.groupId === "number" && typeof c.editorIndex === "number") {
-      const tab = vscode.window.tabGroups.all.find(
-        (g) => g.viewColumn === c.groupId,
-      )?.tabs[c.editorIndex];
-      const id = tab ? sessionTabId(tab) : undefined;
-      if (id !== undefined && panels.has(id)) return { id };
+    if (typeof c?.editorIndex === "number") {
+      const idx = c.editorIndex;
+      // The right-clicked tab sits at editorIndex in one group; which one
+      // is unknowable, so every group's tab at that index is a candidate
+      // and only session tabs survive — claimed or not (a tab restored
+      // after a reload has no panel until first activation, so
+      // panels.has is false for it). One candidate is the clicked tab;
+      // several (the same index in several groups) tie-break on the
+      // groupId-as-column guess, then the active group. None means the
+      // clicked tab is not a session tab — no action, never the active
+      // session instead.
+      const hits = vscode.window.tabGroups.all.flatMap((g) => {
+        const tab = g.tabs[idx];
+        const id = tab ? sessionTabId(tab) : undefined;
+        return id !== undefined ? [{ id, column: g.viewColumn }] : [];
+      });
+      const byColumn =
+        typeof c.groupId === "number"
+          ? hits.find((h) => h.column === c.groupId)
+          : undefined;
+      const active = vscode.window.tabGroups.activeTabGroup.viewColumn;
+      const pick = byColumn ?? hits.find((h) => h.column === active) ?? hits[0];
+      return pick ? { id: pick.id } : undefined;
     }
     return panels.target();
   };
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("opencodeGui.copySessionId", (ctx?: unknown) => {
-      const target = tabMenuTarget(ctx);
+    vscode.commands.registerCommand("opencodeGui.copySessionId", (...args: unknown[]) => {
+      const target = tabMenuTarget(args);
       if (target) void vscode.env.clipboard.writeText(target.id);
     }),
-    vscode.commands.registerCommand("opencodeGui.forkSession", async (ctx?: unknown) => {
-      const target = tabMenuTarget(ctx);
+    vscode.commands.registerCommand("opencodeGui.forkSession", async (...args: unknown[]) => {
+      const target = tabMenuTarget(args);
       if (!target) return;
       const sm = ensureServer() ?? serverManager;
       const fail = () =>
@@ -439,8 +462,8 @@ export function activate(context: vscode.ExtensionContext) {
       if (fork) openSession(fork);
       else fail();
     }),
-    vscode.commands.registerCommand("opencodeGui.renameSession", async (ctx?: unknown) => {
-      const target = tabMenuTarget(ctx);
+    vscode.commands.registerCommand("opencodeGui.renameSession", async (...args: unknown[]) => {
+      const target = tabMenuTarget(args);
       if (!target) return;
       const sm = ensureServer() ?? serverManager;
       // Pre-fill with the server's truth: the tab title may still be the
@@ -454,8 +477,8 @@ export function activate(context: vscode.ExtensionContext) {
       if (await sm?.renameSession(target.id, title)) panels.setTitle(target.id, title);
       else void vscode.window.showErrorMessage("The rename was rejected by the server.");
     }),
-    vscode.commands.registerCommand("opencodeGui.deleteSession", async (ctx?: unknown) => {
-      const target = tabMenuTarget(ctx);
+    vscode.commands.registerCommand("opencodeGui.deleteSession", async (...args: unknown[]) => {
+      const target = tabMenuTarget(args);
       if (!target) return;
       const confirm = await vscode.window.showWarningMessage(
         "Delete this session? Its transcript is removed too.",
@@ -469,8 +492,16 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
       // The webview stores reconcile over SSE (session.deleted); the tab
-      // itself is ours to close.
-      panels.get(target.id)?.dispose();
+      // itself is ours to close — a live panel via dispose, a restored-
+      // but-unclaimed one (no panel yet) straight through the tabs API.
+      const panel = panels.get(target.id);
+      if (panel) panel.dispose();
+      else {
+        const tab = vscode.window.tabGroups.all
+          .flatMap((g) => g.tabs)
+          .find((t) => sessionTabId(t) === target.id);
+        if (tab) void vscode.window.tabGroups.close(tab);
+      }
     }),
   );
 

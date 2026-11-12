@@ -209,6 +209,158 @@ suite("opencode GUI commands", function () {
     );
   });
 
+  test("tab menu commands: the tab-context arg resolves the clicked session tab", async function () {
+    if (api.panels.ids().length < 2) {
+      await vscode.commands.executeCommand("opencodeGui.newSession");
+      await until(() => api.panels.ids().length >= 2);
+    }
+    await until(() => api.panels.ids().every((id) => tabFor(id) !== undefined));
+    // The tab the menu arg will name: a session tab that is not the
+    // active one — the shipped bug acted on the active panel instead.
+    const active = api.panels.target();
+    assert.ok(active, "an active session panel");
+    const clicked = api.panels.ids().find((id) => id !== active.id);
+    assert.ok(clicked, "a second, inactive session tab");
+    const spotOf = (pred: (t: vscode.Tab) => boolean): number => {
+      for (const g of vscode.window.tabGroups.all) {
+        const i = g.tabs.findIndex(pred);
+        if (i !== -1) return i;
+      }
+      return -1;
+    };
+    const clickedIdx = spotOf((t) => sessionTabId(t) === clicked);
+    assert.ok(clickedIdx >= 0, "the clicked tab's index");
+    // The real menu shape, captured from a live right-click (VS Code
+    // 1.146): a leading webview-panel Uri, then the context object.
+    const menuUri = vscode.Uri.parse("webview-panel:webview-panel/webview-x");
+    await vscode.commands.executeCommand("opencodeGui.copySessionId", menuUri, {
+      groupId: 0,
+      editorIndex: clickedIdx,
+    });
+    let clip = "";
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      clip = await vscode.env.clipboard.readText();
+      if (clip === clicked) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    assert.strictEqual(clip, clicked, "the right-clicked session's id");
+
+    // A non-session tab's index: no candidate resolves, and the command
+    // no-ops rather than falling back to the active session.
+    fs.writeFileSync(scratch.fsPath, "tab-menu\n");
+    try {
+      const doc = await vscode.workspace.openTextDocument(scratch.fsPath);
+      await vscode.window.showTextDocument(doc);
+      const docIdx = spotOf(
+        (t) =>
+          (t.input as { uri?: unknown } | undefined)?.uri instanceof vscode.Uri &&
+          (t.input as { uri: vscode.Uri }).uri.toString() === doc.uri.toString(),
+      );
+      assert.ok(docIdx >= 0, "the text tab's index");
+      await vscode.env.clipboard.writeText("sentinel");
+      await vscode.commands.executeCommand("opencodeGui.copySessionId", menuUri, {
+        groupId: 0,
+        editorIndex: docIdx,
+      });
+      await new Promise((r) => setTimeout(r, 1_000));
+      assert.strictEqual(
+        await vscode.env.clipboard.readText(),
+        "sentinel",
+        "no write when the clicked tab is not a session",
+      );
+    } finally {
+      await closeEditorFor(scratch);
+    }
+  });
+
+  test("tab menu commands: same-index session tabs in two groups resolve to the active group", async function () {
+    // The documented corner: the menu's groupId is VS Code's internal id
+    // with no public map, so when two groups each hold a session tab at
+    // the right-clicked index the tie-break picks the ACTIVE group's —
+    // right-clicking the other group's tab there still points at this
+    // session. This spec pins that as known behavior; if it starts
+    // failing, the tie-break changed, not the fix.
+    assert.ok(
+      api.panels.ids().length >= 2,
+      "two session tabs in one group from the earlier tests",
+    );
+    fs.writeFileSync(scratch.fsPath, "tab-menu-ambiguity\n");
+    let group2Session: string | undefined;
+    try {
+      const doc = await vscode.workspace.openTextDocument(scratch.fsPath);
+      await vscode.window.showTextDocument(doc);
+      // Split on a text editor: the copy lands in a second group. Focus
+      // that group and wait for the active column to settle — a session
+      // panel opens in the ACTIVE group, and the split's focus move
+      // races the next executeCommand.
+      await vscode.commands.executeCommand("workbench.action.splitEditor");
+      await until(() => vscode.window.tabGroups.all.length === 2);
+      const homeColumn = vscode.window.tabGroups.all.find((g) =>
+        g.tabs.some((t) => sessionTabId(t) === api.panels.ids()[0]),
+      )!.viewColumn;
+      const other =
+        vscode.window.tabGroups.all.find((g) => g.viewColumn !== homeColumn)!;
+      await vscode.commands.executeCommand(
+        vscode.window.tabGroups.all.indexOf(other) === 1
+          ? "workbench.action.focusSecondEditorGroup"
+          : "workbench.action.focusFirstEditorGroup",
+      );
+      await until(
+        () => vscode.window.tabGroups.activeTabGroup.viewColumn === other.viewColumn,
+      );
+      // newSession's handler fires and forgets, so wait for the panel
+      // itself — the ids list grows only when the open completes.
+      const beforeCount = api.panels.ids().length;
+      await vscode.commands.executeCommand("opencodeGui.newSession");
+      await until(() => api.panels.ids().length === beforeCount + 1);
+      group2Session = api.panels.ids()[api.panels.ids().length - 1];
+      await until(() => tabFor(group2Session!) !== undefined);
+      const spotOf = (id: string): { column: number; index: number } | undefined => {
+        for (const g of vscode.window.tabGroups.all) {
+          const i = g.tabs.findIndex((t) => sessionTabId(t) === id);
+          if (i !== -1) return { column: g.viewColumn, index: i };
+        }
+        return undefined;
+      };
+      const g2 = spotOf(group2Session);
+      assert.ok(g2, "the new session's tab");
+      const g1 = api.panels
+        .ids()
+        .filter((id) => id !== group2Session)
+        .map(spotOf)
+        .find((s) => s && s.column !== g2.column && s.index === g2.index);
+      assert.ok(g1, "a session tab at the same index in another group");
+      // groupId 4242 matches no column, so the tie-break chain runs to
+      // the active group — the one the reveal just activated.
+      await vscode.commands.executeCommand(
+        "opencodeGui.copySessionId",
+        vscode.Uri.parse("webview-panel:webview-panel/webview-x"),
+        { groupId: 4242, editorIndex: g2.index },
+      );
+      let clip = "";
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline) {
+        clip = await vscode.env.clipboard.readText();
+        if (clip === group2Session) break;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      assert.strictEqual(
+        clip,
+        group2Session,
+        "the ambiguous index resolves to the active group's session",
+      );
+    } finally {
+      if (group2Session) {
+        const tab = tabFor(group2Session);
+        if (tab) await vscode.window.tabGroups.close(tab);
+        await until(() => !api.panels.has(group2Session!));
+      }
+      // Group 2's scratch copy died with its last tab; close group 1's.
+      await closeEditorFor(scratch);
+    }
+  });
+
   test("toggleChatView hides the revealed sidebar view", async function () {
     // Focus our view first (the toggle's reveal branch depends on which
     // view the bars last showed — not ours to control headless).
