@@ -273,8 +273,12 @@ suite("opencode ServerManager", function () {
       "re-attached to the orphan, no second spawn",
     );
     assert.strictEqual(sm.serverPort, port);
-    assert.ok(
+    // v2 stored a password for this port, and the re-attach must consume
+    // nothing; v1 spawns (the pinned CI binary) run open and store
+    // nothing — there is no secret to keep.
+    assert.strictEqual(
       secrets.has(key),
+      stored !== undefined,
       "the re-attach consumed nothing: the secret stays for the next host",
     );
     // Spawned children watch themselves through their exit event; the
@@ -373,6 +377,12 @@ suite("opencode ServerManager", function () {
     const port = await freePort();
     const { sm, hub } = await boot(port);
     await waitForUrl(hub);
+    // The file-read abort is a v2 path: v2 has no config write route, so
+    // the manager reads and rewrites opencode.json itself. v1 PATCHes
+    // /config server-side and never reads the file — the EBUSY patch
+    // below cannot fire there. Teardown disposes the booted manager.
+    const dialect = (sm as unknown as { _dialect: "v1" | "v2" })._dialect;
+    if (dialect === "v1") this.skip();
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "oc-test-config-"));
     const configRoot = path.join(tmp, "opencode");
     const file = path.join(configRoot, "opencode.json");
