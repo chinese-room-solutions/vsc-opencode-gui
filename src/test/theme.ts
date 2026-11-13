@@ -134,6 +134,14 @@ suite("opencode theme", function () {
   });
 
   test("an auto-detected scheme reads the preferred theme, not colorTheme", async function () {
+    // Needs the host OS's color scheme: VS Code applies the preferred
+    // theme for the scheme it detects (D-Bus/GTK on Linux, the registry
+    // on Windows). Headless CI Linux has no session bus — nothing is ever
+    // detected, so the preferred theme never applies and the wait below
+    // cannot pass there. The extension code is covered everywhere else.
+    if (process.env.CI && process.platform === "linux") {
+      this.skip();
+    }
     // The preferred setting must match the host's actual scheme — the
     // workbench only applies the one for activeColorTheme.kind.
     const kind = vscode.window.activeColorTheme.kind;
