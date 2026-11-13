@@ -1311,6 +1311,49 @@ describe("transcript windowing and Load older (5185f17)", () => {
   });
 });
 
+// A batch of steered prompts is delivered within one ms, so its rows share
+// a created stamp. Pages come newest-first, as the server serves them.
+describe("rows sharing a created ms keep the server's order", () => {
+  it("a refresh keeps a delivered steer batch in send order", async () => {
+    const sid = "tie1";
+    onApi(
+      messageMock(sid, {
+        data: [
+          { id: "a2", type: "assistant", time: { created: T0 + 30 } },
+          { id: "u3", type: "user", time: { created: T0 + 20 }, text: "second" },
+          { id: "u2", type: "user", time: { created: T0 + 20 }, text: "first" },
+          { id: "a1", type: "assistant", time: { created: T0 + 10 } },
+          { id: "u1", type: "user", time: { created: T0 }, text: "start" },
+        ],
+        cursor: {},
+      }),
+    );
+    await refreshMessages(sid);
+    assert.deepEqual(
+      listOf(sid).map((m) => m.info.id),
+      ["u1", "a1", "u2", "u3", "a2"],
+    );
+  });
+
+  it("Load older keeps a tie split by the window edge in order", async () => {
+    const sid = "tie2";
+    // 52 rows: the window holds the newest 50 (r2 heads it), the pool r0-r1.
+    const rows = Array.from({ length: 52 }, (_, i) => ({
+      id: `r${i}`,
+      type: i === 1 || i % 2 === 0 ? "user" : "assistant",
+      time: { created: T0 + (i === 1 ? 20 : i * 10) },
+    }));
+    onApi(messageMock(sid, { data: [...rows].reverse(), cursor: {} }));
+    await refreshMessages(sid);
+    assert.equal(listOf(sid)[0].info.id, "r2");
+    assert.equal(await loadOlderMessages(sid), true);
+    assert.deepEqual(
+      listOf(sid).map((m) => m.info.id),
+      rows.map((r) => r.id),
+    );
+  });
+});
+
 // 50cba2d
 describe("queued echo and command lines survive refreshes (50cba2d)", () => {
   it("keeps pending: and cmd: rows through refreshMessages", async () => {

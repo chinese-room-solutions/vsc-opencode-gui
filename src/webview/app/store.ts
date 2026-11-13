@@ -4269,12 +4269,12 @@ export async function loadOlderMessages(id: string): Promise<boolean> {
         // pre-window rows of every vintage (v2 pages and legacy
         // compaction rows alike) while the cursor walk prepends
         // strictly-older pages first — pool rows newer than a walked
-        // page must slot below it, not above.
-        const merged = new Map(list.map((m) => [m.info.id, m]));
-        for (const m of take) {
-          if (!merged.has(m.info.id)) merged.set(m.info.id, m);
-        }
-        return [...merged.values()].sort(byCreated);
+        // page must slot below it, not above. Pool rows go first so a
+        // created-ms tie across the window edge keeps transcript order.
+        const have = new Set(list.map((m) => m.info.id));
+        return [...take.filter((m) => !have.has(m.info.id)), ...list].sort(
+          byCreated,
+        );
       });
       return true;
     }

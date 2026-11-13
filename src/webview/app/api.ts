@@ -1396,7 +1396,11 @@ export async function fetchMessages(
     cursor?: { next?: string };
   }>(`/api/session/${id}/message?${params.toString()}`);
   if (!body) return undefined;
+  // Pages come newest-first. Reversed before the stable sort, rows sharing
+  // a created ms keep the server's order — a batch of steered prompts is
+  // delivered within one ms, and the sort alone flipped it.
   const rows: NormV2Row[] = [...(body.data ?? [])]
+    .reverse()
     .map(normV2Row)
     .sort((a, b) => a.time.created - b.time.created);
   let parent: string | undefined;
