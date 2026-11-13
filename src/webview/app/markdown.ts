@@ -176,9 +176,8 @@ export function enhanceCodeBlocks(root: HTMLElement, tokenize = true): void {
     const code = codeEl?.textContent ?? "";
     if (!code) continue;
     const lang = /\blanguage-([\w+#-]+)/.exec(codeEl!.className ?? "")?.[1];
-    // The copy button anchors to this wrapper, not the pre: the pre is the
-    // horizontal scroll container, and a button inside it rides the scroll
-    // off-screen on wide code. The wrapper's visible top-right stays put.
+    // The copy button anchors to this wrapper, not the pre: a button
+    // inside the code rides its line layout. The wrapper stays put.
     let wrap = pre.parentElement;
     if (!wrap || !wrap.classList.contains("code-block")) {
       wrap = document.createElement("div");

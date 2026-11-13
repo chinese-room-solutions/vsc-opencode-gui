@@ -2483,9 +2483,8 @@ body {
   padding: 2px 5px;
 }
 
-/* The block wrapper owns the margin and anchors the copy button: the pre
-   itself scrolls horizontally, and a button inside it would ride the scroll
-   off-screen on wide code. */
+/* The block wrapper owns the margin and anchors the copy button, keeping
+   it out of the code's own layout. */
 .code-block {
   position: relative;
   margin: 8px 0;
@@ -2500,9 +2499,6 @@ body {
   border-radius: 6px;
   padding: 10px 12px;
   margin: 0;
-  overflow-x: auto;
-  max-width: 100%;
-  box-sizing: border-box;
 }
 
 .markdown pre code {
@@ -2513,7 +2509,12 @@ body {
   /* 19px = the copy button's height, so its top offset centers it on the
      first line (the button hangs at the pre's 10px padding-top). */
   line-height: 19px;
-  white-space: pre;
+  /* Code wraps like the rest of the transcript (Claude Code's model): a
+     long line folds at the box edge instead of scrolling the block —
+     `anywhere` also folds unbreakable runs (a 300-char token, a long URL
+     in a comment), which `break-word` would still push out. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   text-shadow: var(--oc-glow-plain, none);
 }
 
