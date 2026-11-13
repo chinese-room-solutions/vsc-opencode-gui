@@ -63,6 +63,20 @@ async function openSession(page, url) {
     .toBeLessThanOrEqual(3);
 }
 
+// Preact attaches a component's window listeners a frame after its DOM
+// paints (deferred useEffect). A selector assertion can pass inside that
+// window, so let passive effects flush before driving keys against fresh
+// chrome.
+async function settleEffects(page) {
+  await page.evaluate(
+    () =>
+      new Promise((done) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => done())),
+      ),
+  );
+  await page.waitForTimeout(25);
+}
+
 // POST to the fake API's control endpoints.
 async function control(rig, path, body) {
   const res = await fetch(`${rig.api}${path}`, {
@@ -109,4 +123,4 @@ async function wheelToBottom(page) {
   throw new Error("never reached the bottom by wheeling");
 }
 
-export { test, expect, watchPage, geom, dist, openSession, control, waitIdle, assertFollows, wheelToBottom };
+export { test, expect, watchPage, geom, dist, openSession, settleEffects, control, waitIdle, assertFollows, wheelToBottom };

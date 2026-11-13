@@ -1,7 +1,7 @@
 // The picker cursor follows filtering: the model menu reseeds its keyboard
 // cursor whenever the row set changes, so Enter confirms the row the filter
 // highlighted — it never clamps onto the last row of the narrowed list.
-import { test, expect, openSession, watchPage } from "./support/fixture.mjs";
+import { test, expect, openSession, settleEffects, watchPage } from "./support/fixture.mjs";
 
 test("Enter after a filter picks the highlighted row", async ({ page, rig }) => {
   const watched = watchPage(page);
@@ -12,6 +12,9 @@ test("Enter after a filter picks the highlighted row", async ({ page, rig }) => 
   // The session's model starts highlighted. Two Downs park the cursor on
   // the last row — the stale position a mount-only cursor would keep.
   await expect(menu.locator(".menu-item.active")).toHaveText(/Fake Model/);
+  // The picker's key listener attaches a frame after the menu paints —
+  // settle, or the Downs can land before it exists (CI runners hit this).
+  await settleEffects(page);
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
   await expect(menu.locator(".menu-item.active")).toHaveText(/Fake Mini/);

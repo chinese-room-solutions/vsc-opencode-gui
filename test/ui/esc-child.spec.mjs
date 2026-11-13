@@ -3,20 +3,7 @@
 // key: an open confirm dialog's Esc cancels the dialog and leaves the
 // child view in place. Runs against the fake-API rig; the seeded parent
 // (ses_seed_1) carries two settled task chips that open ses_child_1.
-import { test, expect, openSession } from "./support/fixture.mjs";
-
-// Preact attaches a component's window listeners a frame after its DOM
-// paints (deferred useEffect). A selector assertion can pass inside that
-// window, so let passive effects flush before driving the key.
-async function settleEffects(page) {
-  await page.evaluate(
-    () =>
-      new Promise((done) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => done())),
-      ),
-  );
-  await page.waitForTimeout(25);
-}
+import { test, expect, openSession, settleEffects } from "./support/fixture.mjs";
 
 async function openChild(page, url) {
   await openSession(page, url);
