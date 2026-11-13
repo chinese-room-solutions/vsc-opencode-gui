@@ -1034,7 +1034,7 @@ describe("v2 transcript normalization (fetchMessages)", () => {
     assert.equal(running?.state?.time?.end, undefined);
   });
 
-  it("maps shell and synthetic rows; a failed compaction vanishes", async () => {
+  it("maps shell and synthetic rows; a failed compaction and an undescribed note vanish", async () => {
     onApi((call) =>
       call.path.startsWith("/api/session/ses_mix/message")
         ? {
@@ -1060,6 +1060,13 @@ describe("v2 transcript normalization (fetchMessages)", () => {
                 time: { created: 3 },
                 type: "synthetic",
                 text: "Context trimmed",
+                description: "Context trimmed",
+              },
+              {
+                id: "msg_rem",
+                time: { created: 2 },
+                type: "synthetic",
+                text: "<system-reminder>\nYou are in Plan mode.\n</system-reminder>",
               },
               {
                 id: "msg_peer",
@@ -1107,6 +1114,8 @@ describe("v2 transcript normalization (fetchMessages)", () => {
     const synText = syn?.parts[0] as { type?: string; text?: string } | undefined;
     assert.equal(synText?.type, "text");
     assert.equal(synText?.text, "Context trimmed");
+    // No description: context for the model alone (Plan mode reminders).
+    assert.ok(!list.some((m) => m.info.id === "msg_rem"));
     // A peer-tagged synthetic row keeps v1's shape: user row + synthetic
     // part carrying metadata.peerMessage (the peer card's provenance).
     const peer = list.find((m) => m.info.id === "msg_peer");
@@ -2184,7 +2193,11 @@ describe("v2 SSE → pipeline translation", () => {
 
   it("maps synthetic notes and remote moves", () => {
     const s = translateV2Event(
-      ev("session.synthetic", { sessionID: "s", text: "Context trimmed" }),
+      ev("session.synthetic", {
+        sessionID: "s",
+        text: "Context trimmed",
+        description: "Context trimmed",
+      }),
     );
     assert.equal(s.length, 2);
     assert.equal(s[0].type, "message.updated");
@@ -2292,6 +2305,25 @@ describe("v2 SSE → pipeline translation", () => {
           peerMessage: { version: 2, messageId: "m1", fromEndpointId: "ses_a" },
         },
       },
+    );
+    // An untagged note without a description (the Plan plugin's mode
+    // reminders, exactly as 2.1.4 enqueues them) is context for the model
+    // alone: nothing renders, so nothing busies the session either.
+    const reminder =
+      "<system-reminder>\nYou are NO LONGER in Plan mode.\n</system-reminder>";
+    assert.deepEqual(
+      translateV2Event(
+        ev("session.inbox.enqueued", {
+          sessionID: "s",
+          inboxID: "msg_rem1",
+          item: { type: "synthetic", payload: { text: reminder } },
+        }),
+      ),
+      [],
+    );
+    assert.deepEqual(
+      translateV2Event(ev("session.synthetic", { sessionID: "s", text: reminder })),
+      [],
     );
     // Non-synthetic inbox items are not transcript notes — leave them alone.
     assert.deepEqual(

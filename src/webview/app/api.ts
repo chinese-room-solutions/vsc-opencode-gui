@@ -1543,8 +1543,10 @@ export async function fetchMessages(
       // metadata.subagentNotice for the notice card; a shell lifecycle note
       // (metadata.source "shell") tags metadata.shellNotice, and the
       // server's restart note (metadata.notice "restart") tags
-      // metadata.restartNotice. Other synthetic notes stay plain assistant
-      // rows.
+      // metadata.restartNotice. Other described notes stay plain assistant
+      // rows; an undescribed one is context for the model alone (the Plan
+      // plugin's mode reminders, migrated v1 synthetic parts) — the
+      // official clients hide it too.
       const peer = (r.metadata as { peerMessage?: unknown } | undefined)
         ?.peerMessage;
       if (peer) {
@@ -1623,6 +1625,7 @@ export async function fetchMessages(
           },
         ];
       }
+      if (!r.description?.trim()) return [];
       return [
         {
           info: { id: r.id, role: "assistant", time: r.time },

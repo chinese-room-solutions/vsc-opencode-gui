@@ -512,6 +512,10 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
       const sub = text ? subagentNoticeMeta(src.metadata, desc, text) : undefined;
       const shell = text ? shellNoticeMeta(src.metadata, desc, text) : undefined;
       const restart = src.metadata?.notice === "restart";
+      // An untagged note without a description is context for the model
+      // alone (the Plan plugin's mode reminders): the official clients hide
+      // it, and its open text part would read as a reply streaming — busy.
+      if (!peer && !sub && !shell && !restart && !desc?.trim()) return [];
       return sid && rowID && typeof src.text === "string"
         ? [
             synth("message.updated", {
