@@ -761,8 +761,8 @@ body {
 
 .confirm-actions {
   display: flex;
-  gap: 8px;
-  justify-content: flex-end;
+  gap: 12px;
+  justify-content: center;
 }
 
 /* Dialog buttons in the app's vocabulary: the destructive primary fills
