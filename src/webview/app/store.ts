@@ -2016,12 +2016,15 @@ function verifiedIdle(sessionID: string, land: () => void): void {
 
 // The tab-prefix facts for one session's editor tab (the old in-app
 // TabsBar prefix, now reported to the host): the spinner ran on a
-// strict "busy" (retry never spun), and a pending ask painted the tab of
-// the asking session's parent-chain ROOT yellow — a locked sub-agent
-// thread marked its parent's tab. Exported for the App-level poster and
-// its tests.
+// strict "busy" (retry never spun) anywhere in the conversation — a
+// background sub-agent works on after its parent's turn ended — and a
+// pending ask painted the tab of the asking session's parent-chain ROOT
+// yellow — a locked sub-agent thread marked its parent's tab. Exported
+// for the App-level poster and its tests.
 export function tabFacts(root: string): { busy: boolean; attention: boolean } {
-  const busy = sessionStatus.value[root]?.type === "busy";
+  const busy = Object.entries(sessionStatus.value).some(
+    ([sid, st]) => st.type === "busy" && tabSignalRoot(sid) === root,
+  );
   let attention = false;
   for (const a of [...pendingPermissions.value, ...pendingQuestions.value]) {
     // Walk up the parent chain; a malformed cycle must not spin forever.

@@ -441,6 +441,27 @@ describe("tab signal prefix", () => {
     assert.deepEqual(tabFacts("root"), { busy: false, attention: false });
   });
 
+  it("tabFacts: a working sub-agent spins its idle parent's tab", () => {
+    sessions.value = [
+      sessRow("fam-root"),
+      sessRow("fam-kid", { parentID: "fam-root" }),
+      sessRow("fam-grandkid", { parentID: "fam-kid" }),
+      sessRow("fam-other"),
+      sessRow("fam-other-kid", { parentID: "fam-other" }),
+    ];
+    setBusy("fam-other-kid");
+    assert.deepEqual(tabFacts("fam-root"), { busy: false, attention: false });
+    // A background sub-agent works on after its parent's turn ended —
+    // nested ones too.
+    setBusy("fam-grandkid");
+    assert.deepEqual(tabFacts("fam-root"), { busy: true, attention: false });
+    sessionStatus.value = {
+      ...sessionStatus.value,
+      "fam-grandkid": { type: "retry", attempt: 1, message: "m", next: 0 },
+    };
+    assert.deepEqual(tabFacts("fam-root"), { busy: false, attention: false });
+  });
+
   it("tabSignalRoot: a sub-agent transcript reports its top ancestor", () => {
     sessions.value = [
       sessRow("root"),
