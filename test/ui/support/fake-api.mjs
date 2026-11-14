@@ -42,6 +42,11 @@ const dupChild = process.env.FAKE_API_DUP_CHILD === "1";
 // working sub-agent spins its parent's tab, so the tabsignal specs need it
 // idle to see the seeded session's own turn end.
 const childIdle = process.env.FAKE_API_CHILD_IDLE === "1";
+// FAKE_API_ROSTER=1 keeps a second sub-agent working beside ses_child_1:
+// the last turn's other task chip binds child ses_child_2 under a longer
+// agent name, and the active endpoint serves it busy — two roster rows
+// whose chips differ in width.
+const roster = process.env.FAKE_API_ROSTER === "1";
 // FAKE_API_STALLED=1 seeds the live turn with a "running" edit whose
 // input never arrived — the wire shape a stalled provider stream leaves
 // (v2 tool args stream as ephemeral deltas; the durable row keeps {}
@@ -438,8 +443,12 @@ for (let i = 1; i <= SEED_TURNS; i++) {
                   status: "completed",
                   input: {
                     description: "Explore the attribution retry paths",
-                    subagent_type: "oc-model-ai-gateway-fireworks-glm-5-3-flash",
+                    // The roster rig's pair stays under the menu's width cap.
+                    subagent_type: roster
+                      ? "oc-model-glm-5-3-flash"
+                      : "oc-model-ai-gateway-fireworks-glm-5-3-flash",
                   },
+                  ...(roster ? { metadata: { sessionId: "ses_child_2" } } : {}),
                   output: "done",
                   time: { start: ca + 9_600, end: ca + 10_400 },
                 },
@@ -1421,6 +1430,7 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, {
         data: {
           ...(childIdle ? {} : { ses_child_1: { agent: "general" } }),
+          ...(roster ? { ses_child_2: { agent: "oc-model-glm-5-3-flash" } } : {}),
           ...((blocked || stalled || childPending || childUnbound || dupChild) ? { [SESSION_ID]: { agent: "build" } } : {}),
         },
       });

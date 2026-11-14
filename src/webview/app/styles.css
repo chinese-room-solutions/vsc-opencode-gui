@@ -3201,10 +3201,19 @@ a.tool-pill {
   color: var(--oc-text-2);
 }
 
-/* The chip sheds its transcript margins inside the menu. */
+/* Inside the menu the chip sheds its transcript margins and every row
+   spans the widest chip, so the stop buttons line up and a shorter agent
+   name hands its slack to the description. The description's 16ch width
+   only sizes the menu (the widest chip keeps the transcript's slot). Its
+   flex basis stays 0, so the name still wins when the menu hits its cap. */
 .sam-row .subagent-chip {
+  width: auto;
   margin: 6px 0 0;
-  max-width: 100%;
+}
+
+.sam-row .subagent-desc {
+  width: 16ch;
+  max-width: none;
 }
 
 /* Sub-agent chip (the task tool): the spawned session is the detail view,
