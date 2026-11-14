@@ -12,6 +12,8 @@ const rigEnv = () => ({
   OPENCODE_ROUTE: JSON.stringify({ view: "session", id: "ses_seed_1" }),
   OPENCODE_TABS: JSON.stringify(["ses_seed_1"]),
   OPENCODE_DIALECT: "v2",
+  // The fixture's child otherwise runs forever and spins the tab.
+  FAKE_API_CHILD_IDLE: "1",
 });
 
 test("a re-rooted sub-agent page still reports its tab's conversation", async ({ page }) => {
@@ -26,6 +28,7 @@ test("a re-rooted sub-agent page still reports its tab's conversation", async ({
       OPENCODE_RIG_PIN: "ses_seed_1",
       OPENCODE_TABS: JSON.stringify(["ses_seed_1"]),
       OPENCODE_DIALECT: "v2",
+      FAKE_API_CHILD_IDLE: "1",
     },
   });
   try {

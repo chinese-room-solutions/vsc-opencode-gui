@@ -38,6 +38,10 @@ const childUnbound = process.env.FAKE_API_CHILD_UNBOUND === "1";
 // session (a steer re-opening it, or the title fallback double-binding) —
 // the roster must count the sub-agent once, not once per part.
 const dupChild = process.env.FAKE_API_DUP_CHILD === "1";
+// FAKE_API_CHILD_IDLE=1 drops the child from /api/session/active: a
+// working sub-agent spins its parent's tab, so the tabsignal specs need it
+// idle to see the seeded session's own turn end.
+const childIdle = process.env.FAKE_API_CHILD_IDLE === "1";
 // FAKE_API_STALLED=1 seeds the live turn with a "running" edit whose
 // input never arrived — the wire shape a stalled provider stream leaves
 // (v2 tool args stream as ephemeral deltas; the durable row keeps {}
@@ -635,6 +639,10 @@ const shellDeletes = [];
 // Permission answers (dock-keys spec): {id, decision, message} per reply,
 // from either dialect's reply route.
 const permReplies = [];
+// Live v2 asks, served by the per-session permission GET until replied —
+// the real server's contract. A resync adopts that list as truth, so an
+// ask known only from its SSE event vanished whenever one landed after it.
+let liveAsks = [];
 const shellText = () => shellChunks.slice(0, liveShell.served).join("");
 const shellStartedFrame = () =>
   writeFrame(v2Clients, {
@@ -1232,13 +1240,15 @@ const server = http.createServer(async (req, res) => {
     // session or another one's.
     if (method === "POST" && path === "/__control/ask") {
       const body = await readBody(req);
-      emitV2("permission.asked", {
+      const ask = {
         id: body.id ?? "perm_rig1",
         sessionID: body.sessionID ?? SESSION_ID,
         action: body.action ?? "bash",
         resources: Array.isArray(body.resources) ? body.resources : [],
         save: Array.isArray(body.save) ? body.save : [],
-      });
+      };
+      liveAsks = liveAsks.filter((a) => a.id !== ask.id).concat(ask);
+      emitV2("permission.asked", ask);
       json(res, 200, { ok: true });
       return;
     }
@@ -1371,7 +1381,7 @@ const server = http.createServer(async (req, res) => {
     if (path === "/api/session/active") {
       json(res, 200, {
         data: {
-          ses_child_1: { agent: "general" },
+          ...(childIdle ? {} : { ses_child_1: { agent: "general" } }),
           ...((blocked || stalled || childPending || childUnbound || dupChild) ? { [SESSION_ID]: { agent: "build" } } : {}),
         },
       });
@@ -1566,6 +1576,10 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if ((m = path.match(/^\/api\/session\/([^/]+)\/(permission|question|form)$/))) {
+      if (m[2] === "permission") {
+        json(res, 200, { data: liveAsks.filter((a) => a.sessionID === m[1]) });
+        return;
+      }
       json(res, 200, { data: [] });
       return;
     }
@@ -1588,6 +1602,7 @@ const server = http.createServer(async (req, res) => {
     // but a 404 here would surface the failure banner in rig specs.
     if ((m = path.match(/^\/api\/session\/([^/]+)\/permission\/([^/]+)\/reply$/))) {
       const body = await readBody(req);
+      liveAsks = liveAsks.filter((a) => a.id !== m[2]);
       permReplies.push({ id: m[2], decision: body.decision, message: body.message, at: Date.now() });
       json(res, 200, {});
       return;

@@ -8,6 +8,7 @@
 // back, and no reserved gap at the origin.
 import { test, expect } from "@playwright/test";
 import { startRig } from "./support/rig.mjs";
+import { openSession, settleEffects } from "./support/fixture.mjs";
 
 const rigEnv = () => ({
   OPENCODE_ROUTE: JSON.stringify({ view: "session", id: "ses_seed_1" }),
@@ -18,11 +19,18 @@ const rigEnv = () => ({
   OPENCODE_QUESTION_SOUND: "0",
 });
 
+// Open at rest: the open's own scroll to the bottom must fire before a
+// spec scrolls up, or both coalesce into one event that reads as no
+// leave intent, and the open's follow hold snaps the view back down.
+async function open(page, rig) {
+  await openSession(page, rig.url);
+  await settleEffects(page);
+}
+
 test("the bar docks the last own pill and hands off down the turns", async ({ page }) => {
   const rig = await startRig({ env: rigEnv() });
   try {
-    await page.goto(rig.url);
-    await page.waitForSelector(".msgs .turn .msg.user", { timeout: 15_000 });
+    await open(page, rig);
     const msgs = page.locator(".msgs");
     const bar = page.locator(".pin-bar .pin-mirror");
     // Mid-transcript: some pill owns the pin.
@@ -57,8 +65,7 @@ test("the bar docks the last own pill and hands off down the turns", async ({ pa
 test("scrolling back releases the dock; the origin holds no gap", async ({ page }) => {
   const rig = await startRig({ env: rigEnv() });
   try {
-    await page.goto(rig.url);
-    await page.waitForSelector(".msgs .turn .msg.user", { timeout: 15_000 });
+    await open(page, rig);
     const msgs = page.locator(".msgs");
     await msgs.evaluate((n) => {
       n.scrollTop = n.scrollHeight;
@@ -84,8 +91,7 @@ test("scrolling back releases the dock; the origin holds no gap", async ({ page 
 test("a peer card never docks; the own pill holds the pin through it", async ({ page }) => {
   const rig = await startRig({ env: rigEnv() });
   try {
-    await page.goto(rig.url);
-    await page.waitForSelector(".msgs .turn .msg.user", { timeout: 15_000 });
+    await open(page, rig);
     // A live peer note joins the open (last) turn as an assistant row —
     // under the ruling it must stay in flow, never taking the pin.
     await fetch(`${rig.api}/__control/peer-note`, {
@@ -113,8 +119,7 @@ test("a peer card never docks; the own pill holds the pin through it", async ({ 
 test("an expanded pill docks as its clamped twin", async ({ page }) => {
   const rig = await startRig({ env: rigEnv() });
   try {
-    await page.goto(rig.url);
-    await page.waitForSelector(".msgs .turn .msg.user", { timeout: 15_000 });
+    await open(page, rig);
     // Turn 2's prompt is the long one. Expanding it jumps it to the top
     // (reading mode, in view). Reading into it docks nothing over the
     // text; once the whole row scrolled past, the pin docks — as the
@@ -150,8 +155,7 @@ test("an expanded pill docks as its clamped twin", async ({ page }) => {
 test("a collapsed pill keeps its Show more toggle", async ({ page }) => {
   const rig = await startRig({ env: rigEnv() });
   try {
-    await page.goto(rig.url);
-    await page.waitForSelector(".msgs .turn .msg.user", { timeout: 15_000 });
+    await open(page, rig);
     const pill = page.locator(".turn .msg.user", { hasText: "Question 2:" }).first();
     await pill.locator(".clamp-toggle").click();
     await expect(pill.locator(".user-text.expanded")).toBeVisible();
@@ -173,8 +177,7 @@ test("a collapsed pill keeps its Show more toggle", async ({ page }) => {
 test("the successor's arrival pushes the pinned twin out", async ({ page }) => {
   const rig = await startRig({ env: rigEnv() });
   try {
-    await page.goto(rig.url);
-    await page.waitForSelector(".msgs .turn .msg.user", { timeout: 15_000 });
+    await open(page, rig);
     const msgs = page.locator(".msgs");
     const bar = page.locator(".pin-bar .pin-mirror");
     // The twin's top relative to the scroller's top edge: 0 pinned flush,
@@ -229,8 +232,7 @@ test("the successor's arrival pushes the pinned twin out", async ({ page }) => {
 test("the bar docks a manual /compact trigger as its literal", async ({ page }) => {
   const rig = await startRig({ env: rigEnv() });
   try {
-    await page.goto(rig.url);
-    await page.waitForSelector(".msgs .turn .msg.user", { timeout: 15_000 });
+    await open(page, rig);
     // A manual compaction joins the transcript mid-way, as one would in a
     // session that kept working after the fold.
     await fetch(`${rig.api}/__control/compaction`, {
@@ -263,8 +265,7 @@ test("the bar docks a manual /compact trigger as its literal", async ({ page }) 
 test("clicking the docked twin jumps back to its turn", async ({ page }) => {
   const rig = await startRig({ env: rigEnv() });
   try {
-    await page.goto(rig.url);
-    await page.waitForSelector(".msgs .turn .msg.user", { timeout: 15_000 });
+    await open(page, rig);
     const msgs = page.locator(".msgs");
     await msgs.evaluate((n) => {
       n.scrollTop = n.scrollHeight;
