@@ -1838,6 +1838,50 @@ export async function fetchMessages(
   };
 }
 
+// GET /api/session/{id}/inbox (v2) — work admitted but not yet delivered.
+// 2.x writes a prompt's message row only once delivery reaches it (a steer:
+// the running turn's next step boundary), so the message page can't serve
+// a held prompt however long it waits. `held` is every item's id (a live
+// render's row id); `prompts` rebuilds the steers in the page's user-row shape,
+// under the id and admission time the delivered row keeps. A queued item
+// waits out the whole turn — its admission time would slot it mid-turn,
+// so it shows once delivered. Undefined on failure or v1.
+export interface Inbox {
+  held: Set<string>;
+  prompts: MessageWithParts[];
+}
+
+export async function fetchInbox(id: string): Promise<Inbox | undefined> {
+  if (serverDialect !== "v2") return undefined;
+  const body = await getJson<{
+    data?: (V2MessageRow & { delivery?: string })[];
+  }>(`/api/session/${id}/inbox`);
+  if (!Array.isArray(body?.data)) return undefined;
+  const items = body.data.filter((r) => typeof r?.id === "string");
+  return {
+    held: new Set(items.map((r) => r.id)),
+    prompts: items
+      .filter((r) => r.type === "user" && r.delivery === "steer")
+      .map((raw) => {
+        const r = normV2Row(raw);
+        const pid = `${r.id}:text`;
+        return {
+          info: { id: r.id, role: "user", time: r.time },
+          parts: [
+            {
+              id: pid,
+              messageID: r.id,
+              sessionID: id,
+              type: "text",
+              text: clampPartText(pid, r.payload?.text ?? r.text ?? ""),
+            },
+            ...v2RowFileParts(r, id),
+          ],
+        };
+      }),
+  };
+}
+
 // GET /session/{id}/message (v1) — the legacy store. Compaction writes ONLY
 // here: summarize's trigger user row (a lone `compaction` part) and the
 // summary assistant row (agent "compaction", `summary:true`, the summary

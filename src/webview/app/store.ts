@@ -15,6 +15,7 @@ import {
   fetchCommands,
   fetchConfig,
   fetchCurrentProject,
+  fetchInbox,
   fetchLegacyMessages,
   fetchMessages,
   fetchPendingPermissions,
@@ -3909,6 +3910,10 @@ export async function refreshMessages(id: string): Promise<void> {
     // proves the turn outlived this snapshot, whatever the status map
     // says when the fetch lands.
     const beganAt = Date.now();
+    // The inbox before the page: delivery moves a held prompt from the
+    // first to the second, so one delivered between the reads still shows
+    // up in one of them.
+    const inbox = await fetchInbox(id);
     const [page, legacy] = await Promise.all([
       fetchMessages(id, shown > MESSAGE_PAGE ? { size: shown } : undefined),
       fetchLegacyMessages(id),
@@ -3927,6 +3932,9 @@ export async function refreshMessages(id: string): Promise<void> {
     clearMsgRetry(id);
     const merged = new Map((page?.messages ?? []).map((m) => [m.info.id, m]));
     for (const m of legacy ?? []) {
+      if (!merged.has(m.info.id)) merged.set(m.info.id, m);
+    }
+    for (const m of inbox?.prompts ?? []) {
       if (!merged.has(m.info.id)) merged.set(m.info.id, m);
     }
     const sorted = [...merged.values()].sort(byCreated);
@@ -3990,13 +3998,14 @@ export async function refreshMessages(id: string): Promise<void> {
           // A row the stream delivered while this fetch was in flight
           // (message.updated mid-await) is newer than the snapshot — keep
           // it; the next refresh confirms it. Anything older the fetch
-          // doesn't serve was deleted server-side — except a young user
-          // row on v2: the prompt sits in the inbox and only reaches the
-          // message fetch at first step start, so absent-but-young is
-          // undelivered, not deleted.
+          // doesn't serve was deleted server-side — except what the v2
+          // inbox still holds (a held peer note already rendered live), and
+          // a young user row: a prompt admitted after the inbox read, or
+          // one a failed read couldn't vouch for.
           return (
             !merged.has(m.info.id) &&
-            ((m.info.time.created ?? 0) >= fetchStart - 2000 ||
+            (inbox?.held.has(m.info.id) ||
+              (m.info.time.created ?? 0) >= fetchStart - 2000 ||
               (m.info.role === "user" &&
                 (m.info.time.created ?? 0) >= fetchStart - 60_000))
           );

@@ -4474,6 +4474,94 @@ describe("sendPrompt", () => {
       setDialect("v1");
     }
   });
+  // An inbox item as GET /api/session/{id}/inbox serves it.
+  const inboxItem = (
+    sid: string,
+    id: string,
+    text: string,
+    over: Record<string, unknown> = {},
+  ) => ({
+    id,
+    sessionID: sid,
+    time: { created: T0 },
+    type: "user",
+    payload: { text },
+    delivery: "steer",
+    ...over,
+  });
+  it("v2: a steer held in the inbox past a minute survives a refresh", async () => {
+    setDialect("v2");
+    try {
+      const sid = "sp7b";
+      const held = inboxItem(sid, "usr_held", "steer after the long tool");
+      sessions.value = [sessRow(sid, { agent: "build" })];
+      open(sid, []);
+      setBusy(sid);
+      setNow(T0);
+      onApi((call) => {
+        if (call.method === "POST" && call.path === `/api/session/${sid}/prompt`)
+          return { data: held };
+        if (call.method === "GET" && call.path === `/api/session/${sid}/inbox`)
+          return { data: [held] };
+        return messageMock(sid, { data: [], cursor: {} })(call);
+      });
+      await sendPrompt(sid, "steer after the long tool");
+      assert.ok(findRow(sid, "usr_held"));
+      // The running step outlasts a minute: the steer still sits in the
+      // inbox, unserved by the page, when the busy poll or a resync pulls.
+      setNow(T0 + 61_000);
+      await refreshMessages(sid);
+      assert.ok(findRow(sid, "usr_held"), "the held steer must survive");
+    } finally {
+      setDialect("v1");
+    }
+  });
+  it("v2: a reload mid-wait rebuilds held steers from the inbox", async () => {
+    setDialect("v2");
+    try {
+      const sid = "sp7c";
+      open(sid, []);
+      onApi((call) => {
+        if (call.method === "GET" && call.path === `/api/session/${sid}/inbox`)
+          return {
+            data: [
+              inboxItem(sid, "usr_s", "a steer"),
+              inboxItem(sid, "usr_q", "a queued one", { delivery: "queue" }),
+            ],
+          };
+        return messageMock(sid, { data: [], cursor: {} })(call);
+      });
+      await refreshMessages(sid);
+      const steer = findRow(sid, "usr_s");
+      assert.equal(steer?.info.time.created, T0);
+      assert.equal((steer?.parts[0] as { text?: string }).text, "a steer");
+      // A queued item waits out the whole turn: it shows once delivered.
+      assert.ok(!findRow(sid, "usr_q"));
+    } finally {
+      setDialect("v1");
+    }
+  });
+  it("v2: a live note the inbox still holds survives a refresh", async () => {
+    setDialect("v2");
+    try {
+      const sid = "sp7d";
+      // A peer note onto a busy session renders at enqueue, under its inbox
+      // id, and reaches the page only at delivery.
+      open(sid, [row("msg_note", "assistant", T0)]);
+      setNow(T0 + 10_000);
+      onApi((call) => {
+        if (call.method === "GET" && call.path === `/api/session/${sid}/inbox`)
+          return {
+            data: [inboxItem(sid, "msg_note", "from a peer", { type: "synthetic" })],
+          };
+        return messageMock(sid, { data: [], cursor: {} })(call);
+      });
+      await refreshMessages(sid);
+      assert.ok(findRow(sid, "msg_note"));
+    } finally {
+      setDialect("v1");
+    }
+  });
   it("an old user row missing from the fetch is still dropped", async () => {
     const sid = "sp8";
     open(sid, [row("dead", "user", T0)]);

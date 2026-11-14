@@ -66,6 +66,11 @@ const longP1 = process.env.FAKE_API_LONG_P1 === "1";
 // not re-animate it (running visuals, a large elapsed) when the next
 // prompt flips the session busy.
 const ghost = process.env.FAKE_API_GHOST === "1";
+// FAKE_API_INBOX=1 admits v2 prompts the way 2.x does onto a running
+// session: into the inbox. The POST replies the admitted row, but the
+// message page serves nothing until the next step boundary delivers it
+// (/__control/deliver-inbox), under the same id and admission time.
+const inboxMode = process.env.FAKE_API_INBOX === "1";
 
 // --- deterministic filler text (tall enough to overflow any viewport) ---
 const SENTENCES = [
@@ -663,6 +668,8 @@ let streamCount = 0;
 let recSeq = 0;
 const backgroundCalls = [];
 const promptCalls = [];
+// FAKE_API_INBOX's held prompts, oldest first.
+const inbox = [];
 // One-shot failure for the next prompt POST (either dialect's send route):
 // the failed-send take-back spec arms it via /__control/fail-next-prompt.
 let failNextPrompt = false;
@@ -1336,6 +1343,38 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, { calls: promptCalls });
       return;
     }
+    // FAKE_API_INBOX's step boundary: every held prompt becomes its message
+    // row and the next step starts answering — the model starts to respond.
+    if (method === "POST" && path === "/__control/deliver-inbox") {
+      await readBody(req);
+      const items = inbox.splice(0);
+      for (const it of items) {
+        // A v2 user row carries its text on the row, not in content.
+        trackInfo({ id: it.id, role: "user", time: { created: it.created } });
+        stepsRows.find((r) => r.id === it.id).text = it.text;
+        emitV2("session.inbox.delivered", { sessionID: it.sessionID, inboxID: it.id });
+      }
+      if (items.length) {
+        const sid = items[0].sessionID;
+        const n = nextTurn++;
+        const a = `msg_a${n}`;
+        const pt = `pt_a${n}`;
+        const t = Date.now();
+        emitV2("session.step.started", {
+          sessionID: sid,
+          assistantMessageID: a,
+          agent: "build",
+          model: { providerID: "fake", id: "fake-model" },
+          started: t,
+        });
+        trackInfo({ id: a, role: "assistant", time: { created: t }, agent: "build", modelID: "fake-model", providerID: "fake" });
+        emitV2("session.text.started", { sessionID: sid, assistantMessageID: a, ordinal: 0 });
+        trackPart({ id: pt, messageID: a, sessionID: sid, type: "text", text: "" });
+        streamTextV2(sid, a, { first: 200, count: 200, chars: 60, onChunk: (d) => trackText(a, pt, d) });
+      }
+      json(res, 200, { delivered: items.map((i) => i.id) });
+      return;
+    }
     // The failed-send take-back's lever: the NEXT prompt POST answers 500
     // ({message} — the shape the relay reads a reason from), then normal
     // behavior resumes — the retry goes through with its scripted turn.
@@ -1517,6 +1556,22 @@ const server = http.createServer(async (req, res) => {
       });
       return;
     }
+    // v2 inbox: admitted, undelivered work (FAKE_API_INBOX's held prompts).
+    if ((m = path.match(/^\/api\/session\/([^/]+)\/inbox$/))) {
+      json(res, 200, {
+        data: inbox
+          .filter((it) => it.sessionID === m[1])
+          .map((it) => ({
+            id: it.id,
+            sessionID: it.sessionID,
+            time: { created: it.created },
+            type: "user",
+            payload: { text: it.text },
+            delivery: "steer",
+          })),
+      });
+      return;
+    }
     if ((m = path.match(/^\/api\/session\/([^/]+)\/message$/))) {
       // v2 page, paged like 2.0.26: limit (default 50, max 200 — above it
       // the endpoint 400s, it does not clamp), order asc|desc, and an
@@ -1652,6 +1707,31 @@ const server = http.createServer(async (req, res) => {
         at: Date.now(),
         seq: ++recSeq,
       });
+      if (inboxMode) {
+        const item = {
+          id: typeof body.id === "string" && body.id ? body.id : `msg_in${promptCalls.length}`,
+          sessionID: m[1],
+          text,
+          created: Date.now(),
+        };
+        inbox.push(item);
+        emitV2("session.inbox.enqueued", {
+          sessionID: m[1],
+          inboxID: item.id,
+          item: { type: "user", payload: { text }, delivery: "steer" },
+        });
+        json(res, 200, {
+          data: {
+            id: item.id,
+            sessionID: m[1],
+            time: { created: item.created },
+            type: "user",
+            payload: { text },
+            delivery: "steer",
+          },
+        });
+        return;
+      }
       // The scripted turn runs on the v2 dialect; the reply carries the
       // admitted user row (promptSession upserts it in place of the
       // optimistic echo). 200+JSON, not 204: Chrome logs ERR_ABORTED on
