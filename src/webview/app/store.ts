@@ -3673,6 +3673,29 @@ export function addComposerFiles(key: string, files: ComposerFile[]): void {
     [key]: [...(composerFiles.value[key] ?? []), ...files],
   };
 }
+// Chips land, and send, in the order they were added. A paste/drop attach
+// is async (read, thumb, disk snapshot), so each add on a composer waits
+// out the ones still in flight there — a big paste would otherwise land
+// after a smaller one made later. With none in flight it runs at once.
+const attachTails = new Map<string, Promise<void>>();
+export function attachInOrder(key: string, add: () => unknown): void {
+  const prev = attachTails.get(key);
+  const tail = (prev ? prev.then(add) : (async () => add())()).then(
+    () => {},
+    (err) =>
+      setSendError(
+        `Could not attach: ${err instanceof Error ? err.message : String(err)}`,
+        key,
+      ),
+  );
+  attachTails.set(key, tail);
+  void tail.then(() => {
+    if (attachTails.get(key) === tail) attachTails.delete(key);
+  });
+}
+// Settles once every add made on the composer so far has landed.
+export const attachesLanded = (key: string): Promise<void> =>
+  attachTails.get(key) ?? Promise.resolve();
 function clearComposerFiles(key: string): void {
   if (!composerFiles.value[key]?.length) return;
   composerFiles.value = { ...composerFiles.value, [key]: [] };
@@ -3846,7 +3869,7 @@ export function hostMessage(msg: unknown) {
               .join(", ")
           }).`,
         );
-      addComposerFiles(target, ok);
+      attachInOrder(target, () => addComposerFiles(target, ok));
     }
   }
   // The host snapshotted a pasted attachment: hand the path to the waiting

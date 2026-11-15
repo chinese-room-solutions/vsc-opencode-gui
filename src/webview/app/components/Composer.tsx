@@ -6,6 +6,8 @@ import { atTrigger, mentionTokens, resolve, type MentionToken } from "../mention
 import {
   addComposerFiles,
   agents,
+  attachesLanded,
+  attachInOrder,
   attachmentPreview,
   attachInputs,
   commands,
@@ -382,13 +384,9 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
   const savedDraft = useRef<{ text: string; caret: number } | undefined>(
     undefined,
   );
-  // A paste's attach is async (sniff/read/snapshot); a send fired before it
-  // lands must wait, so in-flight attaches chain here and send awaits them.
-  const attaching = useRef<Promise<void> | undefined>(undefined);
   useEffect(() => {
     setHistIndex(undefined);
     savedDraft.current = undefined;
-    attaching.current = undefined;
   }, [props.sessionId]);
   const resetSweep = () => {
     setHistIndex(undefined);
@@ -726,17 +724,15 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
   };
 
   const attach = (files: File[]) => {
-    const p = attachFiles(props.sessionId, files).then(() => {}, () => {});
-    attaching.current = attaching.current
-      ? Promise.all([attaching.current, p]).then(() => {}, () => {})
-      : p;
+    const sid = props.sessionId;
+    attachInOrder(sid, () => attachFiles(sid, files));
   };
 
   const send = async () => {
     // Enter may beat a just-fired paste: wait out the attach, then read the
     // box and the file list fresh — the render-scope files is stale after
     // the await, and the refusal gate must see the chip that just landed.
-    await attaching.current;
+    await attachesLanded(draftKey);
     const el = ref.current;
     const text = el?.value ?? "";
     // Busy stays sendable — prompts are steered into the running turn by
@@ -885,7 +881,8 @@ export function Composer(props: { sessionId: string; status?: SessionStatus }) {
               .join(", ")
           }).`,
         );
-      if (ok.length > 0) addComposerFiles(draftKey, ok);
+      if (ok.length > 0)
+        attachInOrder(draftKey, () => addComposerFiles(draftKey, ok));
     };
     window.addEventListener("dragover", onOver);
     window.addEventListener("dragleave", onLeave);

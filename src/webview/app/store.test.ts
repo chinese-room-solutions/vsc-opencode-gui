@@ -126,6 +126,8 @@ import {
   peerNames,
   loadPersistedFiles,
   addComposerFiles,
+  attachInOrder,
+  attachesLanded,
   requestAttachmentSnapshot,
   attachmentPreview,
   attachmentPreviewForget,
@@ -5768,6 +5770,33 @@ describe("hostMessage routing", () => {
       sendError.value?.text,
       "1 file not attached (unsupported type).",
     );
+    sessions.value = [];
+  });
+  it("files-picked lands behind a paste still attaching on that composer", async () => {
+    providers.value = undefined;
+    const sid = "fp3";
+    sessions.value = [sessRow(sid)];
+    navigate({ view: "session", id: sid });
+    let land!: () => void;
+    attachInOrder(
+      sid,
+      () =>
+        new Promise<void>((done) => {
+          land = () => {
+            addComposerFiles(sid, [{ uri: "u0", name: "pasted.png" }]);
+            done();
+          };
+        }),
+    );
+    hostMessage({
+      type: "files-picked",
+      files: [{ uri: "u1", name: "picked.txt" }],
+    });
+    const names = () => composerFiles.value[sid]?.map((f) => f.name);
+    assert.equal(names(), undefined);
+    land();
+    await attachesLanded(sid);
+    assert.deepEqual(names(), ["pasted.png", "picked.txt"]);
     sessions.value = [];
   });
   it("toggle-context flips the panel without errors", () => {

@@ -118,10 +118,11 @@ const stubFor = (nonce, serverUrl) =>
   `} else if (m && m.type === "save-attachment") {` +
   // The rig has no disk: answer the snapshot with a fake path so the chip
   // swap (data: -> file://) runs in the rig like it does against the host.
-  // A spec can hold the reply open (window.__slowAttach, ms) to race a
-  // send against the still-attaching paste.
+  // A spec can hold the reply open (window.__slowAttach: ms, or {name: ms}
+  // per file) to race a send, or the next paste, against this attach.
   `const saved = () => window.postMessage({ type: "attachment-saved", sessionId: m.sessionId, rid: m.rid, path: "file:///repo/.opencode/attachments/" + m.sessionId + "/1-" + m.name }, "*");` +
-  `setTimeout(saved, Number(window.__slowAttach) || 0);` +
+  `const slow = window.__slowAttach;` +
+  `setTimeout(saved, Number(slow && typeof slow === "object" ? slow[m.name] : slow) || 0);` +
   `} else if (m && m.type === "read-attachment" && typeof m.path === "string" && m.path.includes("/.opencode/attachments/")) {` +
   // Mirror the host's path guard: only attachments-root paths get a
   // preview (a tiny decodable PNG); anything else falls through to the

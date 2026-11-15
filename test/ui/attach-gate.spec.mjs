@@ -248,14 +248,14 @@ test("a pasted image snapshots to disk and previews through its thumb", async ({
 });
 
 // Paste into the composer itself (ClipboardEvent on the textarea).
-const pasteImage = (page) =>
-  page.evaluate(() => {
+const pasteImage = (page, name = "dot.png") =>
+  page.evaluate((n) => {
     const ta = document.querySelector(".composer textarea");
     const dt = new DataTransfer();
     const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
-    dt.items.add(new File([Uint8Array.from(atob(png), (c) => c.charCodeAt(0))], "dot.png", { type: "image/png" }));
+    dt.items.add(new File([Uint8Array.from(atob(png), (c) => c.charCodeAt(0))], n, { type: "image/png" }));
     ta.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
-  });
+  }, name);
 
 test("a pasted image chip survives a reload with its thumbnail and removes cleanly", async ({ page, rig }) => {
   const watched = watchPage(page);
@@ -395,5 +395,45 @@ test("an Enter fired during a paste's attach still sends the file", async ({ pag
   // a data URI.
   expect(part.filename).toBe("raced.pdf");
   expect(part.url.startsWith("file:///repo/.opencode/attachments/")).toBe(true);
+  expect(watched.errors).toEqual([]);
+});
+
+test("attachments send in the order they were added, however long each attach takes", async ({ page, rig }) => {
+  const watched = watchPage(page);
+  await openSession(page, rig.url);
+  // The image's snapshot reply is held open while the later adds land at
+  // once — a pasted pdf (its snapshot answers straight back) and an
+  // explorer drop (no attach work at all): in landing order the image
+  // would go last.
+  await page.evaluate(() => {
+    window.__slowAttach = { "first.png": 600 };
+  });
+  await page.click(".composer textarea");
+  await pasteImage(page, "first.png");
+  await page.evaluate(() => {
+    const ta = document.querySelector(".composer textarea");
+    const dt = new DataTransfer();
+    dt.items.add(new File(["%PDF-1.4 fake page"], "second.pdf", { type: "application/pdf" }));
+    ta.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.setData("resourceurls", JSON.stringify(["file:///repo/picks/third.json"]));
+    window.dispatchEvent(new DragEvent("dragover", { dataTransfer: dt, bubbles: true, cancelable: true }));
+    window.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }));
+  });
+  const order = ["first.png", "second.pdf", "third.json"];
+  const chips = page.locator(".composer-files .file-chip");
+  await expect(chips).toHaveCount(3);
+  for (const [i, name] of order.entries())
+    await expect(chips.nth(i)).toHaveAttribute("title", name);
+  await page.fill(".composer textarea", "in order");
+  await page.click(".comp-send");
+  const sent = async () =>
+    (await (await fetch(`${rig.api}/__control/prompts`)).json()).calls
+      .flatMap((c) => c.parts ?? [])
+      .filter((p) => p.type === "file")
+      .map((p) => p.filename);
+  await expect.poll(sent).toEqual(order);
   expect(watched.errors).toEqual([]);
 });
