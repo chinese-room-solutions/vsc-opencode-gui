@@ -41,6 +41,7 @@ import {
   defaultAgent,
   deleteSession,
   displayModel,
+  familyWorking,
   forkSession,
   fmtDur,
   formatDateTime,
@@ -88,6 +89,7 @@ import {
   revertQueuedCommand,
   revertQueuedTurn,
   revertSession,
+  runningShells,
   runSlashCommand,
   failedMsgLoads,
   homeQuery,
@@ -244,6 +246,7 @@ afterEach(() => {
   agents.value = [];
   tombstones.value = [];
   homeFilter.value = undefined;
+  runningShells.value = {};
 });
 
 describe("smoke", () => {
@@ -460,6 +463,35 @@ describe("tab signal prefix", () => {
       "fam-grandkid": { type: "retry", attempt: 1, message: "m", next: 0 },
     };
     assert.deepEqual(tabFacts("fam-root"), { busy: false, attention: false });
+  });
+
+  it("familyWorking: a running shell spins its idle conversation until it exits", async () => {
+    setDialect("v2");
+    try {
+      sessions.value = [
+        sessRow("sh-root"),
+        sessRow("sh-kid", { parentID: "sh-root" }),
+        sessRow("sh-other"),
+      ];
+      // A command without an owning session spins nothing.
+      await sseFlush("shell.created", {
+        info: { id: "sh_0", status: "running", metadata: {} },
+      });
+      assert.deepEqual(tabFacts("sh-root"), { busy: false, attention: false });
+      // A command a sub-agent moved to the background outlives its turn:
+      // the root's tab and row spin, another conversation's don't.
+      await sseFlush("shell.created", {
+        info: { id: "sh_1", status: "running", metadata: { sessionID: "sh-kid" } },
+      });
+      assert.deepEqual(tabFacts("sh-root"), { busy: true, attention: false });
+      assert.equal(familyWorking("sh-root"), true);
+      assert.equal(familyWorking("sh-other"), false);
+      await sseFlush("shell.exited", { id: "sh_1", status: "exited", exit: 0 });
+      assert.deepEqual(tabFacts("sh-root"), { busy: false, attention: false });
+      assert.equal(familyWorking("sh-root"), false);
+    } finally {
+      setDialect("v1");
+    }
   });
 
   it("tabSignalRoot: a sub-agent transcript reports its top ancestor", () => {

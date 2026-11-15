@@ -66,6 +66,7 @@ import {
   isText,
   isTool,
   isTaskTool,
+  fetchRunningShells,
   fetchShellOutput,
   shellOutputText,
   stopShellRun,
@@ -147,6 +148,22 @@ export const sessionsNext = signal<string | undefined>(undefined);
 // restart window): the navigator keeps its loading copy instead of "No sessions yet."
 export const sessionsStalled = signal(false);
 export const sessionStatus = signal<Record<string, SessionStatus>>({});
+// Running shell commands, id → owning session (v2): a command the agent
+// moved to the background, or the user's own run, outlives the turn that
+// started it, and the session reads idle while it works. Seeded by
+// refreshBase, kept by the shell.* events.
+export const runningShells = signal<Record<string, string>>({});
+// Shell events applied while a refreshBase pull is in flight (id → owner,
+// undefined once gone): they postdate the snapshot, so they replay on it.
+let shellsRaced: Map<string, string | undefined> | undefined;
+function setShell(id: string, owner: string | undefined): void {
+  shellsRaced?.set(id, owner);
+  if (runningShells.value[id] === owner) return;
+  const next = { ...runningShells.value };
+  if (owner === undefined) delete next[id];
+  else next[id] = owner;
+  runningShells.value = next;
+}
 // Prompts the user interrupted before any step answered them: the awaiting
 // placeholder ("Processing...") must not resurrect a prompt the user killed.
 export const interruptedPrompts = signal<Set<string>>(new Set());
@@ -707,7 +724,8 @@ async function refreshBase(): Promise<void> {
   // it (the extension); the v2 model catalog is location-scoped without it.
   const here = meta("opencode-workspace");
   const configDocs = await fetchConfigDocs();
-  const [statuses, page, providerList, agentList, commandList, projectList, current, config] =
+  const raced = (shellsRaced = new Map());
+  const [statuses, page, providerList, agentList, commandList, projectList, current, config, shells] =
     await Promise.all([
       fetchSessionStatus(),
       fetchSessions(),
@@ -717,11 +735,20 @@ async function refreshBase(): Promise<void> {
       fetchProjects(),
       fetchCurrentProject(),
       fetchConfig(configDocs),
+      fetchRunningShells(here || undefined),
     ]);
+  if (shellsRaced === raced) shellsRaced = undefined;
   if (gen !== generation) return;
   // Same adoption body as the poll: hold, settles, echo retirement — a
   // wholesale replace would let a raced snapshot read as idle.
   if (statuses) adoptStatuses(statuses);
+  // A replace heals exits the stream missed; the raced events win.
+  if (shells) {
+    for (const [id, owner] of raced)
+      if (owner === undefined) delete shells[id];
+      else shells[id] = owner;
+    runningShells.value = shells;
+  }
   if (page) {
     // Merge, not replace: the fetch is a snapshot that can predate a
     // session created while it was in flight (a "+" clicked during boot) —
@@ -2015,17 +2042,26 @@ function verifiedIdle(sessionID: string, land: () => void): void {
     });
 }
 
-// The tab-prefix facts for one session's editor tab (the old in-app
-// TabsBar prefix, now reported to the host): the spinner ran on a
-// strict "busy" (retry never spun) anywhere in the conversation — a
-// background sub-agent works on after its parent's turn ended — and a
-// pending ask painted the tab of the asking session's parent-chain ROOT
-// yellow — a locked sub-agent thread marked its parent's tab. Exported
-// for the App-level poster and its tests.
-export function tabFacts(root: string): { busy: boolean; attention: boolean } {
-  const busy = Object.entries(sessionStatus.value).some(
-    ([sid, st]) => st.type === "busy" && tabSignalRoot(sid) === root,
+// A conversation works while any session in it is strictly "busy" (retry
+// never spun) or owns a running shell: a background sub-agent or command
+// works on after the turn that started it ended. The tab prefix and the
+// navigator row spin on it.
+export function familyWorking(root: string): boolean {
+  const inFamily = (sid: string) => tabSignalRoot(sid) === root;
+  return (
+    Object.entries(sessionStatus.value).some(
+      ([sid, st]) => st.type === "busy" && inFamily(sid),
+    ) || Object.values(runningShells.value).some(inFamily)
   );
+}
+
+// The tab-prefix facts for one session's editor tab (the old in-app
+// TabsBar prefix, now reported to the host): the spinner runs while the
+// conversation works, and a pending ask paints the tab of the asking
+// session's parent-chain ROOT yellow — a locked sub-agent thread marks
+// its parent's tab. Exported for the App-level poster and its tests.
+export function tabFacts(root: string): { busy: boolean; attention: boolean } {
+  const busy = familyWorking(root);
   let attention = false;
   for (const a of [...pendingPermissions.value, ...pendingQuestions.value]) {
     // Walk up the parent chain; a malformed cycle must not spin forever.
@@ -2375,6 +2411,23 @@ function applyEvent(event: ServerEvent): void {
     // of the row.
     case "session.deleted":
       if (data.sessionID) dropSessionLocal(data.sessionID);
+      break;
+    // The server's command lifecycle, every location's (v2): created
+    // carries the Shell.Info, exited/deleted only its id.
+    case "shell.created": {
+      const run = (
+        event.data as {
+          info?: { id?: unknown; status?: unknown; metadata?: { sessionID?: unknown } };
+        }
+      ).info;
+      const owner = run?.metadata?.sessionID;
+      if (typeof run?.id === "string" && run.status === "running" && typeof owner === "string")
+        setShell(run.id, owner);
+      break;
+    }
+    case "shell.exited":
+    case "shell.deleted":
+      if (data.id) setShell(data.id, undefined);
       break;
     // v2's compaction turn ended (summary written or failed): the summary
     // row is completed in the durable store, so pull it — and retire the

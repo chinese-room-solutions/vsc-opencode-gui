@@ -2681,6 +2681,31 @@ export async function deleteSession(
 
 // --- v2 native shells: output tail and kill (v1 has no shell API) ---
 
+// GET /api/shell — the location's running commands, as shell id → owning
+// session (the metadata.sessionID both the agent's shell tool and the
+// user's own runs stamp). Exited commands are not listed.
+export async function fetchRunningShells(
+  directory?: string,
+): Promise<Record<string, string> | undefined> {
+  if (serverDialect !== "v2") return undefined;
+  const qs = directory
+    ? `?location%5Bdirectory%5D=${encodeURIComponent(directory)}`
+    : "";
+  const body = await getJson<{
+    data?: { id?: unknown; status?: unknown; metadata?: { sessionID?: unknown } }[];
+  }>(`/api/shell${qs}`);
+  if (!Array.isArray(body?.data)) return undefined;
+  const map: Record<string, string> = {};
+  for (const s of body.data)
+    if (
+      typeof s.id === "string" &&
+      s.status === "running" &&
+      typeof s.metadata?.sessionID === "string"
+    )
+      map[s.id] = s.metadata.sessionID;
+  return map;
+}
+
 // GET /api/shell/{id}/output?cursor=<bytes> — the chunk after the cursor,
 // the advanced cursor, and the total size. `gone` means the server no
 // longer knows the shell (404): it exited and was evicted, or died with a

@@ -3,6 +3,7 @@ import { strict as assert } from "node:assert";
 import {
   apiFailWith,
   API_FAIL,
+  API_HOLD,
   callsFor,
   flushEvents,
   dispatchWindowMessage,
@@ -59,6 +60,7 @@ import {
   refreshQuestions,
   resyncFromServer,
   resetBaseRetryForTest,
+  runningShells,
   sendPrompt,
   serverDefaultModel,
   sessionStatus,
@@ -2074,6 +2076,58 @@ describe("v2 lazy command registry re-pull", () => {
     refreshProvidersIfStale();
     await settle(8);
     assert.equal(callsFor("/api/model").length, before);
+  });
+});
+
+// Background commands outlive the turn that started them; the tab and the
+// navigator row spin on the running-shell map refreshBase seeds.
+describe("v2 running shells (refreshBase seed)", () => {
+  beforeEach(() => setDialect("v2"));
+  afterEach(() => setDialect("v1"));
+
+  it("a reconnect replaces the map; shell events that raced the pull win", async () => {
+    let held: number | undefined;
+    onApi((call) => {
+      if (call.method !== "GET") return undefined;
+      const p = call.path.split("?")[0];
+      if (p === "/api/shell") {
+        held = call.id;
+        return API_HOLD;
+      }
+      if (p === "/api/model") return { data: [] };
+      if (p === "/api/provider") return { data: [] };
+      if (["/api/config", "/api/project", "/api/agent", "/api/command", "/api/skill"].includes(p))
+        return [];
+      return undefined;
+    });
+    // Its exit was lost with the dropped stream.
+    runningShells.value = { sh_lost: "rs-a" };
+    resetBaseRetryForTest();
+    v2sse("server.connected", {});
+    await flushEvents();
+    await settle(8);
+    assert.notEqual(held, undefined, "pulled the running shells");
+    // Mid-pull, a listed command exits and a new one starts.
+    v2sse("shell.exited", { id: "sh_b", status: "exited", exit: 0 });
+    v2sse("shell.created", {
+      info: { id: "sh_c", status: "running", metadata: { sessionID: "rs-a" } },
+    });
+    await flushEvents();
+    // The snapshot predates both.
+    dispatchWindowMessage({
+      type: "api-result",
+      id: held,
+      ok: true,
+      json: {
+        location: { directory: "/w" },
+        data: [
+          { id: "sh_a", status: "running", metadata: { sessionID: "rs-a" } },
+          { id: "sh_b", status: "running", metadata: { sessionID: "rs-b" } },
+        ],
+      },
+    });
+    await settle(8);
+    assert.deepEqual(runningShells.value, { sh_a: "rs-a", sh_c: "rs-a" });
   });
 });
 

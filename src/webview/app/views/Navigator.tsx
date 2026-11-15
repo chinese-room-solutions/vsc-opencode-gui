@@ -29,6 +29,7 @@ import {
   sessionsStalled,
   currentDir,
   deleteSession,
+  familyWorking,
   formatSessionTimes,
   forkSession,
   homeFilter,
@@ -53,7 +54,6 @@ import {
   sessions,
   sessionsNext,
   sessionsLoadingMore,
-  sessionStatus,
   setProjectColor,
   setSendError,
   tombstones,
@@ -897,7 +897,7 @@ function SessionRow(props: {
   const dir = normPath(s.location?.directory ?? "");
   const foreign = dir !== currentDir.value;
   const tile = sessionTile(s, s.id);
-  const st = sessionStatus.value[s.id];
+  const working = familyWorking(s.id);
 
   // This window's sessions open in their own editor tab (the host
   // reveals or creates it); a foreign session deep-links its project
@@ -977,11 +977,11 @@ function SessionRow(props: {
             <span
               class="tile"
               style={{ background: tile.color }}
-              title={st?.type === "busy" ? "Running" : undefined}
+              title={working ? "Running" : undefined}
             >
               {props.picked ? (
                 <CheckIcon />
-              ) : st?.type === "busy" ? (
+              ) : working ? (
                 // The tab's busy mark, in the tile: the letter steps aside
                 // while the session works.
                 <PixelSpinner />
