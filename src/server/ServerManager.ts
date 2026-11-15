@@ -1287,8 +1287,10 @@ export class ServerManager {
   // its current project's worktree (or a sandbox of it). A server running
   // outside any git repo reports the "global" project (worktree "/") and
   // never matches — safer to spawn fresh than attach to the wrong thing.
-  // v2 has no /project/current: match the folder against the /api/project
-  // list's `canonical` (same normWorktree fold).
+  // v2 has no /project/current: /api/location without a location param
+  // answers the folder the server runs in, where its unscoped calls (a new
+  // session) land. Not /api/project: that lists every project in the
+  // shared DB, so another window's server matched this folder too.
   private async servesWorkspace(baseUrl: string, cwd: string): Promise<boolean> {
     const target = normWorktree(cwd);
     try {
@@ -1313,23 +1315,16 @@ export class ServerManager {
           return true;
         return (project.sandboxes ?? []).some((s) => normWorktree(s) === target);
       }
-      const list = await fetch(`${baseUrl}/api/project`, {
+      const loc = await fetch(`${baseUrl}/api/location`, {
         signal: AbortSignal.timeout(2000),
         headers: serverAuthHeaders(),
       });
       if (
-        list.ok &&
-        (list.headers.get("content-type") ?? "").includes("application/json")
+        loc.ok &&
+        (loc.headers.get("content-type") ?? "").includes("application/json")
       ) {
-        const projects = (await list.json()) as {
-          canonical?: string;
-          sandboxes?: string[];
-        }[];
-        return (projects ?? []).some(
-          (p) =>
-            (p.canonical && normWorktree(p.canonical) === target) ||
-            (p.sandboxes ?? []).some((s) => normWorktree(s) === target),
-        );
+        const { directory } = (await loc.json()) as { directory?: string };
+        return !!directory && normWorktree(directory) === target;
       }
       return false;
     } catch {

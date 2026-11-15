@@ -358,6 +358,53 @@ suite("opencode ServerManager", function () {
     await sm.dispose();
   });
 
+  test("a v2 server running in another folder is not attached", async function () {
+    const port = await freePort();
+    const cwd = vscode.workspace.workspaceFolders![0].uri.fsPath;
+    // A v2-flavored fake whose own location is elsewhere, while its project
+    // list (the shared DB's) names this workspace too. Attaching would land
+    // this window's new sessions in the other folder.
+    const fake = http.createServer((req, res) => {
+      const json = (body: unknown) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(body));
+      };
+      const url = req.url ?? "";
+      if (url.startsWith("/api/session")) json({ data: [] });
+      else if (url.startsWith("/api/config")) json([]);
+      else if (url.startsWith("/api/project")) json([{ id: "prj_ws", canonical: cwd }]);
+      else if (url.startsWith("/api/location"))
+        json({ directory: path.join(os.tmpdir(), "elsewhere") });
+      else if (url.startsWith("/api/")) {
+        res.writeHead(404);
+        res.end();
+      } else {
+        // v2's SPA fallback, which also answers /project/current.
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end("<!doctype html>");
+      }
+    });
+    await new Promise<void>((r) => fake.listen(port, "127.0.0.1", () => r()));
+    try {
+      // The bogus binary fails the spawn the refusal leads to, so the
+      // suite's real boots stay at six.
+      const { sm, hub, store } = await boot(
+        port,
+        false,
+        process.platform === "win32"
+          ? "C:\\no such dir\\opencode.exe"
+          : "/no/such/dir/opencode",
+      );
+      await sm.ready;
+      assert.notStrictEqual(hub.state.kind, "url", "attached to the other folder's server");
+      assert.notStrictEqual(store.get("opencode.serverPort"), port, "the stored port moved on");
+      await sm.dispose();
+    } finally {
+      fake.closeAllConnections();
+      await new Promise<void>((r) => fake.close(() => r()));
+    }
+  });
+
   test("exposeToNetwork binds all interfaces on v2 and dials localhost", async function () {
     const port = await freePort();
     const { sm, hub } = await boot(port, true);
