@@ -2251,6 +2251,7 @@ describe("v2 SSE → pipeline translation", () => {
         sessionID: "s",
         text: "Context trimmed",
         description: "Context trimmed",
+        timestamp: 5000,
       }),
     );
     assert.equal(s.length, 2);
@@ -2272,6 +2273,8 @@ describe("v2 SSE → pipeline translation", () => {
         sessionID: "s",
         type: "text",
         text: "Context trimmed",
+        // Closed on arrival: an open part would busy the session.
+        time: { end: 5000 },
       },
     );
     // A peer-tagged injection: the row stays assistant (a streamed user row
@@ -2281,6 +2284,7 @@ describe("v2 SSE → pipeline translation", () => {
       ev("session.synthetic", {
         sessionID: "s",
         text: "Ping from a peer",
+        timestamp: 5000,
         metadata: {
           peerMessage: {
             version: 2,
@@ -2306,6 +2310,7 @@ describe("v2 SSE → pipeline translation", () => {
         sessionID: "s",
         type: "text",
         text: "Ping from a peer",
+        time: { end: 5000 },
         synthetic: true,
         metadata: {
           peerMessage: {
@@ -2326,6 +2331,7 @@ describe("v2 SSE → pipeline translation", () => {
       ev("session.inbox.enqueued", {
         sessionID: "s",
         inboxID: "msg_wire1",
+        timestamp: 5000,
         item: {
           type: "synthetic",
           payload: {
@@ -2354,6 +2360,7 @@ describe("v2 SSE → pipeline translation", () => {
         sessionID: "s",
         type: "text",
         text: "Ping from a peer",
+        time: { end: 5000 },
         synthetic: true,
         metadata: {
           peerMessage: { version: 2, messageId: "m1", fromEndpointId: "ses_a" },
@@ -3298,6 +3305,31 @@ describe("v2 turn through the store (recorded frame sequence)", () => {
     assert.equal(part?.state?.status, "completed");
     assert.equal(part?.state?.output, "ok\n");
   });
+
+  it("a note that wakes no turn leaves the session idle", async () => {
+    // A user shell's completion note: the server admits it without a
+    // resume, so no turn follows to idle a busy it raised.
+    init();
+    const sid = "v2note";
+    sessions.value = [sessRow(sid)];
+    messagesBySession.value = new Map([[sid, []]]);
+    v2sse("session.inbox.enqueued", {
+      sessionID: sid,
+      inboxID: "msg_n1",
+      item: {
+        type: "synthetic",
+        payload: {
+          text: '<shell id="sh_1" state="completed" command="npm test">\nok\n</shell>',
+          description: "npm test",
+          metadata: { source: "shell", shellID: "sh_1", state: "completed", exit: 0 },
+        },
+      },
+    });
+    await flushEvents();
+    const note = (messagesBySession.value.get(sid) ?? []).find((m) => m.info.id === "msg_n1");
+    assert.ok(note?.parts.some((p) => p.id === "msg_n1:text"), "the note landed");
+    assert.notEqual(sessionStatus.value[sid]?.type, "busy");
+  });
 });
 
 // The finished background sub-agent's completion notice: the server injects
@@ -3346,6 +3378,7 @@ describe("subagent completion notice (durable + live pair)", () => {
         description: "Fix the flaky test",
         text: raw,
         metadata,
+        timestamp: 5,
       },
     });
     assert.equal(live.length, 2);
@@ -3360,13 +3393,14 @@ describe("subagent completion notice (durable + live pair)", () => {
       (live[0].data as { info?: { role?: string } }).info?.role,
       "assistant",
     );
-    const livePart = (live[1].data as { part?: unknown }).part;
+    const livePart = (live[1].data as { part?: Record<string, unknown> }).part;
     assert.deepEqual(livePart, {
       id: "msg_pair:text",
       messageID: "msg_pair",
       sessionID: "ses_pair",
       type: "text",
       text: raw,
+      time: { end: 5 },
       synthetic: true,
       metadata: {
         subagentNotice: {
@@ -3377,8 +3411,10 @@ describe("subagent completion notice (durable + live pair)", () => {
         },
       },
     });
-    // The pair assertion: the durable part is the live part, exactly.
-    assert.deepEqual(durableRow?.parts[0], livePart);
+    // The pair assertion: the durable part is the live part, exactly — bar
+    // the close stamp only the streamed copy needs.
+    const { time: _closed, ...tagged } = livePart ?? {};
+    assert.deepEqual(durableRow?.parts[0], tagged);
   });
 
   it("falls back to the tag's description attribute when the row omits it", async () => {

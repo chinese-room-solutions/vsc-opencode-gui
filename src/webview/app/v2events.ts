@@ -513,8 +513,7 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
       const shell = text ? shellNoticeMeta(src.metadata, desc, text) : undefined;
       const restart = src.metadata?.notice === "restart";
       // An untagged note without a description is context for the model
-      // alone (the Plan plugin's mode reminders): the official clients hide
-      // it, and its open text part would read as a reply streaming — busy.
+      // alone (the Plan plugin's mode reminders): the official clients hide it.
       if (!peer && !sub && !shell && !restart && !desc?.trim()) return [];
       return sid && rowID && typeof src.text === "string"
         ? [
@@ -534,6 +533,10 @@ export function translateV2Event(event: ServerEvent): ServerEvent[] {
                 sessionID: sid,
                 type: "text",
                 text: src.text,
+                // Whole on arrival: an open part reads as a reply streaming
+                // and busies the session, and a note that wakes no turn (a
+                // user shell's completion) has nothing to idle it again.
+                time: { end: at ?? Date.now() },
                 ...(peer ? { synthetic: true, metadata: { peerMessage: peer } } : {}),
                 ...(sub
                   ? { synthetic: true, metadata: { subagentNotice: sub } }
