@@ -898,6 +898,15 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
+  // ISO day + locale time: a numeric locale date (mm/dd vs dd/mm) reads
+  // differently across locales — the webview's dateOf uses the same day.
+  const updatedLabel = (ts: number) => {
+    const d = new Date(ts);
+    const p = (n: number) => String(n).padStart(2, "0");
+    const day = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+    return `${day} ${d.toLocaleTimeString()}`;
+  };
+
   // Register the showHistory command — pick a past session, newest
   // first, and open it in its own panel
   context.subscriptions.push(
@@ -929,7 +938,7 @@ export function activate(context: vscode.ExtensionContext) {
         .sort((a, b) => b.time.updated - a.time.updated)
         .map((s) => ({
           label: sessionTabTitle(s.title),
-          description: new Date(s.time.updated).toLocaleString(),
+          description: updatedLabel(s.time.updated),
           id: s.id,
         }));
       if (items.length === 0) {

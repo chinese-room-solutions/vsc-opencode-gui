@@ -28,6 +28,7 @@ import {
   baseLoaded,
   sessionsStalled,
   currentDir,
+  dateOf,
   deleteSession,
   familyWorking,
   formatSessionTimes,
@@ -137,7 +138,8 @@ function pickToggle(
   return { picked: next, anchor };
 }
 
-// "Today" / "Yesterday" / locale date for a session row's group header.
+// "Today" / "Yesterday" / ISO date for a session row's group header —
+// locale order (mm/dd vs dd/mm) is ambiguous across readers.
 function dayLabel(ts: number): string {
   const d = new Date(ts);
   const same = (other: Date) => d.toDateString() === other.toDateString();
@@ -146,7 +148,7 @@ function dayLabel(ts: number): string {
   yesterday.setDate(today.getDate() - 1);
   if (same(today)) return "Today";
   if (same(yesterday)) return "Yesterday";
-  return d.toLocaleDateString();
+  return dateOf(ts);
 }
 
 // The sidebar's session browser, two collapsible sections stacked like

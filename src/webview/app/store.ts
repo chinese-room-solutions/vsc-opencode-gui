@@ -1642,7 +1642,7 @@ function clockOf(ts: number): string {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-function dateOf(ts: number): string {
+export function dateOf(ts: number): string {
   const d = new Date(ts);
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;

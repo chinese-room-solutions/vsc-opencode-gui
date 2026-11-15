@@ -618,6 +618,16 @@ const extraSessions =
         model: { id: "fake-model", providerID: "fake" },
       }))
     : [];
+
+// FAKE_API_OLD_DAYS ages the LAST bulk session back N days, so a day-group
+// header past "Yesterday" renders.
+const oldDays = Number(process.env.FAKE_API_OLD_DAYS) || 0;
+if (oldDays && extraSessions.length) {
+  const shift = oldDays * 86_400_000;
+  const last = extraSessions[extraSessions.length - 1];
+  last.time.created -= shift;
+  last.time.updated -= shift;
+}
 const sessionList = [sessionRow, childRow, ...extraSessions];
 
 // /find/file seeds — the @-menu's autocomplete and the composer's chip

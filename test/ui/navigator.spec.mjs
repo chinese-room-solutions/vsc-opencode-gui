@@ -250,3 +250,21 @@ test("the split defaults to half and survives a reload", async ({ page }) => {
     rig.stop();
   }
 });
+
+test("a day-group header past Yesterday shows an ISO date", async ({ page }) => {
+  const rig = await startRig({ env: { ...ENV, FAKE_API_OLD_DAYS: "3" } });
+  try {
+    await page.goto(rig.url);
+    await expect(page.locator(".sess-row .sess-open")).toHaveCount(7, { timeout: 15_000 });
+
+    // The aged session groups under yyyy-mm-dd — never a locale-ordered
+    // date (mm/dd vs dd/mm), which reads differently per reader.
+    const d = new Date(Date.now() - 3 * 86_400_000);
+    const p = (n) => String(n).padStart(2, "0");
+    const iso = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+    await expect(page.locator(".day-label", { hasText: iso })).toHaveCount(1);
+    await expect(page.locator(".day-label").first()).toHaveText("Today");
+  } finally {
+    rig.stop();
+  }
+});
