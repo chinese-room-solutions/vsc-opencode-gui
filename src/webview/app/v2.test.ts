@@ -560,6 +560,26 @@ describe("v2 route/body/envelope translation", () => {
         : undefined,
     );
     assert.deepEqual(await fetchConfig(), { model: "p/m" });
+    assert.equal(callsFor("/api/model/default").length, 0);
+  });
+
+  it("fetchConfig falls back to the server's default model when the config names none", async () => {
+    // A fresh install configures no model: the chip shows what the server
+    // runs a session without one on, for this workspace.
+    onApi((call) => {
+      if (call.path === "/api/config") return [{ info: {} }];
+      if (call.path.startsWith("/api/model/default"))
+        return { data: { id: "iceman-free", providerID: "opencode", name: "Iceman Free" } };
+      return undefined;
+    });
+    assert.deepEqual(await fetchConfig(undefined, "C:\\w\\repo"), {
+      model: "opencode/iceman-free",
+    });
+    assert.ok(
+      callsFor("/api/model/default").some((c) =>
+        c.path.includes("location%5Bdirectory%5D=C%3A%5Cw%5Crepo"),
+      ),
+    );
   });
 
   it("fetchAgents keys rows by id; fetchCommands unwraps {data}", async () => {
@@ -1877,6 +1897,42 @@ describe("v2 lazy command registry re-pull", () => {
     // indistinguishable from a late fill — it arms; the attempt bound
     // (proven in its own test) is what stops it, not the old guard.
     assert.equal(fireExact(1000), 1);
+  });
+
+  // A fresh install: no config model, and new session rows carry none —
+  // the chip (tile + model menu) needs the server's own default.
+  it("adopts the server's default model when the config names none", async () => {
+    onApi((call) => {
+      if (call.path.startsWith("/api/model/default"))
+        return { data: { id: "iceman-free", providerID: "opencode" } };
+      if (call.path.startsWith("/api/model"))
+        return { data: [{ id: "iceman-free", providerID: "opencode" }] };
+      if (call.path === "/api/config") return [];
+      if (call.path === "/api/provider") return { data: [] };
+      if (call.path === "/api/project") return [];
+      if (call.path === "/api/agent") return [];
+      if (call.path === "/api/command") return [];
+      if (call.path === "/api/skill") return [];
+      if (call.path === "/api/session/active") return {};
+      return undefined;
+    });
+    const before = serverDefaultModel.value;
+    serverDefaultModel.value = undefined;
+    try {
+      resetBaseRetryForTest();
+      dispatchWindowMessage({
+        type: "sse-event",
+        event: { id: "evt_cdm", type: "server.connected", data: {} },
+      });
+      await flushEvents();
+      await settle(8);
+      assert.deepEqual(serverDefaultModel.value, {
+        providerID: "opencode",
+        id: "iceman-free",
+      });
+    } finally {
+      serverDefaultModel.value = before;
+    }
   });
 
   // The staged route itself: /api/provider can answer with only built-ins

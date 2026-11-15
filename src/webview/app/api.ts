@@ -313,8 +313,8 @@ function inputRecord(list?: string[]): ModelInput | undefined {
 // GET /provider (v1 shape). On v2 the catalog is assembled from three
 // routes: /api/provider (connected providers — no models), /api/model
 // (the flat catalog — LOCATION-SCOPED, the workspace directory rides
-// along as the object-param the official client sends), and
-// /api/model/default (the pinned default). No `limit` param on /api/model:
+// along as the object-param the official client sends), and /api/config
+// (the configured default's provider). No `limit` param on /api/model:
 // the route returns an empty list when handed one.
 export async function fetchProviders(
   directory?: string,
@@ -392,8 +392,7 @@ export async function fetchProviders(
 }
 
 // v2's /api/config is an array of source documents; the first doc with an
-// info.model block is the user's configured default (the /api/model/default
-// route answers the built-in public default instead, which no one picked).
+// info.model block is the user's configured default.
 export type ConfigDocs =
   | { info?: { model?: { providerID?: string; model?: string } } }[]
   | undefined;
@@ -418,7 +417,9 @@ function v2ConfigDefaultModel(docs: ConfigDocs): {
 // GET /config — the default model ("providerID/modelID", so a draft with no
 // explicit pick can show what a prompt would run on) and the user's provider
 // blocks (the ids the model picker may list). v2 has no merged config: the
-// default comes from the config source docs' model block.
+// default comes from the config source docs' model block, else from the
+// server's own pick for a session without one (/api/model/default — a
+// fresh install configures no model).
 export interface ServerConfig {
   model?: string;
   provider?: Record<string, unknown>;
@@ -426,12 +427,23 @@ export interface ServerConfig {
 
 export async function fetchConfig(
   configDocs?: ConfigDocs,
+  directory?: string,
 ): Promise<ServerConfig | undefined> {
   if (serverDialect === "v2") {
     const docs = configDocs ?? (await fetchConfigDocs());
     const model = v2ConfigDefaultModel(docs);
-    return model?.providerID && model.model
-      ? { model: `${model.providerID}/${model.model}` }
+    if (model?.providerID && model.model)
+      return { model: `${model.providerID}/${model.model}` };
+    const qs = directory
+      ? `?location%5Bdirectory%5D=${encodeURIComponent(directory)}`
+      : "";
+    const def = (
+      await getJson<{ data?: { providerID?: string; id?: string } }>(
+        `/api/model/default${qs}`,
+      )
+    )?.data;
+    return def?.providerID && def.id
+      ? { model: `${def.providerID}/${def.id}` }
       : {};
   }
   return getJson<ServerConfig>("/config");

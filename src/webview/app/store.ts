@@ -406,8 +406,8 @@ function readRecordMeta(name: string): Record<string, string> {
   }
 }
 
-// The server config's default model — what a session with no explicit
-// pick runs on (display only, so the chip never shows a bare "Model").
+// The server's default model — what a session with no explicit pick runs
+// on (display only, so the chip never shows a bare "Model").
 export const serverDefaultModel = signal<ModelSelection | undefined>(
   undefined,
 );
@@ -734,7 +734,7 @@ async function refreshBase(): Promise<void> {
       fetchCommands(),
       fetchProjects(),
       fetchCurrentProject(),
-      fetchConfig(configDocs),
+      fetchConfig(configDocs, here || undefined),
       fetchRunningShells(here || undefined),
     ]);
   if (shellsRaced === raced) shellsRaced = undefined;

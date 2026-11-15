@@ -549,13 +549,17 @@ export function ModelPicker(props: { id: string }) {
   const pid = shown?.providerID;
 
   // The menu lists ONLY the selected provider's models — providers are
-  // picked from the tile button's own menu. A row is the model's short
-  // name, the reasoning variants it offers as the gray sub-label, and a
-  // "Free" badge when the catalog marks it free. Hidden rows (Manage
-  // models) drop out.
-  const p = pid && connected.includes(pid)
-    ? all.find((x) => x.id === pid)
-    : undefined;
+  // picked from the tile button's own menu. With no model to show (no
+  // pick, and no default the server named — a 1.x config without one)
+  // there is no tile either, so every listed provider's models stand in.
+  // A row is the model's short name, the reasoning variants it offers as
+  // the gray sub-label, and a "Free" badge when the catalog marks it free.
+  // Hidden rows (Manage models) drop out.
+  const listed = pid
+    ? all.filter((x) => x.id === pid && connected.includes(pid))
+    : all.filter(
+        (x) => connected.includes(x.id) && !hiddenProviders.value.includes(x.id),
+      );
   // The chip's provider is connected but carries no catalog rows: the
   // staged v2 fill hasn't reached it — say so instead of "No models
   // available", which reads as a dead end.
@@ -563,27 +567,23 @@ export function ModelPicker(props: { id: string }) {
     pid !== undefined &&
     connected.includes(pid) &&
     !all.some((x) => x.id === pid);
-  const groups: Group[] = p
-    ? [
-        {
-          key: p.id,
-          name: p.name ?? p.id,
-          rows: Object.entries(p.models ?? {})
-            .filter(([mid]) => !hidden.has(`${p.id}/${mid}`))
-            .map(([mid, m]) => {
-              const model: ModelSelection = { providerID: p.id, id: mid };
-              const variants = m.variants ? Object.keys(m.variants) : [];
-              return {
-                key: `${p.id}/${mid}`,
-                label: m.name ?? modelLabel(model),
-                hint: variants.length ? variants.map(cap).join(" · ") : undefined,
-                badge: modelFree(model) ? "Free" : undefined,
-                active: sel.model?.id === mid,
-              };
-            }),
-        },
-      ]
-    : [];
+  const groups: Group[] = listed.map((p) => ({
+    key: p.id,
+    name: p.name ?? p.id,
+    rows: Object.entries(p.models ?? {})
+      .filter(([mid]) => !hidden.has(`${p.id}/${mid}`))
+      .map(([mid, m]) => {
+        const model: ModelSelection = { providerID: p.id, id: mid };
+        const variants = m.variants ? Object.keys(m.variants) : [];
+        return {
+          key: `${p.id}/${mid}`,
+          label: m.name ?? modelLabel(model),
+          hint: variants.length ? variants.map(cap).join(" · ") : undefined,
+          badge: modelFree(model) ? "Free" : undefined,
+          active: sel.model?.id === mid,
+        };
+      }),
+  }));
 
   // Entry keys are `${providerID}/${modelID}`; provider ids never carry a
   // slash, so the FIRST one separates the pair. Splitting at the last one
