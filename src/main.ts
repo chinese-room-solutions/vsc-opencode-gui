@@ -1100,9 +1100,13 @@ export function activate(context: vscode.ExtensionContext) {
         });
         if (!picked) return;
         const visible = new Set(picked.flatMap((i) => (i.ref ? [i.ref] : [])));
-        setHiddenModels(
-          rows.flatMap((i) => (i.ref && !visible.has(i.ref) ? [i.ref] : [])),
-        );
+        // Only the listed rows change: a provider-scoped pick, or a provider
+        // not connected right now, leaves every other hidden model hidden.
+        const listed = new Set(rows.map((i) => i.ref));
+        setHiddenModels([
+          ...hiddenModels.get().filter((r) => !listed.has(r)),
+          ...rows.flatMap((i) => (i.ref && !visible.has(i.ref) ? [i.ref] : [])),
+        ]);
       },
     ),
   );
