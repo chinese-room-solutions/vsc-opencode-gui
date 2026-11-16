@@ -75,6 +75,7 @@ import {
   clampToolState,
   forgetTruncatedParts,
   isTruncatedPart,
+  PART_TEXT_CAP,
   stringifyError,
   tokensTotal,
   MESSAGE_PAGE,
@@ -1767,12 +1768,90 @@ function upsertPart(sessionID: string, part: Part): void {
   );
 }
 
-// The think's true start (session.next.reasoning.started, translated
-// from v2's session.reasoning.started), remembered until the part's
-// first delta spawns it — the silent stretch before the first delivered
-// batch belongs to the thinking window. Bounded like toolArgsLastDelta;
-// entries are spent on spawn and cleared at reasoning.ended.
-const reasoningStartedAt = new Map<string, number>();
+// The stream's copy of every open session.next text/reasoning part, by
+// session and part id, kept whether the session's transcript is loaded
+// or not. v2 writes a part's text only at its end, so a transcript
+// fetched mid-part (opening a running sub-agent, coming back to one)
+// serves it empty: the fetch and the part's first delta fill it in from
+// here. The start is reasoning.started's stamp (reasoning often lands in
+// one batch after a silent think, and that silence belongs to the
+// thinking window), else the first delta's arrival. Spent at the part's
+// end.
+const streamed = new Map<string, { text: string; start: number }>();
+const streamKey = (sid: string, partID: string) => `${sid} ${partID}`;
+
+function streamPart(
+  sid: string,
+  partID: string,
+  delta: string,
+  start = Date.now(),
+): void {
+  const key = streamKey(sid, partID);
+  const s = streamed.get(key);
+  if (s) {
+    // Past the cap the part takes no more deltas (clampPartText).
+    if (s.text.length <= PART_TEXT_CAP) s.text += delta;
+    return;
+  }
+  // A part whose end never arrived (a dropped stream) must not pin its
+  // text for the webview's life.
+  if (streamed.size >= 64) streamed.delete(streamed.keys().next().value!);
+  streamed.set(key, { text: delta, start });
+}
+
+// The ids v2 streams a row's text/reasoning parts under (v2events:
+// `${row}:t${n}`, `${row}:r${n}`, the ordinal counting within the kind).
+// The durable fetch serves the same parts in that order under
+// content-index ids.
+function streamIDs(m: ChatMessage): (string | undefined)[] {
+  const seen = { text: 0, reasoning: 0 };
+  return m.parts.map((p) =>
+    isText(p)
+      ? `${m.info.id}:${p.type === "text" ? "t" : "r"}${seen[p.type]++}`
+      : undefined,
+  );
+}
+
+// The start of a durable part the stream fills in: reasoning carries the
+// server's own stamp, a text part's is synthesized from its neighbors
+// (api.ts), so the stream's observed start wins there.
+const filledStart = (p: TextPart, s?: { start: number }) =>
+  (p.type === "reasoning" ? p.time?.start : undefined) ??
+  s?.start ??
+  p.time?.start;
+
+// A fetched row's parts the stream is still writing take their live ids
+// and the text the stream delivered (streamed), unless the view already
+// holds the live copy (the refresh merge pairs that one).
+function withStreamed(
+  sid: string,
+  m: ChatMessage,
+  held?: ChatMessage,
+): ChatMessage {
+  if (streamed.size === 0 || m.info.role !== "assistant") return m;
+  const ids = streamIDs(m);
+  let hit = false;
+  const parts = m.parts.map((p, j) => {
+    const id = ids[j];
+    const s = id === undefined ? undefined : streamed.get(streamKey(sid, id));
+    if (
+      !id ||
+      !s ||
+      !isText(p) ||
+      s.text.length <= (p.text?.length ?? 0) ||
+      held?.parts.some((q) => q.id === id)
+    )
+      return p;
+    hit = true;
+    return {
+      ...p,
+      id,
+      text: clampPartText(id, s.text),
+      time: { ...p.time, start: filledStart(p, s) },
+    };
+  });
+  return hit ? { ...m, parts } : m;
+}
 
 // Append one streaming chunk to a text/reasoning part, creating it on the
 // first delta (text.started carries only the id). Once a part clamped, its
@@ -1795,20 +1874,14 @@ function appendPartText(
     .get(sessionID)
     ?.find((m) => m.info.id === messageID);
   const orphan = !row || !row.parts.some((p) => p.id === partID);
-  const started =
-    type === "reasoning"
-      ? reasoningStartedAt.get(partID) ?? reasoningStartedAt.get(messageID)
-      : undefined;
-  if (started !== undefined) {
-    reasoningStartedAt.delete(partID);
-    reasoningStartedAt.delete(messageID);
-  }
   mutateMessages(sessionID, (list) =>
     list.map((m) => {
       if (m.info.id !== messageID) return m;
       const known = m.parts.some((p) => p.id === partID);
-      const parts = known
-        ? m.parts.map((p, i) =>
+      if (known)
+        return {
+          ...m,
+          parts: m.parts.map((p, i) =>
             p.id === partID && isText(p)
               ? {
                   ...p,
@@ -1825,22 +1898,39 @@ function appendPartText(
                     : {}),
                 }
               : p,
-          )
-        : [
-            ...m.parts,
-            // The start stamp seeds the reasoning block's duration; the
-            // ended event supplies the end. A remembered reasoning.started
-            // is the think's true beginning, not the first delivery.
-            {
-              id: partID,
-              messageID,
-              sessionID,
-              type,
-              text: clampPartText(partID, delta),
-              time: { start: started ?? Date.now() },
-            },
-          ];
-      return { ...m, parts };
+          ),
+        };
+      // The part spawns with all the stream delivered, this delta
+      // included (streamed). The ended event supplies the end. A fetch
+      // that landed mid-part stored it empty under its durable id: the
+      // live copy takes that slot and its start, and stamps its growth
+      // over whatever already follows it (reasoningClosedAt).
+      const s = streamed.get(streamKey(sessionID, partID));
+      const j = streamIDs(m).indexOf(partID);
+      const twin = j >= 0 ? m.parts[j] : undefined;
+      const part: TextPart = {
+        id: partID,
+        messageID,
+        sessionID,
+        type,
+        text: clampPartText(partID, s?.text ?? delta),
+        time: {
+          start:
+            (twin && isText(twin) ? filledStart(twin, s) : s?.start) ??
+            Date.now(),
+        },
+      };
+      if (!twin) return { ...m, parts: [...m.parts, part] };
+      return {
+        ...m,
+        parts: m.parts.map((p, i) =>
+          i !== j
+            ? p
+            : type === "reasoning"
+              ? { ...part, grew: { at: Date.now(), tail: tailSize(m.parts, j) } }
+              : part,
+        ),
+      };
     }),
   );
   return orphan;
@@ -2594,6 +2684,27 @@ function applyEvent(event: ServerEvent): void {
     ) {
       scheduleIdle(sid);
     }
+    // The stream's copy of open parts (streamed), for the transcript a
+    // later open fetches.
+    switch (event.type) {
+      case "session.next.reasoning.started":
+        if (data.reasoningID && typeof data.timestamp === "number")
+          streamPart(sid, data.reasoningID, "", data.timestamp);
+        break;
+      case "session.next.text.delta":
+        if (data.textID && data.delta) streamPart(sid, data.textID, data.delta);
+        break;
+      case "session.next.reasoning.delta":
+        if (data.reasoningID && data.delta)
+          streamPart(sid, data.reasoningID, data.delta);
+        break;
+      case "session.next.text.ended":
+        if (data.textID) streamed.delete(streamKey(sid, data.textID));
+        break;
+      case "session.next.reasoning.ended":
+        if (data.reasoningID) streamed.delete(streamKey(sid, data.reasoningID));
+        break;
+    }
   }
   // Turn events only touch sessions already opened; others are fetched
   // wholesale when opened.
@@ -2938,22 +3049,6 @@ function applyEvent(event: ServerEvent): void {
         });
       }
       break;
-    case "session.next.reasoning.started":
-      // v2's session.reasoning.started (via v2events): remember the
-      // think's true start — the part spawns on its first delta.
-      if (
-        data.assistantMessageID &&
-        typeof data.timestamp === "number"
-      ) {
-        if (reasoningStartedAt.size > 32) reasoningStartedAt.clear();
-        reasoningStartedAt.set(
-          typeof data.reasoningID === "string"
-            ? data.reasoningID
-            : data.assistantMessageID,
-          data.timestamp,
-        );
-      }
-      break;
     case "session.next.reasoning.delta":
       if (data.assistantMessageID && data.reasoningID && data.delta) {
         appendPartText(
@@ -2967,8 +3062,6 @@ function applyEvent(event: ServerEvent): void {
       break;
     case "session.next.reasoning.ended":
       if (data.assistantMessageID && data.reasoningID) {
-        reasoningStartedAt.delete(data.reasoningID);
-        reasoningStartedAt.delete(data.assistantMessageID);
         const prev = messagesBySession.value
           .get(sid)
           ?.find((m) => m.info.id === data.assistantMessageID)
@@ -4154,8 +4247,9 @@ export async function refreshMessages(id: string): Promise<void> {
     const working =
       sessionWorking(id) || (lastEventAt.get(id) ?? 0) >= beganAt;
     mutateMessages(id, () =>
-      visible.map((m) => {
-        const old = stored.get(m.info.id);
+      visible.map((fetched) => {
+        const old = stored.get(fetched.info.id);
+        const m = withStreamed(id, fetched, old);
         if (!old) return m;
         let merged = false;
         const oldByKind = new Map<string, TextPart[]>();

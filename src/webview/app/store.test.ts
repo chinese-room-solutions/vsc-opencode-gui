@@ -142,6 +142,7 @@ import type {
   Part,
   Providers,
   Session,
+  TextPart,
   ToolPart,
 } from "./api";
 import { navigate, route } from "./router";
@@ -576,25 +577,118 @@ describe("reasoning.started stamps the think's true start", () => {
     };
     assert.equal(p.time?.start, T0 + 10_000);
   });
+});
 
-  it("keys the stamp by the message when the frame carried no part id", async () => {
-    const sid = "rs1b";
-    open(sid, [row("u1", "user", T0), row("a1", "assistant", T0)]);
-    await sseFlush("session.next.reasoning.started", {
-      sessionID: sid,
-      assistantMessageID: "a1",
-      timestamp: T0 + 5_000,
-    });
-    await sseFlush("session.next.reasoning.delta", {
+// v2 writes a part's text only at its end, so a sub-agent opened
+// mid-thought fetches its reasoning empty. The stream's copy, kept while
+// the transcript isn't loaded, fills it in: the whole thought, timed from
+// its real start, across leaving and coming back.
+describe("a sub-agent joined mid-thought shows the whole thought", () => {
+  beforeEach(() => setDialect("v2"));
+  afterEach(() => setDialect("v1"));
+  const think = (sid: string, delta: string) =>
+    sseFlush("session.next.reasoning.delta", {
       sessionID: sid,
       assistantMessageID: "a1",
       reasoningID: "a1:r0",
-      delta: "hm",
+      delta,
     });
-    const p = findPart(sid, "a1:r0") as {
-      time?: { start?: number };
-    };
-    assert.equal(p.time?.start, T0 + 5_000);
+  // The durable row mid-thought: the reasoning item exists, empty,
+  // stamped with its start.
+  const midThought = (sid: string, more: unknown[] = []) =>
+    messageMock(sid, {
+      data: [
+        { id: "u1", type: "user", time: { created: T0 }, text: "go" },
+        {
+          id: "a1",
+          type: "assistant",
+          time: { created: T0 + 500 },
+          content: [
+            { type: "reasoning", text: "", time: { created: T0 + 1_000 } },
+            ...more,
+          ],
+        },
+      ],
+      cursor: {},
+    });
+  const parts = (sid: string) =>
+    (findRow(sid, "a1")?.parts ?? []).map((p) => {
+      const t = p as TextPart;
+      return [t.id, t.text, t.time?.start];
+    });
+
+  it("keeps what streamed before the join, timed from the real start", async () => {
+    const sid = "sj1";
+    await sseFlush("session.next.reasoning.started", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      reasoningID: "a1:r0",
+      timestamp: T0 + 1_000,
+    });
+    await think(sid, "before ");
+    onApi(midThought(sid));
+    await refreshMessages(sid);
+    assert.deepEqual(parts(sid), [["a1:r0", "before ", T0 + 1_000]]);
+    await think(sid, "after");
+    assert.deepEqual(parts(sid), [["a1:r0", "before after", T0 + 1_000]]);
+  });
+
+  it("keeps the thought and its clock across leaving and coming back", async () => {
+    const sid = "sj2";
+    onApi(midThought(sid));
+    await refreshMessages(sid);
+    await think(sid, "one ");
+    releaseTranscript(sid);
+    await think(sid, "two ");
+    await refreshMessages(sid);
+    await think(sid, "three");
+    assert.deepEqual(parts(sid), [["a1:r0", "one two three", T0 + 1_000]]);
+  });
+
+  it("takes the empty durable slot, and the next pull keeps it", async () => {
+    const sid = "sj3";
+    setBusy(sid);
+    onApi(midThought(sid, [{ type: "text", text: "" }]));
+    await refreshMessages(sid);
+    await think(sid, "x");
+    const expected = [
+      ["a1:r0", "x", T0 + 1_000],
+      ["a1:1", "", T0 + 500],
+    ];
+    assert.deepEqual(parts(sid), expected);
+    await refreshMessages(sid);
+    assert.deepEqual(parts(sid), expected);
+  });
+
+  // A chat endpoint keeps the reasoning open beside the answer: the
+  // durable text's start is synthesized next to the thought's, so the
+  // answer keeps the start the stream saw — where the thinking stopped.
+  it("an answer beside the open thought keeps its own start", async () => {
+    const sid = "sj4";
+    await sseFlush("session.next.reasoning.started", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      reasoningID: "a1:r0",
+      timestamp: T0 + 1_000,
+    });
+    await think(sid, "hmm");
+    setNow(T0 + 9_000);
+    await sseFlush("session.next.text.delta", {
+      sessionID: sid,
+      assistantMessageID: "a1",
+      textID: "a1:t0",
+      delta: "Answer",
+    });
+    onApi(midThought(sid, [{ type: "text", text: "" }]));
+    await refreshMessages(sid);
+    assert.deepEqual(parts(sid), [
+      ["a1:r0", "hmm", T0 + 1_000],
+      ["a1:t0", "Answer", T0 + 9_000],
+    ]);
+    assert.equal(
+      reasoningClosedAt(findRow(sid, "a1")?.parts ?? []).get("a1:r0"),
+      T0 + 9_000,
+    );
   });
 });
 
