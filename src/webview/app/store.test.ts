@@ -145,6 +145,7 @@ import type {
   ToolPart,
 } from "./api";
 import { navigate, route } from "./router";
+import { reasoningClosedAt } from "./components/MessageView";
 
 function row(
   id: string,
@@ -594,6 +595,49 @@ describe("reasoning.started stamps the think's true start", () => {
       time?: { start?: number };
     };
     assert.equal(p.time?.start, T0 + 5_000);
+  });
+});
+
+// opencode keeps a chat endpoint's reasoning open beside the answer and
+// closes it at the step's end, so the model can think again after text
+// landed. The block must read open while it grows past its successor, and
+// settle once the answer moves on, at its own last delta.
+describe("reasoning that resumes past its successor", () => {
+  const ev = async (sid: string, at: number, type: string, data: Record<string, unknown>) => {
+    setNow(at);
+    await sseFlush(`session.next.${type}`, { sessionID: sid, assistantMessageID: "a1", ...data });
+  };
+  const think = (sid: string, at: number, delta: string) =>
+    ev(sid, at, "reasoning.delta", { reasoningID: "a1:r0", delta });
+  const say = (sid: string, at: number, delta: string) =>
+    ev(sid, at, "text.delta", { textID: "a1:t0", delta });
+  const closed = (sid: string) => reasoningClosedAt(findRow(sid, "a1")?.parts ?? []);
+
+  it("reopens while it grows and settles when the answer moves on", async () => {
+    const sid = "rr1";
+    open(sid, [row("u1", "user", T0), row("a1", "assistant", T0)]);
+    await think(sid, T0 + 1_000, "think");
+    await think(sid, T0 + 2_000, " on");
+    assert.equal(closed(sid).has("a1:r0"), false);
+    await say(sid, T0 + 5_000, "\n\n");
+    assert.equal(closed(sid).get("a1:r0"), T0 + 5_000);
+    await think(sid, T0 + 9_000, " again");
+    assert.equal(closed(sid).has("a1:r0"), false);
+    await say(sid, T0 + 10_000, "Answer");
+    assert.equal(closed(sid).get("a1:r0"), T0 + 9_000);
+  });
+
+  it("still settles at a tool call's start", async () => {
+    const sid = "rr2";
+    open(sid, [row("u1", "user", T0), row("a1", "assistant", T0)]);
+    await think(sid, T0 + 1_000, "think");
+    await think(sid, T0 + 2_000, " on");
+    await ev(sid, T0 + 3_000, "tool.input.started", {
+      callID: "c1",
+      name: "read",
+      timestamp: T0 + 4_000,
+    });
+    assert.equal(closed(sid).get("a1:r0"), T0 + 4_000);
   });
 });
 

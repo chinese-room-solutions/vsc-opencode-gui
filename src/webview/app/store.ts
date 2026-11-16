@@ -66,6 +66,7 @@ import {
   isText,
   isTool,
   isTaskTool,
+  tailSize,
   fetchRunningShells,
   fetchShellOutput,
   shellOutputText,
@@ -1807,7 +1808,7 @@ function appendPartText(
       if (m.info.id !== messageID) return m;
       const known = m.parts.some((p) => p.id === partID);
       const parts = known
-        ? m.parts.map((p) =>
+        ? m.parts.map((p, i) =>
             p.id === partID && isText(p)
               ? {
                   ...p,
@@ -1819,6 +1820,9 @@ function appendPartText(
                     p.time?.end !== undefined
                       ? { start: p.time.start }
                       : p.time,
+                  ...(p.type === "reasoning"
+                    ? { grew: { at: Date.now(), tail: tailSize(m.parts, i) } }
+                    : {}),
                 }
               : p,
           )

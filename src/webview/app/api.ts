@@ -873,6 +873,12 @@ export interface TextPart extends PartBase {
   // Reasoning parts carry the thinking window (server-sourced on fetch,
   // stamped from stream events live); text parts don't.
   time?: { start?: number; end?: number };
+  // Live reasoning, stamped as deltas extend it: when it last grew and the
+  // tailSize at that moment. A chat endpoint's reasoning stays open beside
+  // the answer (opencode closes it at the step's end), so the model can
+  // think again after text or a tool call landed. While the tail holds
+  // still, this part is the one being written.
+  grew?: { at: number; tail: number };
 }
 
 export interface ToolState {
@@ -928,6 +934,24 @@ export type Part = TextPart | ToolPart | FilePart | PartBase;
 export const isText = (p: Part): p is TextPart =>
   p.type === "text" || p.type === "reasoning";
 export const isTool = (p: Part): p is ToolPart => p.type === "tool";
+
+// How far the parts after index `i` have streamed: their count plus their
+// text and raw tool-args lengths. It moves whenever the model writes past
+// part `i` and holds still while part `i` itself grows.
+export const tailSize = (parts: readonly Part[], i: number): number =>
+  parts
+    .slice(i + 1)
+    .reduce(
+      (n, q) =>
+        n +
+        1 +
+        (isText(q)
+          ? q.text?.length ?? 0
+          : isTool(q)
+            ? q.state?.inputText?.length ?? 0
+            : 0),
+      0,
+    );
 
 // Tool ids arrive as schema names; the row shows the friendly label. v2
 // renamed some tools while accepting the v1 names in places — the shell

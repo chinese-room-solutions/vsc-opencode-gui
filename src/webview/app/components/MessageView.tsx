@@ -24,7 +24,7 @@ import {
   sessions,
   queuedTurns,
 } from "../store";
-import { extOf, isText, isTool, lastTerminalFrame, shellWrapper, tokensTotal, attachMime, type FilePart, type Part, type TextPart, type ToolPart } from "../api";
+import { extOf, isText, isTool, lastTerminalFrame, shellWrapper, tailSize, tokensTotal, attachMime, type FilePart, type Part, type TextPart, type ToolPart } from "../api";
 import { pillifyOwnText, resourcedParts } from "../mentions";
 import { enhanceBlockquotes, enhanceCodeBlocks, enhanceInlineCode, renderMarkdown, tagFileRefs } from "../markdown";
 import { openFile, openExternal } from "../host";
@@ -999,7 +999,7 @@ function ThinkingBlock(props: {
   live: boolean;
   closed?: boolean;
   // Settle stamp for a closed segment the endpoint never end-stamped:
-  // its successor's start, when the thinking demonstrably stopped.
+  // when the thinking demonstrably stopped (reasoningClosedAt).
   endedAt?: number;
 }) {
   const [open, setOpen] = useState(false);
@@ -1234,6 +1234,37 @@ function ExploreGroup(props: { parts: ToolPart[] }) {
       )}
     </div>
   );
+}
+
+// When each reasoning part's thinking demonstrably stopped, by part id. A
+// part left out is still open. Only a successor part (a tool call, answer
+// text, or the next thinking segment) landing after it proves the stop,
+// since its end stamp also fires between thinking segments. A segment the
+// endpoint never end-stamped (GLM starts the next part without closing
+// the last) settles at the successor's start, or at its own last delta
+// when it grew past that start.
+export function reasoningClosedAt(
+  parts: readonly Part[],
+): Map<string, number | undefined> {
+  const closedAt = new Map<string, number | undefined>();
+  parts.forEach((p, i) => {
+    if (!(isText(p) && p.type === "reasoning")) return;
+    const succ = parts
+      .slice(i + 1)
+      .find((q) => isTool(q) || (isText(q) && q.text));
+    if (!succ) return;
+    // The model went back to thinking after the successor landed, and
+    // nothing past this part has streamed since.
+    if (p.grew && p.grew.tail === tailSize(parts, i)) return;
+    const start = isTool(succ)
+      ? succ.state?.time?.start
+      : isText(succ)
+        ? succ.time?.start
+        : undefined;
+    const ends = [start, p.grew?.at].filter((t): t is number => t !== undefined);
+    closedAt.set(p.id, ends.length ? Math.max(...ends) : undefined);
+  });
+  return closedAt;
 }
 
 // One assistant part rendered on its own — the fold applies only to runs.
@@ -1526,28 +1557,7 @@ function MessageViewImpl(props: { m: ChatMessage; live?: boolean }) {
       i += 1;
     }
   }
-  // A reasoning part is proven closed only by a successor part (a tool
-  // call, answer text, or the next thinking segment) landing after it —
-  // the reasoning block's settle signal, since its end stamp also fires
-  // between thinking segments. A segment the endpoint never end-stamped
-  // (GLM starts the next part without closing the last) settles at the
-  // successor's start: that is when the thinking demonstrably stopped.
-  const closedAt = new Map<string, number | undefined>();
-  parts.forEach((p, i) => {
-    if (!(isText(p) && p.type === "reasoning")) return;
-    const succ = parts
-      .slice(i + 1)
-      .find((q) => isTool(q) || (isText(q) && q.text));
-    if (succ)
-      closedAt.set(
-        p.id,
-        isTool(succ)
-          ? succ.state?.time?.start
-          : isText(succ)
-            ? succ.time?.start
-            : undefined,
-      );
-  });
+  const closedAt = reasoningClosedAt(parts);
   return (
     <div class={`msg assistant dot-${dotState(props.m, live)}`}>
       {showsDot && !showPhase && !hasReasoning && (
