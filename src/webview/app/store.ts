@@ -4095,14 +4095,11 @@ export async function refreshMessages(id: string): Promise<void> {
     // The v2 page plus the legacy rows compaction writes (fetchLegacyMessages
     // for why the v2 feed never carries them); the v1 store is unpaged and
     // disjoint, so a merge by id is the whole transcript.
-    // The page must cover the rows already on screen: it serves the newest
-    // `size` rows, and rows the reader expanded via "Load older messages"
-    // are not in a default-size one — the retention filter below would read
-    // them as "not served" and drop them, collapsing an expanded view back
-    // to the window on every busy poll, reconnect resync, or remount. Past
-    // the endpoint's page cap the oldest expanded rows still fall off (the
-    // button reloads them), and a covering page honestly reports "no more"
-    // — the cursor no-downgrade below keeps the button from flickering.
+    // The page is sized to the rows already on screen, the ones the reader
+    // expanded via "Load older messages" included, so they refresh too and
+    // a covering page honestly reports "no more" — the cursor no-downgrade
+    // below keeps the button from flickering. Rows it still misses (the
+    // endpoint's cap, hidden rows eating its count) stay by the floor below.
     const shown = messagesBySession.value.get(id)?.length ?? 0;
     // Clock at dispatch: a stream event applied from here to the merge
     // proves the turn outlived this snapshot, whatever the status map
@@ -4136,6 +4133,16 @@ export async function refreshMessages(id: string): Promise<void> {
       if (!merged.has(m.info.id)) merged.set(m.info.id, m);
     }
     const sorted = [...merged.values()].sort(byCreated);
+    // A full page ends somewhere in the history, and its count includes
+    // rows the view hides (an idle marker per turn, system notes), so it
+    // can stop short of the oldest rows on screen. Rows older than its
+    // oldest were not served, not deleted: dropping them shrank the
+    // transcript above a reader scrolled up, sliding the view on every
+    // busy poll.
+    const floor =
+      typeof page?.older === "string"
+        ? (page.messages[0]?.info.time.created ?? Infinity)
+        : undefined;
     // Boot/remount path for the ran-model adoption: the event path rides
     // upsertMessage, a fetched transcript never does.
     const lastAssistant = sorted
@@ -4196,13 +4203,15 @@ export async function refreshMessages(id: string): Promise<void> {
           // A row the stream delivered while this fetch was in flight
           // (message.updated mid-await) is newer than the snapshot — keep
           // it; the next refresh confirms it. Anything older the fetch
-          // doesn't serve was deleted server-side — except what the v2
-          // inbox still holds (a held peer note already rendered live), and
+          // doesn't serve was deleted server-side — except rows past a
+          // full page (the floor), what the v2 inbox still holds (a held
+          // peer note already rendered live), and
           // a young user row: a prompt admitted after the inbox read, or
           // one a failed read couldn't vouch for.
           return (
             !merged.has(m.info.id) &&
             (inbox?.held.has(m.info.id) ||
+              (floor !== undefined && (m.info.time.created ?? 0) <= floor) ||
               (m.info.time.created ?? 0) >= fetchStart - 2000 ||
               (m.info.role === "user" &&
                 (m.info.time.created ?? 0) >= fetchStart - 60_000))

@@ -1504,6 +1504,46 @@ describe("transcript windowing and Load older (5185f17)", () => {
   });
 });
 
+// The page counts rows the view hides (an idle marker per turn), so a full
+// one ends short of the oldest rows on screen. Dropping those shrank the
+// transcript above a reader scrolled up on every busy poll.
+describe("a refresh keeps rows its full page never reached", () => {
+  const turn = (k: number) => [
+    { id: `u${k}`, type: "user", time: { created: T0 + k * 30 }, text: `q${k}` },
+    { id: `a${k}`, type: "assistant", time: { created: T0 + k * 30 + 10 } },
+    { id: `i${k}`, type: "idle", time: { created: T0 + k * 30 + 20 } },
+  ];
+  // The server's newest-first page of the first `turns` turns.
+  const newest = (turns: number) =>
+    Array.from({ length: turns }, (_, k) => turn(k))
+      .flat()
+      .reverse()
+      .slice(0, 50);
+
+  it("rows past a full page stay as the window slides", async () => {
+    const sid = "trim1";
+    let turns = 20;
+    onApi(messageMock(sid, () => ({ data: newest(turns), cursor: { next: "c1" } })));
+    await refreshMessages(sid);
+    assert.equal(listOf(sid)[0].info.id, "a3");
+    turns = 24;
+    await refreshMessages(sid);
+    assert.equal(listOf(sid)[0].info.id, "a3");
+    assert.equal(listOf(sid).at(-1)?.info.id, "a23");
+  });
+
+  it("a page that reached the start still drops a deleted row", async () => {
+    const sid = "trim2";
+    let rows = newest(4);
+    onApi(messageMock(sid, () => ({ data: rows, cursor: {} })));
+    await refreshMessages(sid);
+    assert.ok(listOf(sid).some((m) => m.info.id === "a1"));
+    rows = rows.filter((r) => r.id !== "a1");
+    await refreshMessages(sid);
+    assert.equal(listOf(sid).some((m) => m.info.id === "a1"), false);
+  });
+});
+
 // A batch of steered prompts is delivered within one ms, so its rows share
 // a created stamp. Pages come newest-first, as the server serves them.
 describe("rows sharing a created ms keep the server's order", () => {
