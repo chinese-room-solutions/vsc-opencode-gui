@@ -2315,6 +2315,19 @@ function applyEvent(event: ServerEvent): void {
     case "session.updated":
       if (data.info) {
         const info = data.info as Session & { directory?: string };
+        // A fact (usage, move, revert) about a row this store never listed
+        // (an old session past the first page, continued in another tab)
+        // carries no title. Upserting it minted a blank "New session" row
+        // whose label then retitled that session's tab: fetch the real row.
+        if (
+          event.type === "session.updated" &&
+          info.title === undefined &&
+          typeof info.id === "string" &&
+          !sessions.value.some((s) => s.id === info.id)
+        ) {
+          void adoptSession(info.id);
+          break;
+        }
         const hadRevert = sessions.value.find((s) => s.id === info.id)?.revert
           ?.messageID;
         // Partial rows (the v2 event translation maps facts — usage,
@@ -3549,6 +3562,18 @@ function validateRestored(): Promise<void> {
       else if (row) upsertSession(row);
     }
   })());
+}
+
+// A session the stream names but this store never listed, fetched once.
+// Facts that raced the fetch are already in the server's row.
+const adopting = new Set<string>();
+async function adoptSession(id: string): Promise<void> {
+  if (adopting.has(id)) return;
+  adopting.add(id);
+  const row = await fetchSession(id);
+  adopting.delete(id);
+  if (row && row !== "missing" && !sessions.value.some((s) => s.id === id))
+    upsertSession(row);
 }
 
 // A new session, now (the navigator's button, the host command): the

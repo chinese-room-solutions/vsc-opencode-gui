@@ -3268,6 +3268,30 @@ describe("v2 turn through the store (recorded frame sequence)", () => {
     assert.equal(sessions.value[0].tokens.input, 10);
   });
 
+  it("a fact about an unlisted session fetches its row, never a blank one", async () => {
+    init();
+    // An old session past the first page, continued in another tab.
+    const sid = "v2old";
+    sessions.value = [sessRow("v2recent")];
+    onApi((call) =>
+      call.method === "GET" && call.path === `/api/session/${sid}`
+        ? { data: sessRow(sid, { title: "Old title" }) }
+        : undefined,
+    );
+    const usage = {
+      sessionID: sid,
+      cost: 0.5,
+      tokens: { input: 10, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    };
+    v2sse("session.usage.updated", usage);
+    v2sse("session.usage.updated", usage);
+    fireExact(33);
+    assert.equal(sessions.value.some((s) => s.id === sid), false);
+    await settle();
+    assert.equal(callsFor(`/api/session/${sid}`).length, 1);
+    assert.equal(sessions.value.find((s) => s.id === sid)?.title, "Old title");
+  });
+
   it("streams a v2 compaction summary; done swaps the durable row in", async () => {
     init();
     const sid = "v2cmp";
