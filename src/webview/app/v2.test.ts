@@ -53,6 +53,7 @@ import {
   answerQuestion,
   commands,
   init,
+  liveAssistantId,
   messagesBySession,
   pendingQuestions,
   providers,
@@ -3409,6 +3410,46 @@ describe("v2 turn through the store (recorded frame sequence)", () => {
     const note = (messagesBySession.value.get(sid) ?? []).find((m) => m.info.id === "msg_n1");
     assert.ok(note?.parts.some((p) => p.id === "msg_n1:text"), "the note landed");
     assert.notEqual(sessionStatus.value[sid]?.type, "busy");
+  });
+
+  it("a note landing mid-step leaves the streaming row live", async () => {
+    // A background job finishes while the model still thinks: its note
+    // sorts after the streaming row. Taken for the live reply, it froze
+    // that row's "Thinking..." into "Thought".
+    init();
+    const sid = "v2midnote";
+    sessions.value = [sessRow(sid)];
+    messagesBySession.value = new Map([[sid, [row("u1", "user", T0)]]]);
+    const list = () => messagesBySession.value.get(sid) ?? [];
+    v2sse("session.execution.started", { sessionID: sid });
+    v2sse("session.step.started", { sessionID: sid, assistantMessageID: "msg_a", started: T0 + 10 });
+    v2sse("session.reasoning.delta", { sessionID: sid, assistantMessageID: "msg_a", ordinal: 0, delta: "hm" });
+    v2sse(
+      "session.inbox.enqueued",
+      {
+        sessionID: sid,
+        inboxID: "msg_n1",
+        item: {
+          type: "synthetic",
+          payload: {
+            text: '<shell id="sh_1" state="completed" command="npm test">\nok\n</shell>',
+            description: "npm test",
+            metadata: { source: "shell", shellID: "sh_1", state: "completed", exit: 0 },
+          },
+        },
+      },
+      T0 + 20,
+    );
+    await flushEvents();
+    assert.deepEqual(list().map((m) => m.info.id), ["u1", "msg_a", "msg_n1"]);
+    assert.equal(liveAssistantId(sid, list()), "msg_a");
+    // Stopped before the note's step ran: the next turn's warmup must not
+    // re-animate msg_a.
+    v2sse("session.execution.interrupted", { sessionID: sid });
+    v2sse("session.execution.started", { sessionID: sid });
+    await flushEvents();
+    assert.equal(sessionStatus.value[sid]?.type, "busy");
+    assert.equal(liveAssistantId(sid, list()), undefined);
   });
 });
 

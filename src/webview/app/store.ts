@@ -2192,10 +2192,17 @@ export function tabSignalRoot(displayed: string): string {
   return displayed;
 }
 
+// A server-injected note (a background job's result, a peer message): the
+// live path lands it as an assistant row, but it is the prompt heading the
+// next turn (the durable fetch serves it as a user row), never a reply.
+function isNote(m: ChatMessage): boolean {
+  return m.parts.some((p) => isText(p) && p.synthetic === true);
+}
+
 function setIdle(sessionID: string): void {
   const tail = [...(messagesBySession.value.get(sessionID) ?? [])]
     .reverse()
-    .find((m) => m.info.role === "assistant")?.info.id;
+    .find((m) => m.info.role === "assistant" && !isNote(m))?.info.id;
   if (tail) idleTails[sessionID] = tail;
   const prev = sessionStatus.value[sessionID]?.type ?? "idle";
   sessionStatus.value = {
@@ -2225,7 +2232,8 @@ function setIdle(sessionID: string): void {
 // until the turn's next row lands seconds later. While no assistant row
 // follows the newest prompt, the streaming turn's tail stays live instead,
 // unless that tail already settled through an idle: then the busy turn is
-// a newer one warming up and must not re-animate the old tail.
+// a newer one warming up and must not re-animate the old tail. A note
+// (a background job's result) is such a prompt: it lands mid-step too.
 export function liveAssistantId(
   sessionID: string,
   list: readonly ChatMessage[],
@@ -2233,7 +2241,7 @@ export function liveAssistantId(
   let past: string | undefined;
   let tail: string | undefined;
   for (const m of list) {
-    if (m.info.role === "user") past = undefined;
+    if (m.info.role === "user" || isNote(m)) past = undefined;
     else if (m.info.role === "assistant") {
       past = m.info.id;
       tail = m.info.id;
