@@ -8,6 +8,7 @@ import { saveAttachment, savePromptAttachments } from "../attachments";
 import { serverAuthHeaders } from "../server/serverAuth";
 import type { Dialect } from "../server/dialect";
 import { log } from "../log";
+import { workspaceDir } from "../workspace";
 import type { PeerInfo } from "./Peers";
 
 // The last app route (workspaceState-backed; per-folder, so no cross-folder
@@ -966,14 +967,10 @@ export class AppHost implements vscode.Disposable {
         "{{STUCK_AUTO_ABORT}}",
         String(this._stuckAutoAbort()),
       )
-      // The window's folder (workspaceFolders[0]) — the identity Home marks
-      // as "this window"; /project/current can't say it for non-git folders.
-      .replaceAll(
-        "{{WORKSPACE}}",
-        escapeAttr(
-          vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "",
-        ),
-      );
+      // The window's folder — the identity Home marks as "this window"
+      // (/project/current can't say it for non-git folders) and the
+      // location the app's scoped routes name.
+      .replaceAll("{{WORKSPACE}}", escapeAttr(workspaceDir() ?? ""));
   }
 
   private _copyModifier(): string {

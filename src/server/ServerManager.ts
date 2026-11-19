@@ -16,6 +16,7 @@ import {
   setEnabledProvidersInText,
 } from "./disabledProviders";
 import { log } from "../log";
+import { workspaceDir } from "../workspace";
 
 const execFile = promisify(execFileCb);
 
@@ -314,14 +315,7 @@ export class ServerManager {
     exposeToNetwork: boolean = false,
     opencodePath: string = "",
   ): Promise<void> {
-    // VS Code lowercases the Windows drive letter in fsPath; opencode v2's
-    // instruction scan stack-overflows on a lowercase drive at boot and
-    // blocks every command. Spawn with the OS-canonical uppercase form.
-    const rawCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    const cwd =
-      process.platform === "win32" && rawCwd && /^[a-z]:/.test(rawCwd)
-        ? rawCwd[0].toUpperCase() + rawCwd.slice(1)
-        : rawCwd;
+    const cwd = workspaceDir();
 
     if (!cwd) {
       hub.setError("No workspace folder open.", false);
@@ -919,7 +913,7 @@ export class ServerManager {
   async providerCatalog(): Promise<ProviderResponse | undefined> {
     await this.ready;
     if (this._dialect === "v2") {
-      const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const cwd = workspaceDir();
       const modelQs = cwd
         ? `?location%5Bdirectory%5D=${encodeURIComponent(cwd)}`
         : "";
