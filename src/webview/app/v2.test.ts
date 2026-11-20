@@ -2158,7 +2158,7 @@ describe("v2 running shells (refreshBase seed)", () => {
       return undefined;
     });
     // Its exit was lost with the dropped stream.
-    runningShells.value = { sh_lost: "rs-a" };
+    runningShells.value = { sh_lost: { owner: "rs-a" } };
     resetBaseRetryForTest();
     v2sse("server.connected", {});
     await flushEvents();
@@ -2184,7 +2184,10 @@ describe("v2 running shells (refreshBase seed)", () => {
       },
     });
     await settle(8);
-    assert.deepEqual(runningShells.value, { sh_a: "rs-a", sh_c: "rs-a" });
+    assert.deepEqual(runningShells.value, {
+      sh_a: { owner: "rs-a" },
+      sh_c: { owner: "rs-a" },
+    });
   });
 });
 

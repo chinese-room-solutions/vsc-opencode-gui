@@ -27,6 +27,7 @@ import {
   forgetTruncatedParts,
   isTruncatedPart,
   lastTerminalFrame,
+  terminalText,
   normalizePermission,
   normalizeSession,
   promptSession,
@@ -749,6 +750,25 @@ describe("shell lifecycle synthetics", () => {
     assert.equal(lastTerminalFrame("only one frame\nhere"), "only one frame\nhere");
     // No usable header line — untouched.
     assert.equal(lastTerminalFrame("short\nsecond"), "short\nsecond");
+  });
+
+  it("terminalText reads captured bytes the way a terminal shows them", () => {
+    // CRLF is one break.
+    assert.equal(terminalText("a\r\nb\r\n"), "a\nb\n");
+    // A carriage return redraws the line: a progress bar keeps its last
+    // frame, and a trailing return (redraw pending) keeps the current one.
+    assert.equal(
+      terminalText("get 10%\rget 20%\rget 30%\ndone"),
+      "get 30%\ndone",
+    );
+    assert.equal(terminalText("get 50%\r"), "get 50%");
+    // No color, cursor, title or hyperlink codes.
+    assert.equal(terminalText("\x1b[1;32mok\x1b[0m plain\x1b[2K"), "ok plain");
+    assert.equal(terminalText("\x1b]0;title\x07text"), "text");
+    assert.equal(
+      terminalText("\x1b]8;;https://x.test\x1b\\link\x1b]8;;\x1b\\"),
+      "link",
+    );
   });
 
   it("fetch serves a shell-note row as a tagged user row", async () => {

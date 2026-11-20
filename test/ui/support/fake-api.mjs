@@ -656,9 +656,26 @@ setInterval(() => {
 // --- FAKE_API_SHELL registry ---
 // The live shell reveals one chunk per output poll (byte-cursor semantics
 // on the concatenated text), mirroring a command whose output grows. A
-// kill freezes it and emits the ended frame; unknown ids 404.
+// kill removes it like the real server's DELETE (its routes 404 from
+// then on) and emits the ended frame; unknown ids 404.
 const shellChunks = ["watching for changes...\n", "rebuilt src/main.ts\n"];
-const liveShell = { id: "shl_live_1", command: "npm run watch", status: "running", served: 0 };
+const liveShell = {
+  id: "shl_live_1",
+  command: "npm run watch",
+  status: "running",
+  served: 0,
+  started: Date.now(),
+  removed: false,
+};
+// The real server's Shell.Info for the live shell.
+const liveShellInfo = () => ({
+  id: liveShell.id,
+  command: liveShell.command,
+  status: liveShell.status,
+  ...(liveShell.exit !== undefined ? { exit: liveShell.exit } : {}),
+  metadata: { sessionID: SESSION_ID },
+  time: { started: liveShell.started },
+});
 const shellDeletes = [];
 // Permission answers (dock-keys spec): {id, decision, message} per reply,
 // from either dialect's reply route.
@@ -1302,6 +1319,9 @@ const server = http.createServer(async (req, res) => {
               (_, i) => `long-capture line ${i + 1}`,
             ).join("\n")}`
           : "";
+      // `state` overrides the terminal state ("completed" default) so a
+      // spec can drive the failure shape: title word, dot class.
+      const state = typeof body.state === "string" ? body.state : "completed";
       const payload =
         body.kind === "restart"
           ? {
@@ -1309,13 +1329,13 @@ const server = http.createServer(async (req, res) => {
               metadata: { notice: "restart" },
             }
           : {
-              text: `<shell id="sh_rig1" state="completed" command="gh run watch 41234939455 --exit-status">\n${frame("*")}\n\n${frame("✓")}${extra}\n</shell>`,
+              text: `<shell id="sh_rig1" state="${state}" command="gh run watch 41234939455 --exit-status">\n${frame("*")}\n\n${frame("✓")}${extra}\n</shell>`,
               description: "gh run watch 41234939455 --exit-status",
               metadata: {
                 source: "shell",
                 shellID: "sh_rig1",
-                state: "completed",
-                exit: 0,
+                state,
+                exit: state === "completed" ? 0 : 1,
                 truncated: false,
               },
             };
@@ -1329,6 +1349,27 @@ const server = http.createServer(async (req, res) => {
     }
     if (method === "GET" && path === "/__control/shell") {
       json(res, 200, { deletes: shellDeletes });
+      return;
+    }
+    // The live shell exits on its own with `exit` (default 0): the real
+    // server keeps an exited command readable, so its routes still answer.
+    if (method === "POST" && path === "/__control/shell-exit") {
+      const body = await readBody(req);
+      liveShell.served = shellChunks.length;
+      liveShell.status = "exited";
+      liveShell.exit = typeof body.exit === "number" ? body.exit : 0;
+      emitV2("shell.exited", {
+        id: liveShell.id,
+        exit: liveShell.exit,
+        status: "exited",
+      });
+      emitV2("session.shell.ended", {
+        sessionID: SESSION_ID,
+        timestamp: Date.now(),
+        shell: { ...liveShellInfo(), time: { completed: Date.now() } },
+        output: shellText(),
+      });
+      json(res, 200, { ok: true });
       return;
     }
     if (method === "GET" && path === "/__control/perm-replies") {
@@ -1550,17 +1591,25 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, { data: sessionRow });
       return;
     }
+    // Only FAKE_API_SHELL rigs run the live shell: a listed command spins
+    // the session's tab, and every other rig expects it to rest.
     if (path === "/api/shell") {
       json(res, 200, {
         data:
-          liveShell.status === "running"
-            ? [{ id: liveShell.id, command: liveShell.command, status: "running" }]
-            : [],
+          shellMode && liveShell.status === "running" ? [liveShellInfo()] : [],
       });
       return;
     }
+    if ((m = path.match(/^\/api\/shell\/([^/]+)$/))) {
+      if (m[1] !== liveShell.id || liveShell.removed) {
+        json(res, 404, { error: `no shell ${m[1]}` });
+        return;
+      }
+      json(res, 200, { data: liveShellInfo() });
+      return;
+    }
     if ((m = path.match(/^\/api\/shell\/([^/]+)\/output$/))) {
-      if (m[1] !== liveShell.id) {
+      if (m[1] !== liveShell.id || liveShell.removed) {
         json(res, 404, { error: `no shell ${m[1]}` });
         return;
       }
@@ -1785,6 +1834,9 @@ const server = http.createServer(async (req, res) => {
       shellDeletes.push({ id: m[1], at: Date.now() });
       if (m[1] === liveShell.id && liveShell.status === "running") {
         liveShell.status = "killed";
+        liveShell.removed = true;
+        emitV2("shell.exited", { id: liveShell.id, status: "killed" });
+        emitV2("shell.deleted", { id: liveShell.id });
         writeFrame(v2Clients, {
           id: "evt_shell_live_end",
           type: "session.shell.ended",

@@ -147,6 +147,7 @@ function SubagentChip(props: {
   asking?: "permission" | "question";
 }) {
   const { sessionId, running, background } = props;
+  const desc = background ? `${props.description} (background)` : props.description;
   // Sub-session drill-down, like the official app: the tab keeps belonging
   // to the root session and the child rides the route as a breadcrumb. A
   // chip inside a child re-roots there (two levels shown).
@@ -201,9 +202,11 @@ function SubagentChip(props: {
       ) : (
         <PixelMark failed={props.failed} />
       )}
-      <span class="subagent-agent">{props.agent}</span>
-      <span class="subagent-desc">
-        {background ? `${props.description} (background)` : props.description}
+      <span class="subagent-agent" title={props.agent}>
+        {props.agent}
+      </span>
+      <span class="subagent-desc" title={desc}>
+        {desc}
       </span>
       {/* Stop kills only the child session's loop — the parent's turn gets
           the aborted task result and continues on its own. Rendered while it

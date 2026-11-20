@@ -18,6 +18,48 @@ export function AgentsIcon() {
   );
 }
 
+// The head's background-command roster: a terminal pane, prompt and cursor.
+export function TerminalIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 14 14"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.5"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="1.2" y="1.8" width="11.6" height="10.4" rx="2.2" />
+      <path d="M3.9 5.2l2 1.8-2 1.8" />
+      <path d="M7 9.4h3.1" />
+    </svg>
+  );
+}
+
+// Leaving this surface for another view: a box opening to its corner.
+export function OpenIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 14 14"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.5"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M8.8 2.2h3v3" />
+      <path d="M11.8 2.2L6.6 7.4" />
+      <path d="M11.4 8.6v2.2a1.4 1.4 0 0 1-1.4 1.4H3.8a1.4 1.4 0 0 1-1.4-1.4V4.6a1.4 1.4 0 0 1 1.4-1.4h2.3" />
+    </svg>
+  );
+}
+
 export function NewSessionIcon() {
   return (
     <svg

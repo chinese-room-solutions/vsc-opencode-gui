@@ -37,6 +37,21 @@ test("chip width follows the agent name, description stays a constant slot", asy
   expect(within).toBe(true);
 });
 
+// Hovering a chip's clipped name or description shows it in full, like the
+// background-command roster's command.
+test("a chip's clipped text carries its full text as a hover title", async ({ page, rig }) => {
+  await openSession(page, rig.url);
+  const long = page.locator(".subagent-chip").nth(1);
+  await expect(long.locator(".subagent-desc")).toHaveAttribute(
+    "title",
+    "Explore the attribution retry paths",
+  );
+  await expect(long.locator(".subagent-agent")).toHaveAttribute(
+    "title",
+    "Oc-Model-Ai-Gateway-Fireworks-Glm-5-3-Flash",
+  );
+});
+
 test("the stop button never leaves the chip's border", async ({ page, rig }) => {
   await openSession(page, rig.url);
   const chip = page.locator(".subagent-chip").nth(1);

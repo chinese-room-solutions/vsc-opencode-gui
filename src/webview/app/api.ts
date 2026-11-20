@@ -1088,6 +1088,21 @@ export function lastTerminalFrame(text: string): string {
   return last > 0 ? text.slice(last) : text;
 }
 
+// What a terminal would show for captured bytes: CRLF as one break, a
+// carriage return redrawing its line (a progress bar keeps its last
+// frame), and no ANSI color, cursor or title codes.
+export function terminalText(raw: string): string {
+  return raw
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .split("\n")
+    .map((line) => {
+      const l = line.replace(/\r+$/, "");
+      return l.slice(l.lastIndexOf("\r") + 1);
+    })
+    .join("\n");
+}
+
 const TOOL_NAMES: Record<string, string> = {
   bash: "Shell",
   shell: "Shell",
@@ -2717,29 +2732,78 @@ export async function deleteSession(
 
 // --- v2 native shells: output tail and kill (v1 has no shell API) ---
 
-// GET /api/shell — the location's running commands, as shell id → owning
-// session (the metadata.sessionID both the agent's shell tool and the
-// user's own runs stamp). Exited commands are not listed.
+// One running command: its owning session (the metadata.sessionID both
+// the agent's shell tool and the user's own runs stamp), and the command
+// line and start time when the server sent them.
+export interface ShellRun {
+  owner: string;
+  command?: string;
+  started?: number;
+}
+
+// The wire's Shell.Info, as far as the roster reads it.
+export interface ShellInfoWire {
+  id?: unknown;
+  command?: unknown;
+  status?: unknown;
+  exit?: unknown;
+  metadata?: { sessionID?: unknown };
+  time?: { started?: unknown };
+}
+
+// A running Shell.Info as a run, or undefined when it isn't one.
+export function shellRun(s: ShellInfoWire | undefined): ShellRun | undefined {
+  if (s?.status !== "running" || typeof s.metadata?.sessionID !== "string")
+    return undefined;
+  return {
+    owner: s.metadata.sessionID,
+    ...(typeof s.command === "string" && s.command
+      ? { command: s.command }
+      : {}),
+    ...(typeof s.time?.started === "number"
+      ? { started: s.time.started }
+      : {}),
+  };
+}
+
+// GET /api/shell — the location's running commands, as shell id → run.
+// Exited commands are not listed.
 export async function fetchRunningShells(
   directory?: string,
-): Promise<Record<string, string> | undefined> {
+): Promise<Record<string, ShellRun> | undefined> {
   if (serverDialect !== "v2") return undefined;
   const qs = directory
     ? `?location%5Bdirectory%5D=${encodeURIComponent(directory)}`
     : "";
-  const body = await getJson<{
-    data?: { id?: unknown; status?: unknown; metadata?: { sessionID?: unknown } }[];
-  }>(`/api/shell${qs}`);
+  const body = await getJson<{ data?: ShellInfoWire[] }>(`/api/shell${qs}`);
   if (!Array.isArray(body?.data)) return undefined;
-  const map: Record<string, string> = {};
-  for (const s of body.data)
-    if (
-      typeof s.id === "string" &&
-      s.status === "running" &&
-      typeof s.metadata?.sessionID === "string"
-    )
-      map[s.id] = s.metadata.sessionID;
+  const map: Record<string, ShellRun> = {};
+  for (const s of body.data) {
+    const run = shellRun(s);
+    if (typeof s.id === "string" && run) map[s.id] = run;
+  }
   return map;
+}
+
+// GET /api/shell/{id} — one command's status, and its exit code once it
+// exited (the server keeps an exited command for days). `gone` is a 404:
+// removed (a stop removes it) or evicted.
+export async function fetchShellStatus(
+  id: string,
+  directory?: string,
+): Promise<{ gone: true } | { status: string; exit?: number } | undefined> {
+  if (serverDialect !== "v2") return undefined;
+  const qs = directory
+    ? `?location%5Bdirectory%5D=${encodeURIComponent(directory)}`
+    : "";
+  const res = await apiRequest("GET", `/api/shell/${id}${qs}`);
+  if ((res.error ?? "").startsWith("HTTP 404")) return { gone: true };
+  const info = (res.json as { data?: ShellInfoWire } | undefined)?.data;
+  if (!res.ok || typeof info?.status !== "string") return undefined;
+  return {
+    status: info.status,
+    ...(typeof info.exit === "number" ? { exit: info.exit } : {}),
+  };
 }
 
 // GET /api/shell/{id}/output?cursor=<bytes> — the chunk after the cursor,
@@ -2750,6 +2814,7 @@ export interface ShellOutput {
   gone: boolean;
   output?: string;
   cursor?: number;
+  size?: number;
 }
 export async function fetchShellOutput(
   id: string,
@@ -2763,16 +2828,19 @@ export async function fetchShellOutput(
   if ((res.error ?? "").startsWith("HTTP 404")) return { gone: true };
   if (!res.ok || res.json === undefined) return undefined;
   const body = res.json as {
-    data?: { output?: unknown; cursor?: unknown };
+    data?: { output?: unknown; cursor?: unknown; size?: unknown };
     output?: unknown;
     cursor?: unknown;
+    size?: unknown;
   };
   const chunk = body.data?.output ?? body.output;
   const next = body.data?.cursor ?? body.cursor;
+  const size = body.data?.size ?? body.size;
   return {
     gone: false,
     ...(typeof chunk === "string" && chunk ? { output: chunk } : {}),
     ...(typeof next === "number" ? { cursor: next } : {}),
+    ...(typeof size === "number" ? { size } : {}),
   };
 }
 

@@ -90,6 +90,7 @@ import {
   revertQueuedTurn,
   revertSession,
   runningShells,
+  activeShells,
   runSlashCommand,
   failedMsgLoads,
   homeQuery,
@@ -495,6 +496,75 @@ describe("tab signal prefix", () => {
       assert.equal(familyWorking("sh-root"), false);
     } finally {
       setDialect("v1");
+    }
+  });
+
+  it("activeShells: the roster lists this conversation's commands, not another's", async () => {
+    setDialect("v2");
+    try {
+      sessions.value = [
+        sessRow("sh-root"),
+        sessRow("sh-kid", { parentID: "sh-root" }),
+        sessRow("sh-other"),
+      ];
+      messagesBySession.value = new Map([
+        // The root's own command, labeled only by its native row (an
+        // event-raced shell the server listing never carried).
+        [
+          "sh-root",
+          [
+            {
+              info: { id: "m1", role: "assistant", time: { created: T0 } },
+              parts: [
+                {
+                  id: "sh_own",
+                  messageID: "m1",
+                  sessionID: "sh-root",
+                  type: "tool",
+                  tool: "bash",
+                  state: {
+                    status: "running",
+                    metadata: { nativeShell: true },
+                    input: { command: "npm test" },
+                  },
+                },
+              ],
+            },
+          ],
+        ],
+      ]);
+      runningShells.value = {
+        sh_own: { owner: "sh-root" },
+        sh_kid: { owner: "sh-kid", command: "ping -n 30 127.0.0.1" },
+        sh_far: { owner: "sh-other", command: "cargo build" },
+        sh_lost: { owner: "gone-session" },
+      };
+      assert.deepEqual(activeShells("sh-root"), [
+        { id: "sh_own", owner: "sh-root", command: "npm test" },
+        {
+          id: "sh_kid",
+          owner: "sh-kid",
+          command: "ping -n 30 127.0.0.1",
+        },
+      ]);
+      // A child view scopes to the child's own subtree: the root's
+      // command is another conversation from there.
+      assert.deepEqual(activeShells("sh-kid"), [
+        {
+          id: "sh_kid",
+          owner: "sh-kid",
+          command: "ping -n 30 127.0.0.1",
+        },
+      ]);
+      // Nothing listing the command and no row to read: a placeholder,
+      // never a blank row.
+      runningShells.value = { sh_bare: { owner: "sh-root" } };
+      assert.deepEqual(activeShells("sh-root"), [
+        { id: "sh_bare", owner: "sh-root", command: "background command" },
+      ]);
+    } finally {
+      setDialect("v1");
+      runningShells.value = {};
     }
   });
 

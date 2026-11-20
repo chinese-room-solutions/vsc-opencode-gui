@@ -182,6 +182,42 @@ test("a long capture folds at five lines and Show more unfolds it", async ({ pag
   }
 });
 
+// A failed note's dot takes the state class `error`, which also matches
+// the generic .error text-block rule (16px padding) — that once blew the
+// 8px dot up to a 40px red square. The dot must stay dot-sized in every
+// state; the screenshot pins the visual for audit.
+test("a failed shell note's dot stays dot-sized", async ({ page }) => {
+  const rig = await startRig({
+    env: {
+      OPENCODE_ROUTE: JSON.stringify({ view: "session", id: "ses_seed_1" }),
+      OPENCODE_TABS: JSON.stringify(["ses_seed_1"]),
+      OPENCODE_DIALECT: "v2",
+      OPENCODE_READY_SOUND: "0",
+      OPENCODE_PERMISSION_SOUND: "0",
+      OPENCODE_QUESTION_SOUND: "0",
+    },
+  });
+  try {
+    await page.goto(rig.url);
+    await page.waitForSelector(".msgs .turn .msg.user", { timeout: 15_000 });
+    await fetch(`${rig.api}/__control/shell-note`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ state: "error" }),
+    });
+    const card = page.locator(".shell-notice");
+    await expect(card).toHaveCount(1);
+    await expect(card.locator(".notice-title")).toContainText("Shell failed");
+    const dot = card.locator(".notice-dot");
+    const box = await dot.boundingBox();
+    expect(box.width).toBe(8);
+    expect(box.height).toBe(8);
+    await page.screenshot({ path: "test/ui/out/shell-notice-error.png" });
+  } finally {
+    rig.stop();
+  }
+});
+
 // The copy affordance rides the capture's top-right corner and copies the
 // whole current frame — the 5-line clamp trims only the display, never the
 // clipboard.

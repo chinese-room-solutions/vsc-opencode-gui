@@ -68,7 +68,11 @@ import {
   isTaskTool,
   tailSize,
   fetchRunningShells,
+  shellRun,
+  type ShellInfoWire,
+  type ShellRun,
   fetchShellOutput,
+  fetchShellStatus,
   shellOutputText,
   stopShellRun,
   clampPartText,
@@ -150,20 +154,27 @@ export const sessionsNext = signal<string | undefined>(undefined);
 // restart window): the navigator keeps its loading copy instead of "No sessions yet."
 export const sessionsStalled = signal(false);
 export const sessionStatus = signal<Record<string, SessionStatus>>({});
-// Running shell commands, id → owning session (v2): a command the agent
-// moved to the background, or the user's own run, outlives the turn that
-// started it, and the session reads idle while it works. Seeded by
-// refreshBase, kept by the shell.* events.
-export const runningShells = signal<Record<string, string>>({});
-// Shell events applied while a refreshBase pull is in flight (id → owner,
+// Running shell commands, id → run (v2): a command the agent moved to
+// the background, or the user's own run, outlives the turn that started
+// it, and the session reads idle while it works. Seeded by refreshBase,
+// kept by the shell.* events.
+export const runningShells = signal<Record<string, ShellRun>>({});
+// Shell events applied while a refreshBase pull is in flight (id → run,
 // undefined once gone): they postdate the snapshot, so they replay on it.
-let shellsRaced: Map<string, string | undefined> | undefined;
-function setShell(id: string, owner: string | undefined): void {
-  shellsRaced?.set(id, owner);
-  if (runningShells.value[id] === owner) return;
+let shellsRaced: Map<string, ShellRun | undefined> | undefined;
+function sameRun(a: ShellRun | undefined, b: ShellRun | undefined): boolean {
+  return (
+    a?.owner === b?.owner &&
+    a?.command === b?.command &&
+    a?.started === b?.started
+  );
+}
+function setShell(id: string, run: ShellRun | undefined): void {
+  shellsRaced?.set(id, run);
+  if (sameRun(runningShells.value[id], run)) return;
   const next = { ...runningShells.value };
-  if (owner === undefined) delete next[id];
-  else next[id] = owner;
+  if (run === undefined) delete next[id];
+  else next[id] = run;
   runningShells.value = next;
 }
 // Prompts the user interrupted before any step answered them: the awaiting
@@ -591,7 +602,14 @@ export function fmtDur(secs: number): string {
 // Mutually exclusive:
 // opening one dismisses the others instead of stacking panels. The panel is
 // also toggled from the host command.
-export type Popover = "model" | "variant" | "agent" | "ctx" | "tile" | "agents";
+export type Popover =
+  | "model"
+  | "variant"
+  | "agent"
+  | "ctx"
+  | "tile"
+  | "agents"
+  | "shells";
 export const popover = signal<Popover | undefined>(undefined);
 
 export function setPopover(p: Popover | undefined): void {
@@ -746,9 +764,9 @@ async function refreshBase(): Promise<void> {
   if (statuses) adoptStatuses(statuses);
   // A replace heals exits the stream missed; the raced events win.
   if (shells) {
-    for (const [id, owner] of raced)
-      if (owner === undefined) delete shells[id];
-      else shells[id] = owner;
+    for (const [id, run] of raced)
+      if (run === undefined) delete shells[id];
+      else shells[id] = run;
     runningShells.value = shells;
   }
   if (page) {
@@ -2145,8 +2163,57 @@ export function familyWorking(root: string): boolean {
   return (
     Object.entries(sessionStatus.value).some(
       ([sid, st]) => st.type === "busy" && inFamily(sid),
-    ) || Object.values(runningShells.value).some(inFamily)
+    ) || Object.values(runningShells.value).some((r) => inFamily(r.owner))
   );
+}
+
+// The background-command roster (the head's shell menu): the running
+// commands of the conversation rooted at the displayed session — the
+// viewed session, or any descendant of it (a sub-agent's shell). The
+// command line comes from the server's listing; a listing without it (or
+// an event-raced shell) falls back to the native row's input, then to a
+// placeholder. Exported for the menu and its tests.
+export type ActiveShell = {
+  id: string;
+  owner: string;
+  command: string;
+  started?: number;
+};
+export function activeShells(displayed: string): ActiveShell[] {
+  const out: ActiveShell[] = [];
+  for (const [id, run] of Object.entries(runningShells.value)) {
+    // The owner is in-family when the displayed session sits on its
+    // parent chain (or is it). A malformed cycle must not loop forever.
+    let sid: string | undefined = run.owner;
+    const seen = new Set<string>();
+    let mine = false;
+    while (sid !== undefined && !seen.has(sid)) {
+      if (sid === displayed) {
+        mine = true;
+        break;
+      }
+      seen.add(sid);
+      sid = sessions.value.find((s) => s.id === sid)?.parentID;
+    }
+    if (!mine) continue;
+    let command = run.command;
+    if (command === undefined) {
+      for (const m of messagesBySession.value.get(run.owner) ?? [])
+        for (const part of m.parts)
+          if (isTool(part) && part.id === id) {
+            const c = (part.state?.input as { command?: unknown } | undefined)
+              ?.command;
+            if (typeof c === "string" && c) command = c;
+          }
+    }
+    out.push({
+      id,
+      owner: run.owner,
+      command: command ?? "background command",
+      ...(run.started !== undefined ? { started: run.started } : {}),
+    });
+  }
+  return out;
 }
 
 // The tab-prefix facts for one session's editor tab (the old in-app
@@ -2530,14 +2597,9 @@ function applyEvent(event: ServerEvent): void {
     // The server's command lifecycle, every location's (v2): created
     // carries the Shell.Info, exited/deleted only its id.
     case "shell.created": {
-      const run = (
-        event.data as {
-          info?: { id?: unknown; status?: unknown; metadata?: { sessionID?: unknown } };
-        }
-      ).info;
-      const owner = run?.metadata?.sessionID;
-      if (typeof run?.id === "string" && run.status === "running" && typeof owner === "string")
-        setShell(run.id, owner);
+      const info = (event.data as { info?: ShellInfoWire }).info;
+      const run = shellRun(info);
+      if (typeof info?.id === "string" && run) setShell(info.id, run);
       break;
     }
     case "shell.exited":
@@ -3409,9 +3471,18 @@ function tailNativeShells(): void {
 // Stop a running native command from its card. The server kills the
 // process; the ended event settles the row (or the next tail poll does,
 // if the event is lost).
-export async function stopShellRow(shellID: string): Promise<void> {
+export async function stopShellRow(shellID: string): Promise<boolean> {
   const ok = await stopShellRun(shellID, meta("opencode-workspace"));
   if (!ok) setSendError("The server refused to stop the command.");
+  return ok;
+}
+
+// The roster's output pane reads a command at the window's location.
+export function readShellOutput(shellID: string, cursor: number) {
+  return fetchShellOutput(shellID, cursor, meta("opencode-workspace"));
+}
+export function readShellStatus(shellID: string) {
+  return fetchShellStatus(shellID, meta("opencode-workspace"));
 }
 
 // Frames queue and a short timer drains them in order. Applied one per

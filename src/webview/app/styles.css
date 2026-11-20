@@ -2847,6 +2847,10 @@ body {
 
 .notice-dot {
   flex: none;
+  /* `padding: 0` is load-bearing: a failed notice's state class `error`
+     also matches the generic .error text-block rule, whose 16px padding
+     would blow the 8px dot up to a 40px square. */
+  padding: 0;
   width: 8px;
   height: 8px;
   border-radius: 2px;
@@ -3214,6 +3218,207 @@ a.tool-pill {
 .sam-row .subagent-desc {
   width: 16ch;
   max-width: none;
+}
+
+/* --- Background-command roster (head, next to the sub-agent roster) --- */
+
+/* Mirrors .sam: the button appears only while a background command of
+   this conversation runs; the count is the always-visible "how many". */
+.sjm {
+  position: relative;
+  display: flex;
+  flex: none;
+}
+
+.sjm-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 7px;
+  background: none;
+  border: none;
+  border-radius: 14px;
+  color: var(--oc-text-2);
+  cursor: pointer;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sjm-btn:hover,
+.sjm.open .sjm-btn {
+  background: var(--vscode-list-hoverBackground);
+  color: var(--oc-text);
+}
+
+/* The unfolded list, opening downward from the button like the roster's,
+   scrolling inside the window once an output pane makes it tall. */
+.sjm-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: max-content;
+  min-width: 260px;
+  max-width: min(440px, calc(100vw - 64px));
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  padding: 4px 8px 8px;
+}
+
+/* A row showing its output fixes the width: streaming lines must not
+   resize the menu under the reader. */
+.sjm-menu.wide {
+  width: 440px;
+}
+
+.sjm-title {
+  padding: 6px 6px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--oc-text-2);
+}
+
+/* One running command: spinner, the command line in mono, and the stop
+   that kills it server-side. Rows fill the menu's width so the stop
+   buttons line up; the command ellipsizes past it. The min-height holds
+   the stop button's height, so a row that settles doesn't shrink. */
+.sjm-chip {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  box-sizing: border-box;
+  min-height: 38px;
+  margin: 6px 0 0;
+  padding: 7px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--oc-border);
+  background: var(--vscode-input-background);
+  cursor: pointer;
+}
+
+.sjm-chip:hover,
+.sjm-chip[aria-expanded="true"] {
+  border-color: var(--oc-text-2);
+}
+
+.sjm-cmd {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--oc-text);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11.5px;
+}
+
+/* Stop a running command from the roster: kills the process server-side,
+   the same DELETE the transcript row's stop issues. */
+.sjm-stop {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  margin-left: 2px;
+  border: 1px solid var(--oc-border);
+  border-radius: 4px;
+  background: none;
+  color: var(--vscode-errorForeground);
+  cursor: pointer;
+}
+
+.sjm-stop:hover {
+  border-color: var(--vscode-errorForeground);
+}
+
+/* Open the child session a command runs in (the arrow on its roster
+   row): the same square as the stop, a leaving-this-surface tone. */
+.sjm-open {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  margin-left: 2px;
+  border: 1px solid var(--oc-border);
+  border-radius: 4px;
+  background: none;
+  color: var(--oc-text-2);
+  cursor: pointer;
+}
+
+.sjm-open:hover {
+  color: var(--oc-text);
+  border-color: var(--oc-text-2);
+}
+
+/* Elapsed time while the command runs, its end state once settled. */
+.sjm-time {
+  flex: none;
+  color: var(--oc-text-2);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sjm-time.failed {
+  color: var(--vscode-errorForeground);
+}
+
+/* The row's output: verbatim terminal bytes, wrapped to the menu's width
+   and scrolling inside a 14-line box (the pane follows the end). */
+.sjm-out {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  max-height: calc(14 * 1.45em);
+  overflow: auto;
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.1));
+  border-radius: 4px;
+}
+
+/* The pane and a tall menu scroll on a slim rounded thumb, no arrows.
+   VS Code's webview defaults put an inherited scrollbar-color on html,
+   which hands Chromium's native arrowed scrollbar the job and turns the
+   ::-webkit-scrollbar rules off, so it resets here. */
+.sjm-out,
+.sjm-menu {
+  scrollbar-color: auto;
+}
+
+.sjm-out::-webkit-scrollbar,
+.sjm-menu::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.sjm-out::-webkit-scrollbar-track,
+.sjm-menu::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sjm-out::-webkit-scrollbar-thumb,
+.sjm-menu::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.4));
+  border-radius: 4px;
+}
+
+.sjm-out::-webkit-scrollbar-thumb:hover,
+.sjm-menu::-webkit-scrollbar-thumb:hover {
+  background: var(--vscode-scrollbarSlider-hoverBackground, rgba(100, 100, 100, 0.7));
+}
+
+.sjm-out.empty,
+.sjm-cut {
+  color: var(--oc-text-2);
 }
 
 /* Sub-agent chip (the task tool): the spawned session is the detail view,

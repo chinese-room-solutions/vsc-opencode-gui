@@ -14,6 +14,7 @@ import {
 import { RowMenu } from "../components/RowMenu";
 import { SessionMenuItems } from "../components/SessionMenuItems";
 import { SubagentMenu } from "../components/SubagentMenu";
+import { ShellMenu } from "../components/ShellMenu";
 import { StopIcon, WordmarkIcon, OcResetIcon } from "../icons";
 import { isText, isTool } from "../api";
 import { postToHost } from "../host";
@@ -776,6 +777,7 @@ export function Session(props: { sessionId: string; parent?: string }) {
           </nav>
         )}
         <SubagentMenu sessionId={id} liveId={liveId} />
+        <ShellMenu sessionId={id} />
         <ContextRing sessionId={id} />
       </div>
       {/* The fade overlay hangs off the wrap, not the scroller: inside it
