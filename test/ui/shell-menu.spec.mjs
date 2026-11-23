@@ -45,6 +45,11 @@ test("the roster streams a command's output and stops it", async ({ page }) => {
       page.locator(".msgs .tool-pill", { hasText: "npm run watch" }),
     ).toHaveCount(1);
     await page.screenshot({ path: "test/ui/out/shell-menu-open.png" });
+    const xs = () =>
+      page.evaluate(() =>
+        [".sam-btn", ".sjm-btn"].map((s) => document.querySelector(s).getBoundingClientRect().x),
+      );
+    const running = await xs();
     await chip.locator(".sjm-stop").click();
     const deletes = async () =>
       (await (await fetch(`${rig.api}/__control/shell`)).json()).deletes;
@@ -56,10 +61,17 @@ test("the roster streams a command's output and stops it", async ({ page }) => {
     await expect(chip.locator(".sjm-time")).toHaveText("Stopped");
     await expect(out).toContainText("rebuilt src/main.ts");
     await expect(btn.locator(".sjm-count")).toHaveText("0");
+    await expect(page.locator(".sjm")).toHaveClass(/idle/);
+    // Going idle moves neither head button.
+    expect(await xs()).toEqual(running);
     await page.screenshot({ path: "test/ui/out/shell-menu-stopped.png" });
-    // Closing the menu drops the settled row, and the button with it.
+    // Closing the menu drops the settled row. The button stays, idle, and
+    // reopens on an empty roster.
     await page.locator(".sjm .backdrop").click();
-    await expect(page.locator(".sjm-btn")).toHaveCount(0);
+    await expect(btn).toHaveCount(1);
+    await btn.click();
+    await expect(page.locator(".sjm-menu .sjm-empty")).toHaveText("None running");
+    await expect(page.locator(".sjm-menu .sjm-chip")).toHaveCount(0);
   } finally {
     rig.stop();
   }
@@ -79,9 +91,10 @@ test("a command that exits while shown stays listed with its exit code", async (
     await expect(chip.locator(".sjm-time")).toHaveClass(/failed/);
     await expect(chip.locator(".pixel-mark.failed")).toHaveCount(1);
     await expect(out).toContainText("rebuilt src/main.ts");
-    // Collapsing the settled row drops it: nothing runs, the menu closes.
+    // Collapsing the settled row drops it: nothing runs, the menu says so.
     await chip.click();
-    await expect(page.locator(".sjm-btn")).toHaveCount(0);
+    await expect(chip).toHaveCount(0);
+    await expect(page.locator(".sjm-menu .sjm-empty")).toHaveText("None running");
   } finally {
     rig.stop();
   }

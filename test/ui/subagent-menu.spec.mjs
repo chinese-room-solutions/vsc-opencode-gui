@@ -3,8 +3,21 @@
 // steer re-opening a child leaves (or the title fallback double-binding
 // same-labeled spawns) — and the menu must list that child once: one
 // badge count, one row, one chip.
-import { test, expect } from "./support/fixture.mjs";
+import { test, expect, openSession } from "./support/fixture.mjs";
 import { startRig } from "./support/rig.mjs";
+
+// Both head buttons stay put with nothing running: dimmed, counting 0, and
+// the menu says so. The default rig's task chips are all settled.
+test("idle head buttons stay, dimmed at 0", async ({ page, rig }) => {
+  await openSession(page, rig.url);
+  for (const k of ["sam", "sjm"]) {
+    await expect(page.locator(`.${k}`)).toHaveClass(/idle/);
+    await expect(page.locator(`.${k}-count`)).toHaveText("0");
+  }
+  await page.click(".sam-btn");
+  await expect(page.locator(".sam-menu .sam-empty")).toHaveText("None running");
+  await expect(page.locator(".sam-row")).toHaveCount(0);
+});
 
 test("the roster lists a twice-bound child session once", async ({ page }) => {
   const rig = await startRig({

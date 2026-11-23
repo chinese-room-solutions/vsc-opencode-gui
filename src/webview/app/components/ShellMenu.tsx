@@ -51,9 +51,6 @@ export function ShellMenu(props: { sessionId: string }) {
   order.current = rows.map((r) => r.id);
   useEffect(() => {
     if (settled && !open) setShownId(undefined);
-    // An emptied roster closes its menu: the next command must not pop
-    // it open on its own.
-    if (open && rows.length === 0) setPopover(undefined);
   });
   // Elapsed times tick while the open menu lists a running command.
   const [, tick] = useState(0);
@@ -63,14 +60,23 @@ export function ShellMenu(props: { sessionId: string }) {
     const t = window.setInterval(() => tick((n) => n + 1), 1000);
     return () => window.clearInterval(t);
   }, [ticking]);
-  if (rows.length === 0) return null;
+  // Always shown with its count, so the head's buttons never shift: a
+  // dimmed 0 while nothing runs.
   const n = entries.length;
   return (
-    <div class={["sjm", open && "open"].filter(Boolean).join(" ")}>
+    <div
+      class={["sjm", open && "open", n === 0 && "idle"]
+        .filter(Boolean)
+        .join(" ")}
+    >
       <button
         type="button"
         class="sjm-btn"
-        title={`${n} background command${n === 1 ? "" : "s"} running`}
+        title={
+          n === 0
+            ? "No background commands running"
+            : `${n} background command${n === 1 ? "" : "s"} running`
+        }
         aria-label={`Background commands running: ${n}. Click to ${
           open ? "hide" : "list"
         }.`}
@@ -91,6 +97,7 @@ export function ShellMenu(props: { sessionId: string }) {
             aria-label="Background commands"
           >
             <div class="sjm-title">Background commands</div>
+            {rows.length === 0 && <div class="sjm-empty">None running</div>}
             {rows.map((run) => (
               <ShellRow
                 key={run.id}

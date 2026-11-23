@@ -89,18 +89,27 @@ export function activeSubagents(
 
 export function SubagentMenu(props: { sessionId: string; liveId?: string }) {
   const entries = activeSubagents(props.sessionId, props.liveId);
-  if (entries.length === 0) return null;
   const open = popover.value === "agents";
   const asking = entries.some((e) => e.asking !== undefined);
+  // Always shown with its count, so the head's buttons never shift: a
+  // dimmed 0 while none runs.
   const n = entries.length;
   return (
-    <div class={["sam", open && "open"].filter(Boolean).join(" ")}>
+    <div
+      class={["sam", open && "open", n === 0 && "idle"]
+        .filter(Boolean)
+        .join(" ")}
+    >
       <button
         type="button"
         class="sam-btn"
-        title={`${n} sub-agent${n === 1 ? "" : "s"} in progress${
-          asking ? " — one is waiting on you" : ""
-        }`}
+        title={
+          n === 0
+            ? "No sub-agents in progress"
+            : `${n} sub-agent${n === 1 ? "" : "s"} in progress${
+                asking ? " — one is waiting on you" : ""
+              }`
+        }
         aria-label={`Sub-agents in progress: ${n}. Click to ${
           open ? "hide" : "list"
         }.`}
@@ -120,6 +129,7 @@ export function SubagentMenu(props: { sessionId: string; liveId?: string }) {
             aria-label="Sub-agents in progress"
           >
             <div class="sam-title">Sub-agents</div>
+            {n === 0 && <div class="sam-empty">None running</div>}
             {entries.map((e) => (
               <div class="sam-row" key={e.part.id}>
                 <ToolCard part={e.part} live={e.live} />

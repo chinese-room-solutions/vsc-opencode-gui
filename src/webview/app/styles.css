@@ -3147,8 +3147,8 @@ a.tool-pill {
 
 /* --- Sub-agent roster (head, left of the context ring) --- */
 
-/* The roster button appears only while a sub-agent of this session runs;
-   the count is the always-visible "which are in progress". */
+/* Always in the head, count included, so the buttons never shift. The
+   count says how many are in progress; at 0 the button dims. */
 .sam {
   position: relative;
   display: flex;
@@ -3205,6 +3205,18 @@ a.tool-pill {
   color: var(--oc-text-2);
 }
 
+.sam.idle:not(.open) .sam-btn,
+.sjm.idle:not(.open) .sjm-btn {
+  opacity: 0.45;
+}
+
+.sam-empty,
+.sjm-empty {
+  padding: 6px 6px 2px;
+  font-size: 11.5px;
+  color: var(--oc-text-2);
+}
+
 /* Inside the menu the chip sheds its transcript margins and every row
    spans the widest chip, so the stop buttons line up and a shorter agent
    name hands its slack to the description. The description's 16ch width
@@ -3222,8 +3234,8 @@ a.tool-pill {
 
 /* --- Background-command roster (head, next to the sub-agent roster) --- */
 
-/* Mirrors .sam: the button appears only while a background command of
-   this conversation runs; the count is the always-visible "how many". */
+/* Mirrors .sam: always shown, the count says how many of this
+   conversation's background commands run. */
 .sjm {
   position: relative;
   display: flex;
