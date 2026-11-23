@@ -172,7 +172,21 @@ suite("opencode GUI commands", function () {
     await vscode.commands.executeCommand("opencodeGui.toggleChat");
     await until(() => api.panels.ids().length === before - 1);
     await vscode.commands.executeCommand("opencodeGui.toggleChat");
-    await until(() => api.panels.ids().length === before);
+    // The reopen is a single createSession POST with no retry; a dropped
+    // create has dead-ended this wait three times in CI. Re-press after a
+    // grace window, but only while no session panel is active — an active
+    // one would take the close branch.
+    try {
+      await until(() => api.panels.ids().length === before, 10_000);
+    } catch {
+      if (
+        api.panels.ids().length < before &&
+        !api.panels.all().some((p) => p.isActive)
+      ) {
+        await vscode.commands.executeCommand("opencodeGui.toggleChat");
+      }
+      await until(() => api.panels.ids().length === before, 30_000);
+    }
     assert.strictEqual(sessionTabCount(), before, "session tabs restored");
   });
 
