@@ -149,7 +149,7 @@ function ShellRow(props: {
         role="button"
         tabIndex={0}
         aria-expanded={props.expanded}
-        title={props.expanded ? "Hide the output" : "Show the output"}
+        title={run.command}
         onClick={props.onToggle}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
@@ -159,9 +159,7 @@ function ShellRow(props: {
         }}
       >
         {running ? <PixelSpinner /> : <PixelMark failed={label?.failed} />}
-        <span class="sjm-cmd" title={run.command}>
-          {run.command}
-        </span>
+        <span class="sjm-cmd">{run.command}</span>
         {running && stopping && <span class="sjm-time">Stopping…</span>}
         {running && !stopping && run.started !== undefined && (
           <span class="sjm-time">

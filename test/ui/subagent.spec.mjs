@@ -37,19 +37,16 @@ test("chip width follows the agent name, description stays a constant slot", asy
   expect(within).toBe(true);
 });
 
-// Hovering a chip's clipped name or description shows it in full, like the
-// background-command roster's command.
-test("a chip's clipped text carries its full text as a hover title", async ({ page, rig }) => {
+// Hovering anywhere on a chip shows its clipped name and description in
+// full: the text spans carry no title of their own to shadow the chip's.
+test("a chip's hover title carries its full name and description", async ({ page, rig }) => {
   await openSession(page, rig.url);
   const long = page.locator(".subagent-chip").nth(1);
-  await expect(long.locator(".subagent-desc")).toHaveAttribute(
+  await expect(long).toHaveAttribute(
     "title",
-    "Explore the attribution retry paths",
+    "Oc-Model-Ai-Gateway-Fireworks-Glm-5-3-Flash: Explore the attribution retry paths",
   );
-  await expect(long.locator(".subagent-agent")).toHaveAttribute(
-    "title",
-    "Oc-Model-Ai-Gateway-Fireworks-Glm-5-3-Flash",
-  );
+  await expect(long.locator("[title]")).toHaveCount(0);
 });
 
 test("the stop button never leaves the chip's border", async ({ page, rig }) => {

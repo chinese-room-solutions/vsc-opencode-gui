@@ -175,17 +175,7 @@ function SubagentChip(props: {
         .join(" ")}
       role={sessionId ? "button" : undefined}
       tabIndex={sessionId ? 0 : undefined}
-      title={
-        props.asking === "permission"
-          ? "Sub-agent is waiting for a permission decision"
-          : props.asking === "question"
-            ? "Sub-agent is waiting for your answer"
-            : sessionId
-              ? background
-                ? "Open background sub-agent session"
-                : "Open sub-agent session"
-              : "Sub-agent session not available"
-      }
+      title={`${props.agent}: ${desc}`}
       onClick={open}
       onKeyDown={(e) => {
         if (!sessionId) return;
@@ -202,12 +192,8 @@ function SubagentChip(props: {
       ) : (
         <PixelMark failed={props.failed} />
       )}
-      <span class="subagent-agent" title={props.agent}>
-        {props.agent}
-      </span>
-      <span class="subagent-desc" title={desc}>
-        {desc}
-      </span>
+      <span class="subagent-agent">{props.agent}</span>
+      <span class="subagent-desc">{desc}</span>
       {/* Stop kills only the child session's loop — the parent's turn gets
           the aborted task result and continues on its own. Rendered while it
           asks too: a child the user wants dead must not wait on its own

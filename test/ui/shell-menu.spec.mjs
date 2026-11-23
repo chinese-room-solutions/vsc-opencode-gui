@@ -25,6 +25,8 @@ async function openPane(page) {
   const chip = page.locator(".sjm-menu .sjm-chip");
   await expect(chip).toHaveCount(1);
   await expect(chip.locator(".sjm-cmd")).toHaveText("npm run watch");
+  // The whole chip's hover shows the full command.
+  await expect(chip).toHaveAttribute("title", "npm run watch");
   await expect(chip.locator(".sjm-time")).toHaveText(/^\d+s$/);
   await chip.click();
   const out = page.locator(".sjm-menu .sjm-out");
