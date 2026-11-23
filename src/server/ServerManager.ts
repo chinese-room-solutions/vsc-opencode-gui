@@ -798,12 +798,17 @@ export class ServerManager {
   // a flat row, v2 {data:{row}}. Returns the new session id.
   async createSession(): Promise<string | undefined> {
     await this.ready;
-    const row = await this._request<{ id?: string; data?: { id?: string } }>(
-      "POST",
-      this._dialect === "v2" ? "/api/session" : "/session",
-      {},
-    );
-    return row?.data?.id ?? row?.id;
+    const create = async () => {
+      const row = await this._request<{ id?: string; data?: { id?: string } }>(
+        "POST",
+        this._dialect === "v2" ? "/api/session" : "/session",
+        {},
+      );
+      return row?.data?.id ?? row?.id;
+    };
+    // One dropped request (a transient failure or the 10s abort) dead-ends
+    // the command's panel with no retry path anywhere; retry once.
+    return (await create()) ?? (await create());
   }
 
   // GET /session/{id} (v1 flat row) / /api/session/{id} (v2 {data} row) —
