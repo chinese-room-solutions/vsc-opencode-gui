@@ -6,6 +6,7 @@ import { themeStyle } from "../theme";
 import { tokenizeToTokens } from "../tokenizer";
 import { saveAttachment, savePromptAttachments } from "../attachments";
 import { serverAuthHeaders } from "../server/serverAuth";
+import { showShellTerminal } from "../shellTerminal";
 import type { Dialect } from "../server/dialect";
 import { log } from "../log";
 import { workspaceDir } from "../workspace";
@@ -554,6 +555,22 @@ export class AppHost implements vscode.Disposable {
               log.error("attach preview failed:", err);
             }
           })();
+        }
+        // The roster's terminal button: the command's output in a
+        // read-only terminal tab.
+        if (
+          message.type === "open-shell-terminal" &&
+          typeof message.id === "string" &&
+          typeof message.command === "string" &&
+          this._serverUrl
+        ) {
+          showShellTerminal(this._serverUrl, {
+            id: message.id,
+            command: message.command,
+            ...(typeof message.directory === "string" && message.directory
+              ? { directory: message.directory }
+              : {}),
+          });
         }
         // An attachment chip's open: hand the file to the OS default tool
         // for its extension (PDFs, media — anything not opened as text).

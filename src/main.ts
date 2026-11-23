@@ -20,6 +20,7 @@ import type {
 } from "./webview/AppHost";
 import { ServerManager, normWorktree, randomPort } from "./server/ServerManager";
 import { serverAuthHeaders } from "./server/serverAuth";
+import { disposeShellTerminals } from "./shellTerminal";
 import { invalidateThemeTokens } from "./theme";
 import { initLog, log } from "./log";
 
@@ -756,6 +757,9 @@ export function activate(context: vscode.ExtensionContext) {
       void createSessionPanel();
     }),
   );
+
+  // The roster's read-only command terminals (shellTerminal.ts).
+  context.subscriptions.push({ dispose: disposeShellTerminals });
 
   // A workspace terminal running the opencode TUI (Claude Code's "Open in
   // Terminal"): reused across invocations — a second invocation reveals it

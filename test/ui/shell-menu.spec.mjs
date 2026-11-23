@@ -99,3 +99,24 @@ test("a command that exits while shown stays listed with its exit code", async (
     rig.stop();
   }
 });
+
+// The row's terminal button hands the command to the host, which streams
+// its whole output into a terminal tab. The rig records host posts.
+test("the terminal button asks the host for the command's terminal", async ({ page }) => {
+  const rig = await startRig({ env: ENV });
+  try {
+    await page.goto(rig.url);
+    await page.locator(".sjm-btn").click();
+    const chip = page.locator(".sjm-menu .sjm-chip");
+    await expect(chip.locator(".sjm-cmd")).toHaveText("npm run watch", { timeout: 15_000 });
+    await page.evaluate(() => (window.__hostPosted = []));
+    await chip.getByRole("button", { name: "Open the output in a terminal" }).click();
+    await expect
+      .poll(async () => (await page.evaluate(() => window.__hostPosted ?? [])).at(-1))
+      .toMatchObject({ type: "open-shell-terminal", id: "shl_live_1", command: "npm run watch" });
+    // The click doesn't toggle the row, and the menu closes behind it.
+    await expect(page.locator(".sjm-menu")).toHaveCount(0);
+  } finally {
+    rig.stop();
+  }
+});

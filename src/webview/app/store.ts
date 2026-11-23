@@ -3484,6 +3484,15 @@ export function readShellOutput(shellID: string, cursor: number) {
 export function readShellStatus(shellID: string) {
   return fetchShellStatus(shellID, meta("opencode-workspace"));
 }
+// The host streams the command's whole output into a terminal tab.
+export function openShellTerminal(shellID: string, command: string): void {
+  postToHost({
+    type: "open-shell-terminal",
+    id: shellID,
+    command,
+    directory: meta("opencode-workspace"),
+  });
+}
 
 // Frames queue and a short timer drains them in order. Applied one per
 // arrival, every frame paid a full store mutation plus a render pass —

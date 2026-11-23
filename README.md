@@ -21,7 +21,8 @@ owns.
   after a reload.
 - **Sessions side panel** - projects and day-grouped history, with search.
 - **Sub-agents are sessions** - open, steer, or stop one from its task chip.
-- **Background commands** - watch or stop one from the header.
+- **Background commands** - watch, stop, or open one in a terminal from the
+  header.
 - **Steer mid-turn** - a message sent while the agent works runs after the
   current step. Revert a prompt to rewind the session, and Redo brings it
   back.

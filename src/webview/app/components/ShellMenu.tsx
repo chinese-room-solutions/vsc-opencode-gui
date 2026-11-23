@@ -12,6 +12,7 @@ import {
   type ActiveShell,
   activeShells,
   fmtDur,
+  openShellTerminal,
   popover,
   readShellOutput,
   readShellStatus,
@@ -202,6 +203,19 @@ function ShellRow(props: {
             <OpenIcon />
           </button>
         )}
+        <button
+          type="button"
+          class="sjm-open"
+          title="Open the output in a terminal"
+          aria-label="Open the output in a terminal"
+          onClick={(e) => {
+            e.stopPropagation();
+            setPopover(undefined);
+            openShellTerminal(run.id, run.command);
+          }}
+        >
+          <TerminalIcon />
+        </button>
         {running && !stopping && (
           <button
             type="button"
